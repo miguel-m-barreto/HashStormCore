@@ -69,7 +69,47 @@ public static class LiveHashrateState
 
             return acc / (double)SCALE;
         }
+
+        /// <summary>
+        /// Sum over window and also return ageSec:
+        /// time elapsed (in seconds) since the first bucket with data in this window.
+        /// ageSec == 0 means no data in this window.
+        /// </summary>
+        public (double sum, int ageSec) SumWindowWithAge(int windowSec)
+        {
+            if (windowSec <= 0) windowSec = DefaultWindowSec;
+
+            var nowSec = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var fromSec = nowSec - windowSec + 1;
+
+            long acc = 0;
+            int firstSeen = 0;
+
+            for (var t = fromSec; t <= nowSec; t++)
+            {
+                var idx = t & Mask;
+                if (Volatile.Read(ref secs[idx]) == t)
+                {
+                    acc += Volatile.Read(ref buckets[idx]);
+
+                    if (firstSeen == 0)
+                        firstSeen = t;
+                }
+            }
+
+            int ageSec = 0;
+
+            if (firstSeen != 0)
+            {
+                ageSec = nowSec - firstSeen + 1;
+                if (ageSec < 1)
+                    ageSec = 1;
+            }
+
+            return (acc / (double)SCALE, ageSec);
+        }
     }
+
 
     // ----------------- SHARDING -----------------
     private const int Shards = 64;
@@ -103,6 +143,38 @@ public static class LiveHashrateState
             return (h & 0x7fffffff) % Shards;
         }
     }
+
+    public static (double diffSum, long lastSeenMax, int ageSec) GetAddressWindowWithAge(
+    string poolId, string address, int windowSec)
+    {
+        address ??= string.Empty;
+
+        double acc = 0;
+        long lastMax = 0;
+        int maxAgeSec = 0;
+
+        for (int i = 0; i < Shards; i++)
+        {
+            foreach (var kv in WorkerRings[i])
+            {
+                if (kv.Key.poolId == poolId &&
+                    string.Equals(kv.Key.address, address, StringComparison.OrdinalIgnoreCase))
+                {
+                    var (sum, age) = kv.Value.SumWindowWithAge(windowSec);
+                    acc += sum;
+
+                    if (WorkerLastSeen[i].TryGetValue(kv.Key, out var last) && last > lastMax)
+                        lastMax = last;
+
+                    if (age > maxAgeSec)
+                        maxAgeSec = age;
+                }
+            }
+        }
+
+        return (acc, lastMax, maxAgeSec);
+    }
+
 
     // ----------------- POOL-LEVEL -----------------
     public static RollingRing ForPool(string poolId)
@@ -235,6 +307,30 @@ public static class LiveHashrateState
         foreach (var kv in map)
             yield return (kv.Key, kv.Value.diff, kv.Value.last);
     }
+
+    public static IEnumerable<(string worker, double diffSum, long lastSeenMax, int ageSec)>
+    EnumerateAddressWorkersWithAge(string poolId, string address, int windowSec)
+    {
+        address ??= string.Empty;
+
+        for (int i = 0; i < Shards; i++)
+        {
+            foreach (var kv in WorkerRings[i])
+            {
+                if (kv.Key.poolId != poolId)
+                    continue;
+
+                if (!string.Equals(kv.Key.address, address, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var (sum, age) = kv.Value.SumWindowWithAge(windowSec);
+
+                WorkerLastSeen[i].TryGetValue(kv.Key, out var last);
+                yield return (kv.Key.miner, sum, last, age);
+            }
+        }
+    }
+
 
     public static bool IsAddressOnline(string poolId, string address, int? windowOverrideSec = null)
     {

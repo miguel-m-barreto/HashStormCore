@@ -38,6 +38,9 @@ public class LiveController : ControllerBase
 
     private const int DefaultPageSize = 50;
 
+    // Floor to avoid stupid spikes on tiny ages
+    private const int MinEffectiveWindowSec = 30;
+
     public LiveController(
         ClusterConfig clusterConfig,
         IConnectionFactory cf,
@@ -386,6 +389,24 @@ public class LiveController : ControllerBase
         return (addrSet.Count, workers);
     }
 
+    private static int EffectiveWindow(int configuredWindowSec, int ageSec)
+    {
+        var conf = Math.Max(1, configuredWindowSec);
+
+        if (ageSec <= 0)
+            return conf;
+
+        // age mínimo para não termos média em 2 ou 3 segundos
+        var age = Math.Max(ageSec, MinEffectiveWindowSec);
+
+        // nunca maior do que a janela configurada
+        if (age > conf)
+            age = conf;
+
+        return age;
+    }
+
+
     //**************************************************************
     // HEAVY ENDPOINTS (LIVE + DB)
     // - Use live in-memory rings (LiveHashrateState, LiveRoundState)
@@ -497,12 +518,16 @@ public class LiveController : ControllerBase
 
         var unit = ResolveUnit(poolCfg.Template.Family);
 
-        // LIVE: address window
-        var (diffSum, lastMax) = LiveHashrateState.GetAddressWindow(poolCfg.Id, address, windowSec);
-        var sharesPerSec = diffSum / Math.Max(1d, windowSec);
+        // LIVE: address window + age
+        var (diffSum, lastMax, ageSec) =
+            LiveHashrateState.GetAddressWindowWithAge(poolCfg.Id, address, windowSec);
+
+        var effectiveWin = EffectiveWindow(windowSec, ageSec);
+
+        var sharesPerSec = diffSum / Math.Max(1d, effectiveWin);
 
         var poolInst = TryGetPoolInstance(poolCfg.Id);
-        var current = DiffToHashrate(poolCfg, diffSum, windowSec, poolInst);
+        var current = DiffToHashrate(poolCfg, diffSum, effectiveWin, poolInst);
 
         var online = IsOnlineFromLast(lastMax, windowSec);
 
@@ -514,7 +539,9 @@ public class LiveController : ControllerBase
             WindowSec = windowSec,
             Unit = unit,
             Online = online,
-            LastShareAt = lastMax > 0 ? DateTimeOffset.FromUnixTimeSeconds(lastMax).UtcDateTime : null,
+            LastShareAt = lastMax > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(lastMax).UtcDateTime
+                : null,
             CurrentHashrate = current,
             SharesPerSec = sharesPerSec,
 
@@ -527,6 +554,7 @@ public class LiveController : ControllerBase
         Response.Headers["Cache-Control"] = "no-store";
         return resp;
     }
+
 
     // ----------------------------------------------------------------
     // GET /api/live/pools/snapinfo
@@ -1354,12 +1382,17 @@ public class LiveController : ControllerBase
         var win = Math.Clamp(windowSec ?? DefaultWindowSec, MinWindowSec, MaxWindowSec);
         var poolInst = TryGetPoolInstance(poolCfg.Id);
 
-        var (diffSum, lastMax) = LiveHashrateState.GetAddressWindow(poolCfg.Id, address, win);
-        var sharesPerSec = diffSum / Math.Max(1d, win);
-        var currentHashrate = DiffToHashrate(poolCfg, diffSum, win, poolInst);
+        var (diffSum, lastMax, ageSec) =
+            LiveHashrateState.GetAddressWindowWithAge(poolCfg.Id, address, win);
+
+        var effectiveWin = EffectiveWindow(win, ageSec);
+
+        var sharesPerSec = diffSum / Math.Max(1d, effectiveWin);
+        var currentHashrate = DiffToHashrate(poolCfg, diffSum, effectiveWin, poolInst);
         var online = IsOnlineFromLast(lastMax, win);
 
-        var (roundStartedAt, roundHeight, roundActualShares) = LiveRoundState.Snapshot(poolCfg.Id);
+        var (roundStartedAt, roundHeight, roundActualShares) =
+            LiveRoundState.Snapshot(poolCfg.Id);
 
         Response.Headers["Cache-Control"] = "no-store";
 
@@ -1372,7 +1405,9 @@ public class LiveController : ControllerBase
             windowSec = win,
 
             online,
-            lastShareAt = lastMax > 0 ? DateTimeOffset.FromUnixTimeSeconds(lastMax).UtcDateTime : (DateTime?)null,
+            lastShareAt = lastMax > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(lastMax).UtcDateTime
+                : (DateTime?)null,
             currentHashrate,
             sharesPerSec,
 
@@ -1384,6 +1419,7 @@ public class LiveController : ControllerBase
             }
         });
     }
+
 
     // ----------------------------------------------------------------
     // GET /api/live/pools/{poolId}/snapshot-lite
@@ -1508,4 +1544,68 @@ public class LiveController : ControllerBase
             items = pageItems
         });
     }
+
+    // ----------------------------------------------------------------
+    // GET /api/live/pools/{poolId}/miners/{address}/workers-lite
+    // COST: LIVE ONLY (per-worker under one address, no DB)
+    // ----------------------------------------------------------------
+    [HttpGet("pools/{poolId}/miners/{address}/workers-lite")]
+    public ActionResult<object> GetMinerWorkersLite(
+        string poolId,
+        string address,
+        [FromQuery] int? windowSec)
+    {
+        var poolCfg = GetPool(poolId);
+
+        if (string.IsNullOrWhiteSpace(address))
+            throw new ApiException("Invalid or missing miner address", HttpStatusCode.BadRequest);
+
+        address = address.Trim();
+
+        var now = clock.Now;
+        var win = Math.Clamp(windowSec ?? DefaultWindowSec, MinWindowSec, MaxWindowSec);
+
+        var unit = ResolveUnit(poolCfg.Template.Family);
+        var poolInst = TryGetPoolInstance(poolCfg.Id);
+
+        // LIVE: workers do address com diffSum + lastSeen + ageSec
+        var workers = LiveHashrateState
+            .EnumerateAddressWorkersWithAge(poolCfg.Id, address, win)
+            .Select(w =>
+            {
+                var effectiveWin = EffectiveWindow(win, w.ageSec);
+
+                var sharesPerSec = w.diffSum / Math.Max(1d, effectiveWin);
+                var hashrate = DiffToHashrate(poolCfg, w.diffSum, effectiveWin, poolInst);
+                var online = IsOnlineFromLast(w.lastSeenMax, win);
+                var lastShareAt = w.lastSeenMax > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(w.lastSeenMax).UtcDateTime
+                    : (DateTime?)null;
+
+                return new
+                {
+                    worker = w.worker,           // string após o ponto: address.worker
+                    hashrate,
+                    sharesPerSecond = sharesPerSec,
+                    online,
+                    lastShareAt,
+                    effectiveWindowSec = effectiveWin
+                };
+            })
+            .OrderByDescending(x => x.hashrate)
+            .ToArray();
+
+        Response.Headers["Cache-Control"] = "no-store";
+
+        return Ok(new
+        {
+            asOf = now,
+            poolId = poolCfg.Id,
+            address,
+            unit,
+            windowSec = win,   // janela "configurada"
+            items = workers
+        });
+    }
+
 }
