@@ -81,8 +81,42 @@ public class ShareRecorder : BackgroundService
     {
         var context = new Dictionary<string, object> { { PolicyContextKeyShares, shares } };
 
-        await faultPolicy.ExecuteAsync(ctx => PersistSharesCoreAsync((IList<Share>) ctx[PolicyContextKeyShares]), context);
+        await faultPolicy.ExecuteAsync(ctx => PersistSharesCoreAsync((IList<Share>)ctx[PolicyContextKeyShares]), context);
     }
+
+    private static void TrackLiveShare(Share s)
+    {
+        // Use difficulty as weight, fallback to 1 for safety
+        var amt = s.Difficulty > 0 ? s.Difficulty : 1d;
+
+        try
+        {
+            // Single timestamp for this share
+            var nowSecLong = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var nowSec = (int)nowSecLong;
+
+            // Pool-level aggregated diff
+            var poolRing = Live.LiveHashrateState.ForPool(s.PoolId);
+            poolRing.AddAt(amt, nowSec);
+
+            // Address/worker-level
+            var workerRing = Live.LiveHashrateState.ForWorker(s.PoolId, s.Miner, s.Worker);
+            workerRing.AddAt(amt, nowSec);
+
+            // Presence + eviction
+            Live.LiveHashrateState.TouchWorker(s.PoolId, s.Miner, s.Worker, nowSecLong);
+            Live.LiveHashrateState.ScheduleExpiration(s.PoolId, s.Miner, s.Worker, nowSecLong);
+
+            // Round (counts shares, not weighted) - no timestamp needed
+            Live.LiveRoundState.AddShare(s.PoolId);
+        }
+        catch (Exception ex)
+        {
+            // Never kill ShareRecorder
+            logger.Warn(ex, "[LiveHashrateState/LiveRoundState] Live counters update failed");
+        }
+    }
+
 
     private async Task PersistSharesCoreAsync(IList<Share> shares)
     {
@@ -94,9 +128,9 @@ public class ShareRecorder : BackgroundService
             await shareRepo.BatchInsertAsync(con, tx, mapped, CancellationToken.None);
 
             // Insert block candidates and notify
-            foreach(var share in shares)
+            foreach (var share in shares)
             {
-                if(!share.IsBlockCandidate)
+                if (!share.IsBlockCandidate)
                     continue;
 
                 // Create pending block record
@@ -105,42 +139,18 @@ public class ShareRecorder : BackgroundService
                 await blockRepo.InsertAsync(con, tx, blockEntity);
 
                 // Notify about the candidate (already in your original code)
-                if(pools.TryGetValue(share.PoolId, out var poolConfig))
+                if (pools.TryGetValue(share.PoolId, out var poolConfig))
                     messageBus.NotifyBlockFound(share.PoolId, blockEntity, poolConfig.Template);
                 else
                     logger.Warn(() => $"Block found for unknown pool {share.PoolId}");
 
                 // === LIVE ROUND: reset round on new candidate (inside TX for consistency) ===
                 // This marks the start of a new round and clears ActualShares.
-                Live.LiveRoundState.OnBlockCandidate(share.PoolId, (ulong?) blockEntity.BlockHeight);
+                Live.LiveRoundState.OnBlockCandidate(share.PoolId, (ulong?)blockEntity.BlockHeight);
                 // ============================================================================
             }
         });
 
-        try
-        {
-            // Difficulty-weighted live counters (VarDiff-safe)
-            foreach(var s in shares)
-            {
-                var amt = s.Difficulty > 0 ? s.Difficulty : 1d;
-
-                // Pool-level
-                Live.LiveHashrateState.ForPool(s.PoolId).Add(amt);
-
-                // Worker-level
-                Live.LiveHashrateState.ForWorker(s.PoolId, s.Miner, s.Worker).Add(amt);
-                Live.LiveHashrateState.TouchWorker(s.PoolId, s.Miner, s.Worker);
-                Live.LiveHashrateState.ScheduleExpiration(s.PoolId, s.Miner, s.Worker);
-
-
-                // Round counts shares (not weighted)
-                Live.LiveRoundState.AddShare(s.PoolId);
-            }
-        }
-        catch(Exception ex)
-        {
-            logger.Warn(ex, "[LiveHashrateState/LiveRoundState] Batch counters update failed");
-        }
     }
 
 
@@ -157,18 +167,18 @@ public class ShareRecorder : BackgroundService
 
     private async Task OnExecutePolicyFallbackAsync(Context context, CancellationToken ct)
     {
-        var shares = (IList<Share>) context[PolicyContextKeyShares];
+        var shares = (IList<Share>)context[PolicyContextKeyShares];
 
         try
         {
-            await using(var stream = new FileStream(recoveryFilename, FileMode.Append, FileAccess.Write))
+            await using (var stream = new FileStream(recoveryFilename, FileMode.Append, FileAccess.Write))
             {
-                await using(var writer = new StreamWriter(stream, new UTF8Encoding(false)))
+                await using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
                 {
-                    if(stream.Length == 0)
+                    if (stream.Length == 0)
                         WriteRecoveryFileheader(writer);
 
-                    foreach(var share in shares)
+                    foreach (var share in shares)
                     {
                         var json = JsonConvert.SerializeObject(share, jsonSerializerSettings);
                         await writer.WriteLineAsync(json);
@@ -179,9 +189,9 @@ public class ShareRecorder : BackgroundService
             NotifyAdminOnPolicyFallback();
         }
 
-        catch(Exception ex)
+        catch (Exception ex)
         {
-            if(!hasLoggedPolicyFallbackFailure)
+            if (!hasLoggedPolicyFallbackFailure)
             {
                 logger.Fatal(ex, "Fatal error during policy fallback execution. Share(s) will be lost!");
                 hasLoggedPolicyFallbackFailure = true;
@@ -206,28 +216,28 @@ public class ShareRecorder : BackgroundService
             var failCount = 0;
             const int bufferSize = 100;
 
-            await using(var stream = new FileStream(filename, FileMode.Open, FileAccess.Read))
+            await using (var stream = new FileStream(filename, FileMode.Open, FileAccess.Read))
             {
-                using(var reader = new StreamReader(stream, new UTF8Encoding(false)))
+                using (var reader = new StreamReader(stream, new UTF8Encoding(false)))
                 {
                     var shares = new List<Share>();
                     var lastProgressUpdate = DateTime.UtcNow;
 
-                    while(!reader.EndOfStream)
+                    while (!reader.EndOfStream)
                     {
                         var line = await reader.ReadLineAsync();
 
-                        if(string.IsNullOrEmpty(line))
+                        if (string.IsNullOrEmpty(line))
                             continue;
 
                         // skip blank lines
                         line = line.Trim();
 
-                        if(line.Length == 0)
+                        if (line.Length == 0)
                             continue;
 
                         // skip comments
-                        if(line.StartsWith("#"))
+                        if (line.StartsWith("#"))
                             continue;
 
                         // parse
@@ -237,7 +247,7 @@ public class ShareRecorder : BackgroundService
                             shares.Add(share);
                         }
 
-                        catch(JsonException ex)
+                        catch (JsonException ex)
                         {
                             logger.Error(ex, () => $"Unable to parse share record: {line}");
                             failCount++;
@@ -246,7 +256,7 @@ public class ShareRecorder : BackgroundService
                         // import
                         try
                         {
-                            if(shares.Count == bufferSize)
+                            if (shares.Count == bufferSize)
                             {
                                 await PersistSharesCoreAsync(shares);
 
@@ -255,7 +265,7 @@ public class ShareRecorder : BackgroundService
                             }
                         }
 
-                        catch(Exception ex)
+                        catch (Exception ex)
                         {
                             logger.Error(ex, () => "Unable to import shares");
                             failCount++;
@@ -264,7 +274,7 @@ public class ShareRecorder : BackgroundService
                         // progress
                         var now = DateTime.UtcNow;
 
-                        if(now - lastProgressUpdate > TimeSpan.FromSeconds(10))
+                        if (now - lastProgressUpdate > TimeSpan.FromSeconds(10))
                         {
                             logger.Info($"{successCount} shares imported");
                             lastProgressUpdate = now;
@@ -274,7 +284,7 @@ public class ShareRecorder : BackgroundService
                     // import remaining shares
                     try
                     {
-                        if(shares.Count > 0)
+                        if (shares.Count > 0)
                         {
                             await PersistSharesCoreAsync(shares);
 
@@ -282,7 +292,7 @@ public class ShareRecorder : BackgroundService
                         }
                     }
 
-                    catch(Exception ex)
+                    catch (Exception ex)
                     {
                         logger.Error(ex, () => "Unable to import shares");
                         failCount++;
@@ -290,13 +300,13 @@ public class ShareRecorder : BackgroundService
                 }
             }
 
-            if(failCount == 0)
+            if (failCount == 0)
                 logger.Info(() => $"Successfully imported {successCount} shares");
             else
                 logger.Warn(() => $"Successfully imported {successCount} shares with {failCount} failures");
         }
 
-        catch(FileNotFoundException)
+        catch (FileNotFoundException)
         {
             logger.Error(() => $"Recovery file {filename} was not found");
         }
@@ -304,7 +314,7 @@ public class ShareRecorder : BackgroundService
 
     private void NotifyAdminOnPolicyFallback()
     {
-        if(clusterConfig.Notifications?.Admin?.Enabled == true &&
+        if (clusterConfig.Notifications?.Admin?.Enabled == true &&
            clusterConfig.Notifications?.Admin?.NotifyPaymentSuccess == true &&
            !notifiedAdminOnPolicyFallback)
         {
@@ -360,23 +370,26 @@ public class ShareRecorder : BackgroundService
         logger.Info(() => "Online");
 
         return messageBus.Listen<Share>()
-            .ObserveOn(TaskPoolScheduler.Default)
-            .Where(x => x != null)
-            .Select(x => x)
-            .Buffer(TimeSpan.FromSeconds(5), 250)
-            .Where(shares => shares.Any())
-            .Select(shares => Observable.FromAsync(() =>
-                Guard(() =>
-                        PersistSharesAsync(shares),
-                    ex => logger.Error(ex))))
-            .Concat()
-            .ToTask(ct)
-            .ContinueWith(task =>
-            {
-                if(task.IsFaulted)
-                    logger.Fatal(() => $"Terminated due to error {task.Exception?.InnerException ?? task.Exception}");
-                else
-                    logger.Info(() => "Offline");
-            }, ct);
+        .ObserveOn(TaskPoolScheduler.Default)
+        .Where(x => x != null)
+        // HOT PATH: live stats update on share accepted (already protected inside TrackLiveShare)
+        .Do(TrackLiveShare)
+        // Batch for DB / blocks / recovery
+        .Buffer(TimeSpan.FromSeconds(5), 250)
+        .Where(shares => shares.Any())
+        .Select(shares => Observable.FromAsync(() =>
+            Guard(() =>
+                    PersistSharesAsync(shares),
+                ex => logger.Error(ex))))
+        .Concat()
+        .ToTask(ct)
+        .ContinueWith(task =>
+        {
+            if (task.IsFaulted)
+                logger.Fatal(() => $"Terminated due to error {task.Exception?.InnerException ?? task.Exception}");
+            else
+                logger.Info(() => "Offline");
+        }, ct);
+
     }
 }

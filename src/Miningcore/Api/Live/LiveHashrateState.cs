@@ -31,34 +31,43 @@ public static class LiveHashrateState
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Add(double amount)
         {
-            var nowSec = (int) DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            // Backwards-compatible: still works without explicit timestamp
+            var nowSec = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            AddAt(amount, nowSec);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void AddAt(double amount, int nowSec)
+        {
             var idx = nowSec & Mask;
 
-            if(Volatile.Read(ref secs[idx]) != nowSec)
+            // slot is from another second? discard
+            if (Volatile.Read(ref secs[idx]) != nowSec)
             {
                 Volatile.Write(ref secs[idx], nowSec);
                 Interlocked.Exchange(ref buckets[idx], 0);
             }
 
-            var inc = (long) Math.Round(amount * SCALE);
+            var inc = (long)Math.Round(amount * SCALE);
             Interlocked.Add(ref buckets[idx], inc);
         }
 
         public double SumWindow(int windowSec)
         {
-            if(windowSec <= 0) windowSec = DefaultWindowSec;
-            var nowSec = (int) DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (windowSec <= 0) windowSec = DefaultWindowSec;
+
+            var nowSec = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var fromSec = nowSec - windowSec + 1;
 
             long acc = 0;
-            for(var t = fromSec; t <= nowSec; t++)
+            for (var t = fromSec; t <= nowSec; t++)
             {
                 var idx = t & Mask;
-                if(Volatile.Read(ref secs[idx]) == t)
+                if (Volatile.Read(ref secs[idx]) == t)
                     acc += Volatile.Read(ref buckets[idx]);
             }
 
-            return acc / (double) SCALE;
+            return acc / (double)SCALE;
         }
     }
 
@@ -118,9 +127,18 @@ public static class LiveHashrateState
         address ??= string.Empty;
         miner ??= string.Empty;
 
+        var nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        TouchWorker(poolId, address, miner, nowSec);
+    }
+
+    public static void TouchWorker(string poolId, string address, string miner, long nowSec)
+    {
+        address ??= string.Empty;
+        miner ??= string.Empty;
+
         var key = (poolId, address, miner);
         var shard = ShardOf(key);
-        WorkerLastSeen[shard][key] = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        WorkerLastSeen[shard][key] = nowSec;
     }
 
     public static long? GetWorkerLastSeenSec(string poolId, string address, string miner)
@@ -130,13 +148,13 @@ public static class LiveHashrateState
 
         var key = (poolId, address, miner);
         var shard = ShardOf(key);
-        return WorkerLastSeen[shard].TryGetValue(key, out var sec) ? sec : (long?) null;
+        return WorkerLastSeen[shard].TryGetValue(key, out var sec) ? sec : (long?)null;
     }
 
     public static bool IsWorkerOnline(string poolId, string address, string miner, int? windowOverrideSec = null)
     {
         var last = GetWorkerLastSeenSec(poolId, address, miner);
-        if(!last.HasValue) return false;
+        if (!last.HasValue) return false;
 
         var grace = Math.Max(windowOverrideSec ?? DefaultWindowSec, OnlineGraceSec);
         return (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - last.Value) <= grace;
@@ -144,11 +162,11 @@ public static class LiveHashrateState
 
     public static IEnumerable<(string poolId, string address, string miner, RollingRing ring, long lastSeen)> EnumeratePoolWorkers(string poolId)
     {
-        for(int i = 0; i < Shards; i++)
+        for (int i = 0; i < Shards; i++)
         {
-            foreach(var kv in WorkerRings[i])
+            foreach (var kv in WorkerRings[i])
             {
-                if(kv.Key.poolId == poolId)
+                if (kv.Key.poolId == poolId)
                 {
                     WorkerLastSeen[i].TryGetValue(kv.Key, out var last);
                     yield return (kv.Key.poolId, kv.Key.address, kv.Key.miner, kv.Value, last);
@@ -159,9 +177,9 @@ public static class LiveHashrateState
 
     public static IEnumerable<(string poolId, string address, string miner, RollingRing ring, long lastSeen)> EnumerateAllWorkers()
     {
-        for(int i = 0; i < Shards; i++)
+        for (int i = 0; i < Shards; i++)
         {
-            foreach(var kv in WorkerRings[i])
+            foreach (var kv in WorkerRings[i])
             {
                 WorkerLastSeen[i].TryGetValue(kv.Key, out var last);
                 yield return (kv.Key.poolId, kv.Key.address, kv.Key.miner, kv.Value, last);
@@ -177,14 +195,14 @@ public static class LiveHashrateState
         double acc = 0;
         long lastMax = 0;
 
-        for(int i = 0; i < Shards; i++)
+        for (int i = 0; i < Shards; i++)
         {
-            foreach(var kv in WorkerRings[i])
+            foreach (var kv in WorkerRings[i])
             {
                 if (kv.Key.poolId == poolId && string.Equals(kv.Key.address, address, StringComparison.OrdinalIgnoreCase))
                 {
                     acc += kv.Value.SumWindow(windowSec);
-                    if(WorkerLastSeen[i].TryGetValue(kv.Key, out var last) && last > lastMax)
+                    if (WorkerLastSeen[i].TryGetValue(kv.Key, out var last) && last > lastMax)
                         lastMax = last;
                 }
             }
@@ -197,32 +215,32 @@ public static class LiveHashrateState
     {
         var map = new Dictionary<string, (double diff, long last)>(StringComparer.OrdinalIgnoreCase);
 
-        for(int i = 0; i < Shards; i++)
+        for (int i = 0; i < Shards; i++)
         {
-            foreach(var kv in WorkerRings[i])
+            foreach (var kv in WorkerRings[i])
             {
-                if(kv.Key.poolId != poolId) continue;
+                if (kv.Key.poolId != poolId) continue;
 
                 var addr = kv.Key.address;
                 var add = kv.Value.SumWindow(windowSec);
 
                 WorkerLastSeen[i].TryGetValue(kv.Key, out var last);
-                if(map.TryGetValue(addr, out var cur))
+                if (map.TryGetValue(addr, out var cur))
                     map[addr] = (cur.diff + add, Math.Max(cur.last, last));
                 else
                     map[addr] = (add, last);
             }
         }
 
-        foreach(var kv in map)
+        foreach (var kv in map)
             yield return (kv.Key, kv.Value.diff, kv.Value.last);
     }
 
     public static bool IsAddressOnline(string poolId, string address, int? windowOverrideSec = null)
     {
         var win = windowOverrideSec ?? DefaultWindowSec;
-        var ( _, last ) = GetAddressWindow(poolId, address, win);
-        if(last <= 0) return false;
+        var (_, last) = GetAddressWindow(poolId, address, win);
+        if (last <= 0) return false;
 
         var grace = Math.Max(win, OnlineGraceSec);
         return (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - last) <= grace;
@@ -264,13 +282,24 @@ public static class LiveHashrateState
         address ??= string.Empty;
         miner ??= string.Empty;
 
+        var nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        ScheduleExpiration(poolId, address, miner, nowSec);
+    }
+
+    public static void ScheduleExpiration(string poolId, string address, string miner, long nowSec)
+    {
+        address ??= string.Empty;
+        miner ??= string.Empty;
+
         var key = (poolId, address, miner);
         var gen = Gen.AddOrUpdate(key, 1, static (_, old) => unchecked(old + 1));
 
-        var expiry = DateTimeOffset.UtcNow + Ttl;
-        var bucketIdx = (int)((expiry.ToUnixTimeSeconds() / 60) & (Buckets - 1));
+        var expirySec = nowSec + (long)Ttl.TotalSeconds;
+        var bucketIdx = (int)((expirySec / 60) & (Buckets - 1));
+
         Wheel[bucketIdx].Enqueue(new ExpireToken(poolId, address, miner, gen));
     }
+
 
     private static void SweepTickSafe()
     {
@@ -284,16 +313,16 @@ public static class LiveHashrateState
         var now = DateTimeOffset.UtcNow;
         var idx = Interlocked.Increment(ref currentBucketIdx) & (Buckets - 1);
 
-        while(Wheel[idx].TryDequeue(out var tok))
+        while (Wheel[idx].TryDequeue(out var tok))
         {
             var last = GetWorkerLastSeenSec(tok.PoolId, tok.Address, tok.Miner);
-            if(!last.HasValue) continue;
+            if (!last.HasValue) continue;
 
-            var expired = (now.ToUnixTimeSeconds() - last.Value) >= (long) Ttl.TotalSeconds;
+            var expired = (now.ToUnixTimeSeconds() - last.Value) >= (long)Ttl.TotalSeconds;
 
-            if(expired && Gen.TryGetValue((tok.PoolId, tok.Address, tok.Miner), out var curGen) && curGen == tok.GenAtInsert)
+            if (expired && Gen.TryGetValue((tok.PoolId, tok.Address, tok.Miner), out var curGen) && curGen == tok.GenAtInsert)
             {
-                if(TryRemoveWorker(tok.PoolId, tok.Address, tok.Miner))
+                if (TryRemoveWorker(tok.PoolId, tok.Address, tok.Miner))
                     removed++;
             }
         }
