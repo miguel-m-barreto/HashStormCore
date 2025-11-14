@@ -3,7 +3,7 @@
 High-performance mining pool engine with modern live metrics, optimized job managers,
 and new API surfaces built on top of Miningcore, but redesigned for 2025+ needs.
 
-<img src="" width="150">
+<img src="https://raw.githubusercontent.com/miguel-m-barreto/HashStormCore/674eaa74a2c9486b5c4fc65a7694b41a1186f383/banner.png" width="150">
 
 HashStormCore is a modern technical successor to the original  
 [Miningcore](https://github.com/coinfoundry/miningcore).
