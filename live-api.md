@@ -1,203 +1,305 @@
-´live_api.md
+# HashStormCore Live API
 
-
-## API
-
-HashStormCore exposes **two** API layers:
+HashStormCore exposes two API layers:
 
 1. **Classic Stats API** (inherited from Miningcore)  
 2. **HashStormCore Live API** (new, in-memory, low-latency)
 
-### 1. Classic Stats API (Miningcore-compatible)
+This page documents the **HashStormCore Live API**, mounted at:
 
-The legacy HTTP API (typically on port `4000`) is kept for compatibility:
+/api/live/...
 
-- Pool list  
-- Basic stats per pool  
-- Blocks, payments, balances, etc.  
+The Live API uses in-memory structures (`LiveHashrateState`, `LiveRoundState`) to:
 
-For full reference, see the original Miningcore documentation and adapt paths/configs as needed:
-
-- Miningcore API docs: `https://github.com/oliverw/miningcore/wiki/API`
-
-HashStormCore keeps these endpoints to avoid breaking existing tooling and frontends.
+- avoid unnecessary database queries  
+- allow aggressive polling (1-10 s)  
+- provide consistent metrics per pool, per address, and per address.worker
 
 ---
 
-### 2. HashStormCore Live API (in-memory metrics)
+## 1. Classic Stats API (Miningcore-compatible)
 
-All live endpoints are mounted under:
+The classic API (usually on port `4000`) remains available for:
 
-```text
-/api/live/...
-```
+- pool list  
+- basic pool stats  
+- blocks  
+- payments  
+- balances  
 
-They are built on top of the in-memory LiveHashrateState and LiveRoundState structures, and are designed to:
+Original documentation:  
+https://github.com/oliverw/miningcore/wiki/API
 
-- avoid DB hits whenever possible
-- serve UIs with low latency
-- work well with short polling intervals (1-10 s)
+HashStormCore **does not remove** these endpoints to maintain compatibility.
 
-There are three categories:
+---
 
-- HEAVY - Live + DB (network difficulty, pending shares, etc.)
-- LITE - Live-only (no DB, UI-friendly)
-- SSE - Server-Sent Events streaming
+## 2. Live API - Overview
 
-### 2.1 HEAVY endpoints (LIVE + DB)
+Endpoint categories:
 
-**Use live rings for hashrate plus PostgreSQL for network stats and accounting.**
+- **HEAVY** - LIVE + DB (network difficulty, pendingShares, blockHeight)  
+- **LITE** - LIVE-only (zero DB; best performance)  
+- **SSE** - Server-Sent Events (continuous streaming)
 
-*Pool & cluster snapshots*
+Common parameters:
 
-Snapshot for all enabled pools (live hashrate + DB network stats).
-```
-GET /api/live/pools/snapshot
-```
+- `windowSec` - hashrate calculation window (default: 600s)  
+- `limit` - maximum results (default: 100, max: 500)  
+- `page` / `pageSize` - pagination  
 
-Snapshot for a single pool.
-```
-GET /api/live/pools/{poolId}/snapshot
-```
+---
 
-"SnapInfo" view for all pools (live hashrate, live round, miners online, network stats).
-```
-GET /api/live/pools/snapinfo
-```
+## 3. Endpoint Index
 
-"SnapInfo" for a single pool.
-```
-GET /api/live/pools/{poolId}/snapinfo
-```
+### HEAVY (LIVE + DB)
 
-Cluster status (per-pool current hashrate, miners online, network difficulty & height).
-```
-GET /api/live/status
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/live/pools/snapshot` | Full live + network snapshot for all pools |
+| GET | `/api/live/pools/{poolId}/snapshot` | Full snapshot for a single pool |
+| GET | `/api/live/pools/snapinfo` | Compact SnapInfo for all pools |
+| GET | `/api/live/pools/{poolId}/snapinfo` | Detailed SnapInfo for one pool |
+| GET | `/api/live/status` | Cluster status (hashrate, miners, network) |
+| GET | `/api/live/pools/{poolId}/round` | Current round state |
+| GET | `/api/live/pools/{poolId}/miners` | Top miners + pendingShares (DB) |
+| GET | `/api/live/pools/{poolId}/miners-all` | All miners, paginated, with pendingShares |
+| GET | `/api/live/pools/{poolId}/miners/{address}/snapshot` | Live snapshot for a miner |
 
-*Round information*
+---
 
-Current round state: live actualShares + expected shares via network difficulty.
-```
-GET /api/live/pools/{poolId}/round
-```
+### LITE (LIVE-only)
 
-Miners (address-level, with DB stats)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/live/pools/static-lite` | Static pool configuration |
+| GET | `/api/live/status-lite` | Cluster live-only status |
+| GET | `/api/live/pools/snapshot-lite` | Live-only snapshot of all pools |
+| GET | `/api/live/pools/{poolId}/snapshot-lite` | Live-only snapshot of a single pool |
+| GET | `/api/live/pools/{poolId}/online-lite` | Online miners/workers in a pool |
+| GET | `/api/live/pools/online-lite` | Online miners/workers in the cluster |
+| GET | `/api/live/miners/search-lite` | Global address search |
+| GET | `/api/live/pools/{poolId}/top-miners-lite` | Live-only top miners |
+| GET | `/api/live/pools/{poolId}/miners-lite` | Limited miner list (live-only) |
+| GET | `/api/live/pools/{poolId}/miners-all-lite` | All miners, live-only (paginated) |
+| GET | `/api/live/pools/{poolId}/miners/{address}/round-lite` | Round metrics for a miner |
+| GET | `/api/live/pools/{poolId}/miners/{address}/workers-lite` | Workers belonging to an address |
 
-Top miners for a pool (live hashrate + pendingShares from DB, limited list).
-```
-GET /api/live/pools/{poolId}/miners
-```
+---
 
-All miners for a pool, with pagination + pendingShares from DB.
-```
-GET /api/live/pools/{poolId}/miners-all
-```
+### SSE
 
-*Single miner snapshot*
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/live/pools/{poolId}/feed` | Continuous SSE hashrate stream |
 
-Live snapshot for a given address (hashrate, last share, online state).
-```
-GET /api/live/pools/{poolId}/miners/{address}/snapshot
-```
+---
 
-## 2.2 LITE endpoints (LIVE-only, zero DB)
+## 4. HEAVY Endpoints (LIVE + DB)
 
-**These are tuned for frontends. They never touch PostgreSQL.**
+### 4.1 Snapshots
 
-*Cluster & pools*
+#### `GET /api/live/pools/snapshot`
+Full snapshot for all pools.
 
-Static configuration for enabled pools (coin metadata, ports, payout config).
-```
-GET /api/live/pools/static-lite
-```
+Includes:
+- live: `currentHashrate`, `sharesPerSec`, `minersOnline`, `round.actualShares`  
+- DB: `network.height`, `network.difficulty`, `network.hashrate`
 
-Cluster-wide, live-only view: hashrate + online miners per pool.
-```
-GET /api/live/status-lite
-```
+Query:
+- `windowSec?`
 
-Live snapshot for all pools (hashrate, shares/s, miners online, round actualShares).
-```
-GET /api/live/pools/snapshot-lite
-```
+---
 
-Live snapshot for a single pool (no DB).
-```
-GET /api/live/pools/{poolId}/snapshot-lite
-```
+#### `GET /api/live/pools/{poolId}/snapshot`
+Same structure for a single pool.
 
-*Online counters*
+---
 
-Online miners/workers for one pool.
-```
-GET /api/live/pools/{poolId}/online-lite?mode=window|live&windowSec=...
-```
+#### `GET /api/live/pools/snapinfo`
+Compact SnapInfo for all pools:
 
-mode=window - uses in-memory window presence (recommended)
+Includes:
+- coin metadata  
+- pool static config  
+- live metrics  
+- network stats  
+- round state  
 
-mode=live - uses poolInst.Stats when available
+---
 
-Same as above, but aggregated for all pools.
-```
-GET /api/live/pools/online-lite?mode=window|live&windowSec=...
-```
+#### `GET /api/live/pools/{poolId}/snapinfo`
+Single-pool version.
 
-*Miners (address-level)*
+---
 
-Search across all pools by address (substring match, live only).
-```
-GET /api/live/miners/search-lite?q=...
-```
+#### `GET /api/live/status`
+Cluster status (LIVE + DB):
 
-Top miners for a pool, live-only (address, hashrate, online, last share).
-```
-GET /api/live/pools/{poolId}/top-miners-lite
-```
+- `poolId`
+- `algo`
+- `unit`
+- `currentHashrate`
+- `minersOnline`
+- `difficulty` / `blockHeight` (DB-backed)
 
-Miners for a pool (limited list, live-only, no pendingShares).
-```
-GET /api/live/pools/{poolId}/miners-lite
-```
+---
 
-All miners for a pool, paginated, live-only.
-```
-GET /api/live/pools/{poolId}/miners-all-lite
-```
+### 4.2 Round
 
-Live hashrate + current round state for a specific address.
-```
-GET /api/live/pools/{poolId}/miners/{address}/round-lite
-```
+#### `GET /api/live/pools/{poolId}/round`
+Current round state:
 
-*Workers (address.worker-level)*
+- `height`
+- `startedAt`
+- `actualShares` (live)
+- `expectedShares` (from difficulty)
+- `luckPercent`
 
-All workers under a given address:
-```
-GET /api/live/pools/{poolId}/miners/{address}/workers-lite
-```
+---
 
-- live hashrate per worker
-- online state
-- last share timestamp
-- effective window used for the calculation
+### 4.3 Miners (DB-backed)
 
-## 2.3 SSE (Server-Sent Events)
+#### `GET /api/live/pools/{poolId}/miners`
+Top miners with `pendingShares`.
 
-**Streaming pool hashrate**
+Query:
+- `windowSec`
+- `limit`
 
-```
-GET /api/live/pools/{poolId}/feed?intervalSec=2&windowSec=...
-```
+---
 
-*Pushes a continuous SSE stream with:*
+#### `GET /api/live/pools/{poolId}/miners-all`
+All miners, with pagination.
 
-- poolId
-- asOf (ISO timestamp)
-- unit (H/s or Sol/s)
-- windowSec
-- currentHashrate
+Query:
+- `windowSec`
+- `page`
+- `pageSize`
 
-Designed for lightweight real-time charts without constant full HTTP polling.
+---
+
+#### `GET /api/live/pools/{poolId}/miners/{address}/snapshot`
+Live-only snapshot for a miner:
+
+- `hashrate`
+- `sharesPerSec`
+- `online`
+- `lastShareAt`
+- `unit`
+- `windowSec`
+
+---
+
+## 5. LITE Endpoints (LIVE-only)
+
+### 5.1 Cluster & Pools
+
+#### `GET /api/live/pools/static-lite`
+Static configuration for UI.
+
+---
+
+#### `GET /api/live/status-lite`
+Live-only cluster status.
+
+---
+
+#### `GET /api/live/pools/snapshot-lite`
+Live-only snapshot for all pools.
+
+---
+
+#### `GET /api/live/pools/{poolId}/snapshot-lite`
+Live-only snapshot for a single pool.
+
+---
+
+### 5.2 Online Counters
+
+#### `GET /api/live/pools/{poolId}/online-lite`
+Online miners/workers.
+
+Query:
+- `mode=window|live`
+- `windowSec?`
+
+---
+
+#### `GET /api/live/pools/online-lite`
+Cluster-wide version.
+
+---
+
+### 5.3 Miners (address-level)
+
+#### `GET /api/live/miners/search-lite`
+Global address search.
+
+Query:
+- `q`
+- `limit`
+- `windowSec`
+
+---
+
+#### `GET /api/live/pools/{poolId}/top-miners-lite`
+Live-only top miners.
+
+---
+
+#### `GET /api/live/pools/{poolId}/miners-lite`
+Limited miner list (live-only).
+
+---
+
+#### `GET /api/live/pools/{poolId}/miners-all-lite`
+All miners live-only, paginated.
+
+---
+
+#### `GET /api/live/pools/{poolId}/miners/{address}/round-lite`
+Round metrics + miner view.
+
+---
+
+### 5.4 Workers
+
+#### `GET /api/live/pools/{poolId}/miners/{address}/workers-lite`
+Workers under an address:
+
+- `worker`
+- `hashrate`
+- `sharesPerSecond`
+- `online`
+- `lastShareAt`
+
+---
+
+## 6. SSE
+
+### `GET /api/live/pools/{poolId}/feed`
+
+Continuous stream:
+
+- `poolId`
+- `asOf`
+- `currentHashrate`
+- `windowSec`
+- `unit`
+
+Query:
+- `intervalSec`
+- `windowSec?`
+
+Ideal for real-time charts.
+
+---
+
+## 7. Best Practices
+
+- Use **LITE** for dashboards -> faster, zero DB  
+- Use **HEAVY** only when `pendingShares` or network stats are needed  
+- For charts -> always use **SSE**, never polling  
 
 ---
