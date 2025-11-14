@@ -1,14 +1,13 @@
+// src/Miningcore/Api/Responses/GetPoolStatsResponse.cs
+using System;
+
 namespace Miningcore.Api.Responses
 {
-    public double PoolHashrate { get; set; }
-    public int ConnectedMiners { get; set; }
-    public double ValidSharesPerSecond { get; set; }
-    public double NetworkHashrate { get; set; }
-    public double NetworkDifficulty { get; set; }
-
+    public class AggregatedPoolStats
+    {
+        public double PoolHashrate { get; set; }
         public int ConnectedMiners { get; set; }
-
-        // Shares/second is a rate and benefits from double precision
+        // rate → double
         public double ValidSharesPerSecond { get; set; }
 
         public double NetworkHashrate { get; set; }
@@ -19,6 +18,6 @@ namespace Miningcore.Api.Responses
 
     public class GetPoolStatsResponse
     {
-        public AggregatedPoolStats[] Stats { get; set; }
+        public AggregatedPoolStats[] Stats { get; set; } = Array.Empty<AggregatedPoolStats>();
     }
 }

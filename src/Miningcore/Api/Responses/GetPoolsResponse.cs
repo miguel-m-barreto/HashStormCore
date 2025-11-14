@@ -1,3 +1,5 @@
+// src/Miningcore/Api/Responses/GetPoolsResponse.cs
+using System.Text.Json; // para JsonElement
 using System.Text.Json.Serialization;
 using Miningcore.Blockchain;
 using Miningcore.Configuration;
@@ -33,40 +35,37 @@ public class ApiCoinConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string Telegram { get; set; }
 
-    [System.Text.Json.Serialization.JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string Github { get; set; }
 
-    [System.Text.Json.Serialization.JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string CanonicalName { get; set; }
 }
 
 public class ApiPoolPayoutSchemeConfig
 {
-    [System.Text.Json.Serialization.JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public decimal? Factor { get; set; } = 2.0m;
 
-    [System.Text.Json.Serialization.JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public decimal? BlockFinderPercentage { get; set; } = 5.0m;
 }
 
 public class ApiPoolPaymentProcessingConfig
 {
     public bool Enabled { get; set; }
-    public decimal MinimumPayment { get; set; } // in pool-base-currency (ie. Bitcoin, not Satoshis)
-    public string PayoutScheme { get; set; }
-    public ApiPoolPayoutSchemeConfig PayoutSchemeConfig { get; set; }
 
     // In pool base currency (e.g. BTC, not sats)
     public decimal MinimumPayment { get; set; }
 
     public string PayoutScheme { get; set; }
 
-    // ✅ changed: use a strongly-typed view model instead of JToken
+    // strongly-typed view model
     public ApiPoolPayoutSchemeConfig PayoutSchemeConfig { get; set; }
 
-    // Keep passthrough for any extra fields from pool config
-    [Newtonsoft.Json.JsonExtensionData]
-    public IDictionary<string, object> Extra { get; set; }
+    // Keep passthrough for any extra fields from pool config (System.Text.Json)
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement> Extra { get; set; } = new();
 }
 
 // Aggregated pool info returned from API

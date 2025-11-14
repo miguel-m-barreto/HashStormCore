@@ -41,7 +41,7 @@ namespace Miningcore.Blockchain.Kaspa.Custom.KaspaHeavy
             var targetShare = new Target(new System.Numerics.BigInteger(powHash.ToNewReverseArray(), true, true));
             var powValue = targetShare.ToUInt256();
 
-            var shareDiff = (double)new BigRational(KaspaConstants.Diff1b, targetShare.ToBigInteger()) * shareMultiplier;
+            var shareDiff = (double) new BigRational(KaspaConstants.Diff1Target, targetShare.ToBigInteger()) * shareMultiplier;
 
             var stratumDifficulty = context.Difficulty;
             var ratio = shareDiff / stratumDifficulty;

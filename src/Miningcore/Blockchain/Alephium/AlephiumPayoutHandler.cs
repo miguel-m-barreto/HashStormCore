@@ -67,7 +67,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
         var infosChainParams = await Guard(() => alephiumClient.GetInfosChainParamsAsync(ct),
             ex => ReportAndRethrowApiError("Failed to get key params", ex));
 
-        switch (infosChainParams?.NetworkId)
+        switch(infosChainParams?.NetworkId)
         {
             case 0:
                 network = "mainnet";
@@ -89,19 +89,19 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
         Contract.RequiresNonNull(poolConfig);
         Contract.RequiresNonNull(blocks);
 
-        if (blocks.Length == 0)
+        if(blocks.Length == 0)
             return blocks;
 
         var coin = poolConfig.Template.As<AlephiumCoinTemplate>();
         const int pageSize = 100;
-        var pageCount = (int)Math.Ceiling(blocks.Length / (double)pageSize);
+        var pageCount = (int) Math.Ceiling(blocks.Length / (double) pageSize);
         var result = new List<Block>();
 
-        for (var i = 0; i < pageCount; i++)
+        for(var i = 0; i < pageCount; i++)
         {
             var page = blocks.Skip(i * pageSize).Take(pageSize).ToArray();
 
-            for (var j = 0; j < page.Length; j++)
+            for(var j = 0; j < page.Length; j++)
             {
                 var block = page[j];
 
@@ -112,19 +112,19 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 // output index: 0 = mainchain, 1..2 = uncles
                 var blockRewardTransactionIndex = 0;
 
-                var isBlockInMainChain = await Guard(() => alephiumClient.GetBlockflowIsBlockInMainChainAsync((string)block.Hash, ct),
+                var isBlockInMainChain = await Guard(() => alephiumClient.GetBlockflowIsBlockInMainChainAsync((string) block.Hash, ct),
                     ex => logger.Debug(ex));
 
-                if (!isBlockInMainChain)
+                if(!isBlockInMainChain)
                 {
                     block.Type = AlephiumConstants.BlockTypeUncle;
 
                     // info do “ghost uncle”
                     // "ghost uncle" Info
-                    blockInfo = await Guard(() => alephiumClient.UncleHashAsync((string)block.Hash, ct),
+                    blockInfo = await Guard(() => alephiumClient.UncleHashAsync((string) block.Hash, ct),
                         ex => logger.Debug(ex));
 
-                    if (blockInfo == null)
+                    if(blockInfo == null)
                     {
                         result.Add(MarkOrphan(block, coin, reason: "it's not on the chain and not even a 'ghost' uncle"));
                         continue;
@@ -142,7 +142,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                         ?.ToList()
                         .FindIndex(u => u.BlockHash == block.Hash) ?? -1;
 
-                    if (ghostUncleIndex < 0)
+                    if(ghostUncleIndex < 0)
                     {
                         // not in the list => treat as orphan
                         result.Add(MarkOrphan(block, coin, reason: "ghost uncle not found in reward tx"));
@@ -155,7 +155,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 {
                     block.Type = AlephiumConstants.BlockTypeBlock;
 
-                    blockInfo = await Guard(() => alephiumClient.HashAsync((string)block.Hash, ct),
+                    blockInfo = await Guard(() => alephiumClient.HashAsync((string) block.Hash, ct),
                         ex => logger.Debug(ex));
 
                     logger.Debug(() => $"[{LogCategory}] Block {block.BlockHeight} [{block.Hash}] contains {blockInfo.Transactions.Count} transaction(s)");
@@ -167,7 +167,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
 
                 logger.Debug(() => $"[{LogCategory}] Block {block.BlockHeight} [{block.Hash}] contains {(blockRewardTransaction == null ? 0 : blockRewardTransaction.Unsigned?.FixedOutputs?.Count ?? 0)} transaction(s) related to the block reward");
 
-                if (blockRewardTransaction != null && blockRewardTransaction.Unsigned?.FixedOutputs != null)
+                if(blockRewardTransaction != null && blockRewardTransaction.Unsigned?.FixedOutputs != null)
                 {
                     // miners' wallet addresses
                     var walletMinersAddresses = await Guard(() => alephiumClient.GetMinersAddressesAsync(ct),
@@ -176,36 +176,36 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                     blockReward = blockRewardTransaction.Unsigned.FixedOutputs.ElementAtOrDefault(blockRewardTransactionIndex);
 
                     // validates if the destination is indeed one of the wallet's mining addresses
-                    if (blockReward == null || walletMinersAddresses?.Addresses?.Contains(blockReward.Address) != true)
+                    if(blockReward == null || walletMinersAddresses?.Addresses?.Contains(blockReward.Address) != true)
                         blockReward = null;
 
                     logger.Debug(() => $"[{LogCategory}] Block {block.BlockHeight} [{block.Hash}] contains {(blockReward == null ? 0 : 1)} transaction related to our wallet miner's addresses");
 
-                    if (blockReward != null)
+                    if(blockReward != null)
                     {
 
                         // calculation of "confirmation" progress (actually, locktime until spendable)
-                        if (extraPoolPaymentProcessingConfig?.BlockRewardsLockTime == null)
+                        if(extraPoolPaymentProcessingConfig?.BlockRewardsLockTime == null)
                         {
                             logger.Info(() => $"[{LogCategory}] Block {block.BlockHeight} [{block.Hash}] uses the default block reward lock mechanism for minimum confirmations calculation");
 
-                            var txLock = (decimal)blockReward.LockTime;
+                            var txLock = (decimal) blockReward.LockTime;
                             block.ConfirmationProgress = Math.Min(1.0d,
-                                (double)((AlephiumUtils.UnixTimeStampForApi(clock.Now) - blockInfo.Timestamp) / (txLock - blockInfo.Timestamp)));
+                                (double) ((AlephiumUtils.UnixTimeStampForApi(clock.Now) - blockInfo.Timestamp) / (txLock - blockInfo.Timestamp)));
                         }
                         else
                         {
                             logger.Info(() => $"[{LogCategory}] Block {block.BlockHeight} [{block.Hash}] uses a custom [{network}] block rewards lock time: [{extraPoolPaymentProcessingConfig?.BlockRewardsLockTime}] minute(s)");
 
-                            var customMs = (decimal)extraPoolPaymentProcessingConfig.BlockRewardsLockTime * 60m * 1000m;
+                            var customMs = (decimal) extraPoolPaymentProcessingConfig.BlockRewardsLockTime * 60m * 1000m;
                             block.ConfirmationProgress = Math.Min(1.0d,
-                                (double)((AlephiumUtils.UnixTimeStampForApi(clock.Now) - blockInfo.Timestamp) / customMs));
+                                (double) ((AlephiumUtils.UnixTimeStampForApi(clock.Now) - blockInfo.Timestamp) / customMs));
                         }
 
                         result.Add(block);
                         messageBus.NotifyBlockConfirmationProgress(poolConfig.Id, block, coin);
 
-                        if (block.ConfirmationProgress >= 1)
+                        if(block.ConfirmationProgress >= 1)
                         {
                             block.Status = BlockStatus.Confirmed;
                             block.ConfirmationProgress = 1;
@@ -235,15 +235,15 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
 
         // if nothing to pay, don't try
         var amounts = balances.Where(x => x.Amount > 0).ToDictionary(x => x.Address, x => x.Amount);
-        if (amounts.Count == 0)
+        if(amounts.Count == 0)
             return;
 
         var infosChainParams = await Guard(() => alephiumClient.GetInfosChainParamsAsync(ct));
         var info = await Guard(() => alephiumClient.GetInfosInterCliquePeerInfoAsync(ct));
 
-        if (infosChainParams?.NetworkId != 7) // outside dev-test?
+        if(infosChainParams?.NetworkId != 7) // outside dev-test?
         {
-            if (info?.Count < 1)
+            if(info?.Count < 1)
             {
                 logger.Warn(() => $"[{LogCategory}] Payout aborted. Not enough peer(s)");
                 return;
@@ -260,11 +260,11 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
         };
 
         logger.Info(() => $"[{LogCategory}] Validating addresses...");
-        foreach (var pair in amounts)
+        foreach(var pair in amounts)
         {
             logger.Debug(() => $"[{LogCategory}] Address {pair.Key} with amount [{FormatAmount(pair.Value)}]");
             var validity = await Guard(() => alephiumClient.GetAddressesAddressGroupAsync(pair.Key, ct));
-            if (validity == null || validity.Group1 < 0 || validity.Group1 > 3)
+            if(validity == null || validity.Group1 < 0 || validity.Group1 > 3)
                 logger.Warn(() => $"[{LogCategory}] Address {pair.Key} is not valid!");
             else
             {
@@ -282,7 +282,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
             var status = await alephiumClient.NameAsync(extraPoolPaymentProcessingConfig.WalletName, ct);
 
             // unlock if necessary
-            if (status.Locked)
+            if(status.Locked)
             {
                 await UnlockWallet(ct);
                 walletWasUnlocked = true;
@@ -290,7 +290,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
 
             // addresses of pool wallet
             var walletAddresses = await alephiumClient.NameAddressesAsync(extraPoolPaymentProcessingConfig.WalletName, ct);
-            if (walletAddresses?.Addresses1 == null || walletAddresses.Addresses1.Count < 4)
+            if(walletAddresses?.Addresses1 == null || walletAddresses.Addresses1.Count < 4)
             {
                 logger.Warn(() => $"[{LogCategory}] Pool payment wallet name: {extraPoolPaymentProcessingConfig.WalletName} must have 4 miner's addresses. Please fix it");
                 return;
@@ -305,7 +305,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
 
             logger.Info(() => $"[{LogCategory}] Current wallet balance - Total: [{FormatAmount(walletBalanceTotal)}] - Locked: [{FormatAmount(walletBalanceLocked)}] - Available: [{FormatAmount(walletBalanceAvailable)}]");
 
-            if (walletBalanceAvailable < balancesTotal)
+            if(walletBalanceAvailable < balancesTotal)
             {
                 logger.Warn(() => $"[{LogCategory}] Wallet balance currently short of {FormatAmount(balancesTotal - walletBalanceAvailable)}. Will try again");
                 return;
@@ -317,7 +317,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                     ((AlephiumUtils.ConvertNumberFromApi(x.Balance) / AlephiumConstants.SmallestUnit) -
                      (AlephiumUtils.ConvertNumberFromApi(x.LockedBalance) / AlephiumConstants.SmallestUnit)) >= balancesTotal);
 
-            if (string.IsNullOrEmpty(anyPoolAddress?.Address))
+            if(string.IsNullOrEmpty(anyPoolAddress?.Address))
             {
                 logger.Warn(() => $"[{LogCategory}] No pool wallet address can cover that transaction");
 
@@ -329,7 +329,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                     .Take(2)
                     .ToArray();
 
-                if (wealthyPoolAddress.Length < 2)
+                if(wealthyPoolAddress.Length < 2)
                 {
                     logger.Warn(() => $"[{LogCategory}] Not enough wallet addresses to consolidate funds");
                     return;
@@ -338,7 +338,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 var secondAvail = (AlephiumUtils.ConvertNumberFromApi(wealthyPoolAddress[1].Balance) / AlephiumConstants.SmallestUnit) -
                                   (AlephiumUtils.ConvertNumberFromApi(wealthyPoolAddress[1].LockedBalance) / AlephiumConstants.SmallestUnit);
 
-                if (secondAvail <= 0)
+                if(secondAvail <= 0)
                 {
                     logger.Info(() => $"[{LogCategory}] All available funds have already been moved to pool wallet address {wealthyPoolAddress[0].Address} [{FormatAmount(AlephiumUtils.ConvertNumberFromApi(wealthyPoolAddress[0].Balance) / AlephiumConstants.SmallestUnit)}]");
                     return;
@@ -357,7 +357,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 logger.Debug(() => $"[{LogCategory}] Pool wallet address {wealthyPoolAddress[1].Address} is now the active address");
 
                 var wealthyPoolAddressUtxos = await alephiumClient.GetAddressesAddressUtxosAsync(wealthyPoolAddress[1].Address, ct);
-                if (!string.IsNullOrEmpty(wealthyPoolAddressUtxos?.Warning))
+                if(!string.IsNullOrEmpty(wealthyPoolAddressUtxos?.Warning))
                 {
                     logger.Warn(() => $"[{LogCategory}] Pool wallet address: {wealthyPoolAddress[1].Address} maybe can't be used anymore: {wealthyPoolAddressUtxos.Warning}. Please fix it");
                     return;
@@ -378,7 +378,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 var wealthyTxGas = inputWealthyGas + outputWealthyGas + AlephiumConstants.TxBaseGas + AlephiumConstants.P2pkUnlockGas + AlephiumConstants.GasPerOutput;
                 var wealthyEstimatedGasAmount = Math.Max(AlephiumConstants.MinGasPerTx, wealthyTxGas);
 
-                if (wealthyEstimatedGasAmount > AlephiumConstants.MaxGasPerTx)
+                if(wealthyEstimatedGasAmount > AlephiumConstants.MaxGasPerTx)
                 {
                     logger.Warn(() => $"[{LogCategory}] Estimated necessary gas amount [{wealthyEstimatedGasAmount}] exceeds the maximum possible per transaction [{AlephiumConstants.MaxGasPerTx}]. Letting Swagger pick inputs, only destination provided");
 
@@ -394,14 +394,14 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                         ex => ReportAndRethrowApiError("Failed to Sweep wealthy active address", ex, false));
                 }
 
-                if (txSweep?.Results == null)
+                if(txSweep?.Results == null)
                     return;
 
-                if (txSweep.Results.Count < 1)
+                if(txSweep.Results.Count < 1)
                     logger.Warn(() => $"[{LogCategory}] Sweep transaction failed to return a transaction id");
                 else
                 {
-                    foreach (var r in txSweep.Results)
+                    foreach(var r in txSweep.Results)
                         logger.Info(() => $"[{LogCategory}] Sweep transaction id: {r.TxId}, FromGroup: {r.FromGroup}, ToGroup: {r.ToGroup}");
                 }
 
@@ -410,7 +410,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
 
             // address that covers the total
             var inputAddress = walletAddresses.Addresses1.FirstOrDefault(x => x.Address == anyPoolAddress.Address);
-            if (string.IsNullOrEmpty(inputAddress?.Address))
+            if(string.IsNullOrEmpty(inputAddress?.Address))
             {
                 logger.Warn(() => $"[{LogCategory}] Pool wallet address {anyPoolAddress.Address} does not exist anymore. Please fix it");
                 return;
@@ -426,11 +426,11 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
             logger.Debug(() => $"[{LogCategory}] Pool wallet address {inputAddress.Address} is now the active address");
 
             // process each group
-            for (var g = 0; g < groupingAmounts.Length; g++)
+            for(var g = 0; g < groupingAmounts.Length; g++)
             {
                 var groupList = groupingAmounts[g];
                 var initialTotalAddresses = groupList.Count;
-                if (initialTotalAddresses <= 0)
+                if(initialTotalAddresses <= 0)
                     continue;
 
                 var groupTotalBalance = groupList.Sum(x => x.Value);
@@ -439,7 +439,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 logger.Info(() => $"[{LogCategory}] 1/3) Build the transaction");
 
                 var inputAddressUtxos = await alephiumClient.GetAddressesAddressUtxosAsync(inputAddress.Address, ct);
-                if (!string.IsNullOrEmpty(inputAddressUtxos?.Warning))
+                if(!string.IsNullOrEmpty(inputAddressUtxos?.Warning))
                 {
                     logger.Warn(() => $"[{LogCategory}] Pool wallet address: {anyPoolAddress.Address} maybe can't be used anymore: {inputAddressUtxos.Warning}. Please fix it");
                     continue;
@@ -455,18 +455,18 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 var txGas = inputGas + outputGas + AlephiumConstants.TxBaseGas + AlephiumConstants.P2pkUnlockGas + AlephiumConstants.GasPerOutput;
                 var estimatedGasAmount = Math.Max(AlephiumConstants.MinGasPerTx, txGas);
 
-                if (estimatedGasAmount > AlephiumConstants.MaxGasPerTx)
+                if(estimatedGasAmount > AlephiumConstants.MaxGasPerTx)
                 {
                     logger.Warn(() => $"[{LogCategory}] Estimated necessary gas amount [{estimatedGasAmount}] exceeds the maximum possible per transaction [{AlephiumConstants.MaxGasPerTx}]. We need to remove addresses.");
-                    var numberOfAddressesToRemove = (int)Math.Ceiling((decimal)(estimatedGasAmount - AlephiumConstants.MaxGasPerTx) / AlephiumConstants.GasPerOutput);
+                    var numberOfAddressesToRemove = (int) Math.Ceiling((decimal) (estimatedGasAmount - AlephiumConstants.MaxGasPerTx) / AlephiumConstants.GasPerOutput);
 
-                    if (numberOfAddressesToRemove >= initialTotalAddresses)
+                    if(numberOfAddressesToRemove >= initialTotalAddresses)
                     {
                         logger.Warn(() => $"[{LogCategory}] Need to remove {numberOfAddressesToRemove} address(es) but only {initialTotalAddresses} available. Skipping group.");
                         continue;
                     }
 
-                    while (groupList.Count > (initialTotalAddresses - numberOfAddressesToRemove))
+                    while(groupList.Count > (initialTotalAddresses - numberOfAddressesToRemove))
                         groupList.RemoveAt(groupList.Count - 1);
 
                     groupTotalBalance = groupList.Sum(x => x.Value);
@@ -478,7 +478,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 logger.Debug(() => $"[{LogCategory}] Estimated necessary gas amount: {estimatedGasAmount} [{FormatAmount(((estimatedGasAmount * AlephiumConstants.DefaultGasPrice) / AlephiumConstants.SmallestUnit))}]");
 
                 // if KeepTransactionFees == true, deduct fee per address, but never let it go negative
-                var feeTotalAtto = (decimal)estimatedGasAmount * AlephiumConstants.DefaultGasPrice;
+                var feeTotalAtto = (decimal) estimatedGasAmount * AlephiumConstants.DefaultGasPrice;
                 var perAddressFeeAtto = groupList.Count > 0 ? feeTotalAtto / groupList.Count : 0m;
 
                 var batchDestinations = groupList.Select(x =>
@@ -506,7 +506,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 var txBuild = await Guard(() => alephiumClient.PostTransactionsBuildAsync(destinationsTransaction, ct),
                     ex => logger.Warn(() => $"[{LogCategory}] Build transaction failed"));
 
-                if (string.IsNullOrEmpty(txBuild?.TxId))
+                if(string.IsNullOrEmpty(txBuild?.TxId))
                     continue;
 
                 logger.Info(() => $"[{LogCategory}] Unsigned transaction {txBuild.UnsignedTx} with txId {txBuild.TxId}");
@@ -517,7 +517,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 var txSign = await Guard(() => alephiumClient.NameSignAsync(extraPoolPaymentProcessingConfig.WalletName, signTxBuild, ct),
                     ex => logger.Warn(() => $"[{LogCategory}] Sign transaction failed"));
 
-                if (string.IsNullOrEmpty(txSign?.Signature))
+                if(string.IsNullOrEmpty(txSign?.Signature))
                     continue;
 
                 logger.Info(() => $"[{LogCategory}] Unsigned transaction signature {txSign.Signature}");
@@ -532,7 +532,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
                 var txSubmit = await Guard(() => alephiumClient.PostTransactionsSubmitAsync(submitTxSign, ct),
                     ex => logger.Warn(() => $"[{LogCategory}] Submit signed transaction failed"));
 
-                if (string.IsNullOrEmpty(txSubmit?.TxId))
+                if(string.IsNullOrEmpty(txSubmit?.TxId))
                 {
                     logger.Warn(() => $"[{LogCategory}] Payment transaction failed to return a transaction id");
                     continue;
@@ -558,7 +558,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
         finally
         {
             // guarantee relock if the handler unlocked
-            if (walletWasUnlocked)
+            if(walletWasUnlocked)
                 await LockWallet(ct);
         }
     }
@@ -588,16 +588,17 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
         public PaymentException(string msg) : base(msg) { }
     }
 
+    // mantém a assinatura
     private void ReportAndRethrowApiError(string action, Exception ex, bool rethrow = true)
     {
         var error = ex.Message;
-        if (ex is AlephiumApiException apiException && apiException.Response != null)
+        if(ex is AlephiumApiException apiException && apiException.Response != null)
             error = apiException.Response;
 
         logger.Warn(() => $"{action}: {error}");
 
-        if (rethrow)
-            throw; // preserve original stack
+        if(rethrow)
+            throw ex; // não use 'throw;' fora de catch
     }
 
     private async Task UnlockWallet(CancellationToken ct)
@@ -606,18 +607,20 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
 
         var walletPassword = extraPoolPaymentProcessingConfig?.WalletPassword ?? string.Empty;
 
-        await Guard(() => alephiumClient.NameUnlockAsync(extraPoolPaymentProcessingConfig.WalletName,
-            new WalletUnlock { Password = walletPassword }, ct), ex =>
-        {
-            if (ex is AlephiumApiException apiException)
+        await Guard(() => alephiumClient.NameUnlockAsync(
+                        extraPoolPaymentProcessingConfig.WalletName,
+                        new WalletUnlock { Password = walletPassword }, ct),
+            ex =>
             {
-                var error = apiException.Response;
-                if (error != null && !error.ToLower().Contains("already unlocked"))
-                    throw new PaymentException($"Failed to unlock wallet: {error}");
-            }
-            else
-                throw;
-        });
+                if(ex is AlephiumApiException apiException)
+                {
+                    var error = apiException.Response;
+                    if(error != null && !error.ToLower().Contains("already unlocked"))
+                        throw new PaymentException($"Failed to unlock wallet: {error}");
+                }
+                else
+                    throw ex; // idem
+            });
 
         logger.Info(() => $"[{LogCategory}] Wallet: {extraPoolPaymentProcessingConfig.WalletName} unlocked");
     }

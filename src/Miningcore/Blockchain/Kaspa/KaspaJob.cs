@@ -47,7 +47,7 @@ namespace Miningcore.Blockchain.Kaspa
 
         protected bool RegisterSubmit(string key) => submissions.TryAdd(key, true);
 
-        private static string BuildFinalNonceHex(string extraNonce1, string submitted, int totalLen = 16)
+        private static string BuildFinalNonceHex(string extraNonce1, string submitted, int totalLen = KaspaConstants.NonceLength)
         {
             var raw = (extraNonce1 ?? string.Empty) + (submitted ?? string.Empty);
             if (raw.Length > totalLen)
@@ -237,7 +237,7 @@ namespace Miningcore.Blockchain.Kaspa
             var targetShare = new Target(new BigInteger(shareHash32.ToNewReverseArray(), true, true));
             var shareValue = targetShare.ToUInt256();
 
-            var shareDiff = (double)new BigRational(KaspaConstants.Diff1b, targetShare.ToBigInteger()) * shareMultiplier;
+            var shareDiff = (double) new BigRational(KaspaConstants.Diff1Target, targetShare.ToBigInteger()) * shareMultiplier;
 
             var stratumDifficulty = context.Difficulty;
             var ratio = shareDiff / stratumDifficulty;
