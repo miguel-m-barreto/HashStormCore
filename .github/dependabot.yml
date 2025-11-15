@@ -1,7 +1,7 @@
 version: 2
 updates:
 - package-ecosystem: nuget
-  directory: "/src/Miningcore"
+  directory: "/src/HashStormCore"
   schedule:
     interval: monthly
   open-pull-requests-limit: 10

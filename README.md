@@ -7,7 +7,7 @@
 HashStormCore is a modern technical successor to the original  
 [Miningcore](https://github.com/coinfoundry/miningcore).
 
-It preserves the proven stability of Miningcore while introducing:
+It preserves Miningcore's proven stability while introducing a fully refreshed architecture:
 
 - Live/Real-time in-memory metrics (pool, address, worker)
   Zero-DB live state for ultra-fast dashboards and monitoring.
@@ -32,7 +32,8 @@ It preserves the proven stability of Miningcore while introducing:
 
 - New developer-friendly structure
 
-HashStormCore is not a simple fork! it is a technical successor evolving Miningcore into a cleaner, faster, more modern codebase that fits today's mining landscape.
+This is not "yet another fork".  
+It is a **technical continuation** and a reboot of the Miningcore engine for 2025 and beyond.
 
 It keeps the battle-tested core of Miningcore, but pushes the system years ahead.
 
@@ -52,10 +53,7 @@ Miningcore remains one of the most widely used pool engines, but:
 - dashboards need fast, DB-free, modern endpoints
 - scaling beyond a few hundred miners becomes difficult
 
-HashStormCore solves these issues without throwing away the Miningcore foundation.
-
-This is **not** a superficial fork.  
-It is a **technical continuation**, evolving Miningcore into a 2025-ready engine. 
+HashStormCore directly addresses these pain points with a cleaner, faster, more predictable architecture while keeping full compatibility with existing pool configs and workflows.
 
 ---
 
@@ -80,7 +78,7 @@ Everything you expect from Miningcore **plus** HashStormCore additions.
 
 ### HashStormCore Enhancements
 
-#### **1) Live Hashrate Engine (In-Memory)**
+#### **1. Live Hashrate Engine (In-Memory)**
 High-performance rolling diff tracking:
 
 - per **pool**
@@ -90,14 +88,14 @@ High-performance rolling diff tracking:
 Built with:
 
 - lock-free sharded maps  
-- 2048-slot rolling rings (1s resolution)  
-- automatic TTL eviction  
-- optional smoothing 
-- hybrid calculation (session-based + window-based)
+- 2048-slot 1-second rings  
+- TTL eviction  
+- hybrid hashrate (session + window)  
+- smoother short-window stabilization  
 
-This solves the classic Miningcore problem: *low hashrate in the first N minutes*, problem present in all Miningcore forks.
+This fixes the classic Miningcore problem: *low hashrate in the first N minutes*, problem present in all Miningcore forks.
 
-#### **2) Session Share Stats (address.worker)**  
+#### **2. Session Share Stats (address.worker)**  
 In-memory counters that track each worker session:
 
 - accepted shares  
@@ -106,22 +104,24 @@ In-memory counters that track each worker session:
 - firstSeen / lastSeen timestamps  
 - live online state  
 - session duration 
+- zero DB overhead
 
 Stored in-memory (no DB cost), resets automatically on disconnect or TTL expiry.
 
-#### **3) New Live API Layer**  
+#### **3. New Next-Gen Live API Layer**  
 Optimized HTTP endpoints requiring **zero DB queries** for most UI use cases.
 
-Designed for:
+Ideal for:
 
 - Next.js apps  
 - React/Vue dashboards  
 - Mobile apps  
 - High-frequency polling environments  
+- High-traffic deployment 
 
-See the **API** file `live-api.md` for full details.
+See `live-api.md` for details.
 
-#### **4) Algorithm & Job Manager Improvements**
+#### **4. Algorithm & Job Manager Improvements**
 
 - Refactored Equihash job pipeline
 - Equihash cleanup  
@@ -131,11 +131,13 @@ See the **API** file `live-api.md` for full details.
 - Rebuilt native libs  
 - Serialization performance optimization  
 - Partial refactor of BitcoinJob & EquihashJob pipelines  
+- Significantly better stability under load  
+- Faster native hashing libs 
 
-#### **5) Codebase Cleanup & Modernization**
+#### **5. Codebase Cleanup & Modernization**
 
 - Legacy fixes throughout Stratum path  
-- Optimized Stratum → JobManager → ShareRecorder flow 
+- Optimized Stratum -> JobManager -> ShareRecorder flow 
 - Improved ShareRecorder performance  
 - Reduced locking in hot paths  
 - More stable low-latency behavior  
@@ -149,9 +151,9 @@ See the **API** file `live-api.md` for full details.
 
 ## 📘 Documentation  
 
-- `live-api.md` - live metrics API reference  
-- `ROADMAP.md` - future development plans  
-- `CONTRIBUTING.md` - how to contribute  
+- **live-api.md** — Live API reference  
+- **ROADMAP.md** — planned improvements  
+- **CONTRIBUTING.md** — contribution rules  
 
 ---
 
@@ -292,7 +294,9 @@ Without that base, this project would not exist.
 
 ## Donations
 
-To support this project you can become a [sponsor]( TODO FIND HOW TO GET MY GIT HERE TO GET SPONSORED ) or send a donation to the following accounts:
+If you wish to support HashStormCore development:
+
+Sponsorship: (GitHub Sponsors coming soon)
 
 * ETH:  `TO ADD`
 * BTC:  `TO ADD`

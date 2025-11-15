@@ -1,5 +1,5 @@
 ﻿{
-    "$schema": "https://raw.githubusercontent.com/oliverw/miningcore/master/src/Miningcore/config.schema.json",
+    "$schema": "https://raw.githubusercontent.com/oliverw/HashStormCore/master/src/HashStormCore/config.schema.json",
     "logging": {
         "level": "info",
         "enableConsoleLog": true,
@@ -34,9 +34,9 @@
         "postgres": {
             "host": "127.0.0.1",
             "port": 5432,
-            "user": "miningcore",
+            "user": "HashStormCore",
             "password": "password",
-            "database": "miningcore"
+            "database": "HashStormCore"
         }
     },
     "paymentProcessing": {

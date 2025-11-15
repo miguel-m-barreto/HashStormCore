@@ -115,9 +115,9 @@ $RECYCLE.BIN/
 
 logs/
 
-src/Miningcore/config.json
-src/Miningcore/config2.json
-/src/Miningcore/coins2.json
+src/HashStormCore/config.json
+src/HashStormCore/config2.json
+/src/HashStormCore/coins2.json
 
 !**/lib/**/*
 
