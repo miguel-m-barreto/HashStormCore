@@ -8,22 +8,22 @@ algorithm fixes, improved job managers, and a cleaner, more scalable architectur
 
 ## Phase 1 - Core Refactor (Current)
 
-### ✓ Live Metrics Engine
+### Live Metrics Engine
 - In-memory rolling windows  
 - Session tracking per worker  
 - Live-only API layer  
 
-### ✓ New Live API (LITE + HEAVY)
+### New Live API (LITE + HEAVY)
 - `/static-lite`, `/status-lite`, `/miners-lite`  
 - SSE feed for pool hashrate  
 - Zero-DB UI endpoints  
 
-### ✓ Job Manager Fixes
+### Job Manager Fixes
 - Equihash cleanup  
 - Overwinter/Sapling handling correctness  
 - KawPoW / Equihash performance stabilization  
 
-### ✓ Backend Cleanup
+### Backend Cleanup
 - Removed legacy bottlenecks  
 - Safer share pipeline  
 - Cache improvements  
@@ -34,24 +34,24 @@ algorithm fixes, improved job managers, and a cleaner, more scalable architectur
 
 ## Phase 2 - Modernization (Active Development)
 
-### 1) **Full Job Manager Modularization**
+### 1. **Full Job Manager Modularization**
 Goal: make job managers pluggable and composable.
 
 - isolate Equihash, ProgPow/KawPoW, RandomX logic  
 - unified share-validation pathway  
 - cleaner serialization layer  
 
-### 2) **Live Engine 2.0**
+### 2. **Live Engine 2.0**
 - probabilistic smoothing to stabilize miner hashrate  
 - multi-window aggregation (1s, 10s, 30s, 5m, 10m)  
 - spike detection (bad miners, botnets)  
 
-### 3) **Database Optimizations**
+### 3. **Database Optimizations**
 - reduce write pressure  
 - optional share batching  
 - optional DB-free mode for solo miners  
 
-### 4) **API Stability Pass**
+### 4. **API Stability Pass**
 - finalize live API shapes  
 - versioned endpoints (`/api/v1/...`)  
 
@@ -59,13 +59,13 @@ Goal: make job managers pluggable and composable.
 
 ## Phase 3 - New Features (Planned)
 
-### 1) **Full Coin Template Rewrite**
+### 1. **Full Coin Template Rewrite**
 - clean multi-coin handling  
 - shared UTXO pipeline  
 - fix broken / outdated coin templates  
 - easier integration for Equihash variants  
 
-### 2) **New Algorithms Support**
+### 2. **New Algorithms Support**
 Tentative list:
 
 - FiroPoW  
@@ -73,14 +73,14 @@ Tentative list:
 - Karlsen-hash  
 - Custom forks on request  
 
-### 3) **Multi-Instance Clustering**
+### 3. **Multi-Instance Clustering**
 Allow multiple HashStormCore backends to sync:
 
 - load-balanced Stratum  
 - distributed miner state  
 - shared live metrics via pub/sub  
 
-### 4) **Web UI Integration Helpers**
+### 4. **Web UI Integration Helpers**
 - first-party API SDK (TypeScript)  
 - ready-made endpoints for dashboards  
 - integration examples for:
@@ -92,17 +92,17 @@ Allow multiple HashStormCore backends to sync:
 
 ## Phase 4 - Performance & Reliability
 
-### 1) **Async Stratum Rebuild**
+### 1. **Async Stratum Rebuild**
 - reduce allocations in message parsing  
 - per-message pool selection for merged mining  
 - new GPU-heavy job scheduler  
 
-### 2) **Share Pipeline 2.0**
+### 2. **Share Pipeline 2.0**
 - lock-free share dispatch  
 - batch inserts  
 - simplified share result objects  
 
-### 3) **Hot Path Telemetry**
+### 3. **Hot Path Telemetry**
 Telemetry for:
 
 - share latency  

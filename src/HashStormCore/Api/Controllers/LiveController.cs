@@ -14,6 +14,8 @@ using HashStormCore.Mining;
 using HashStormCore.Blockchain;
 using System.Linq;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using MinerStats = HashStormCore.Persistence.Model.Projections.MinerStats;
 
 namespace HashStormCore.Api.Controllers;
@@ -404,6 +406,50 @@ public class LiveController : ControllerBase
             age = conf;
 
         return age;
+    }
+
+
+    //**************************************************************
+    // CONTROL ENDPOINTS
+    //**************************************************************
+
+    // ----------------------------------------------------------------
+    // GET /api/live/version
+    // ----------------------------------------------------------------
+
+
+    [HttpGet("version")]
+    public ActionResult<object> GetVersion()
+    {
+        var asm = Assembly.GetEntryAssembly();
+
+        return Ok(new
+        {
+            product = "HashStormCore",
+            version = Program.GetVersion(),
+            framework = RuntimeInformation.FrameworkDescription.Trim(),
+            os = RuntimeInformation.OSDescription.Trim(),
+            processArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
+            assembly = asm?.GetName().Name,
+            assemblyVersion = asm?.GetName().Version?.ToString()
+        });
+    }
+
+    // ----------------------------------------------------------------
+    // GET /api/live/health
+    // ----------------------------------------------------------------
+
+    [HttpGet("health")]
+    public ActionResult<object> GetHealth()
+    {
+        var poolsCount = clusterConfig?.Pools?.Count(x => x.Enabled) ?? 0;
+
+        return Ok(new
+        {
+            status = "ok",
+            poolsEnabled = poolsCount,
+            timestamp = DateTime.UtcNow
+        });
     }
 
 
