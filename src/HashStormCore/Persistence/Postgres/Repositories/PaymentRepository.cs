@@ -49,7 +49,7 @@ public class PaymentRepository : IPaymentRepository
                 await writer.WriteAsync(payment.Address);
                 await writer.WriteAsync(payment.Amount, NpgsqlDbType.Numeric);
                 await writer.WriteAsync(payment.TransactionConfirmationData);
-                await writer.WriteAsync(payment.Created, NpgsqlDbType.Timestamp);
+                await writer.WriteAsync(payment.Created, NpgsqlDbType.TimestampTz);
             }
 
             await writer.CompleteAsync();
