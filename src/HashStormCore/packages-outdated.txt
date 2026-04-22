@@ -14,8 +14,5 @@ Project `HashStormCore` has the following updates to its packages
    > NBitcoin                                            7.0.42      7.0.42     10.0.2
    > NBitcoin.Altcoins                                   3.0.28      3.0.28     6.0.3 
    > NBitcoin.Secp256k1                                  3.1.6       3.1.6      4.0.0 
-   > NLog                                                5.3.4       5.3.4      6.1.2 
-   > NLog.Extensions.Hosting                             5.3.8       5.3.8      6.1.2 
-   > NLog.Extensions.Logging                             5.3.14      5.3.14     6.1.2 
    > Npgsql                                              8.0.5       8.0.5      10.0.2
 

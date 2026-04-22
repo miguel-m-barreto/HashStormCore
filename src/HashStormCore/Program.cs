@@ -701,7 +701,6 @@ public class Program : BackgroundService
                 var target = new FileTarget("file")
                 {
                     FileName = GetLogPath(config, config.ApiLogFile),
-                    FileNameKind = FilePathKind.Unknown,
                     Layout = layout
                 };
 
@@ -763,7 +762,6 @@ public class Program : BackgroundService
                 var target = new FileTarget("file")
                 {
                     FileName = GetLogPath(config, config.LogFile),
-                    FileNameKind = FilePathKind.Unknown,
                     Layout = layout
                 };
 
@@ -778,7 +776,6 @@ public class Program : BackgroundService
                     var target = new FileTarget(poolConfig.Id)
                     {
                         FileName = GetLogPath(config, poolConfig.Id + ".log"),
-                        FileNameKind = FilePathKind.Unknown,
                         Layout = layout
                     };
 
