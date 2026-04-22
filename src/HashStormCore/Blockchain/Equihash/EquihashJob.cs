@@ -16,7 +16,6 @@ using HashStormCore.Time;
 using HashStormCore.Util;
 using NBitcoin;
 using NBitcoin.DataEncoders;
-using NBitcoin.Zcash;
 using System.Text;
 
 

@@ -23,6 +23,7 @@ using HashStormCore.Api;
 using HashStormCore.Api.Controllers;
 using HashStormCore.Api.Middlewares;
 using HashStormCore.Api.Responses;
+using HashStormCore.Blockchain.Equihash.Zcash;
 using HashStormCore.Configuration;
 using HashStormCore.Crypto.Hashing.Algorithms;
 using HashStormCore.Crypto.Hashing.Equihash;
@@ -49,7 +50,6 @@ using HashStormCore.Persistence.Dummy;
 using HashStormCore.Persistence.Postgres;
 using HashStormCore.Persistence.Postgres.Repositories;
 using HashStormCore.Util;
-using NBitcoin.Zcash;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Schema;
 using Newtonsoft.Json.Schema.Generation;
@@ -805,7 +805,7 @@ public class Program : BackgroundService
     {
         await ConfigurePostgresCompatibilityOptions(services);
 
-        ZcashNetworks.Instance.EnsureRegistered();
+        ZcashNetworkRegistrar.EnsureRegistered();
 
         var messageBus = services.GetService<IMessageBus>();
         var rmsm = services.GetService<RecyclableMemoryStreamManager>();

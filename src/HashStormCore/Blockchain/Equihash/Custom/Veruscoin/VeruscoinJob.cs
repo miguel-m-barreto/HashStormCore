@@ -1,6 +1,7 @@
 using System.Globalization;
 using HashStormCore.Blockchain.Bitcoin;
 using HashStormCore.Blockchain.Equihash.DaemonResponses;
+using HashStormCore.Blockchain.Equihash.Zcash;
 using HashStormCore.Configuration;
 using HashStormCore.Contracts;
 using HashStormCore.Crypto.Hashing.Equihash;
@@ -11,7 +12,6 @@ using HashStormCore.Time;
 using HashStormCore.Util;
 using NBitcoin;
 using NBitcoin.DataEncoders;
-using NBitcoin.Zcash;
 
 namespace HashStormCore.Blockchain.Equihash.Custom.Veruscoin;
 
@@ -63,70 +63,12 @@ public class VeruscoinJob : EquihashJob
             offset += opBytes.Length;
             poolHexBytes.CopyTo(serializedBlockHeightBytes[offset..]); */
             
-            using(var stream = new MemoryStream())
-            {
-                var bs = new ZcashStream(stream, true);
-
-                bs.Version = txVersion;
-                bs.Overwintered = isOverwinterActive;
-
-                /* if(isOverwinterActive)
-                {
-                    uint mask = (isOverwinterActive ? 1u : 0u );
-                    uint shiftedMask = mask << 31;
-                    uint versionWithOverwinter = txVersion | shiftedMask;
-
-                    // version
-                    bs.ReadWrite(ref versionWithOverwinter);
-                }
-                else
-                {
-                    // version
-                    bs.ReadWrite(ref txVersion);
-                }
-
-                if(isOverwinterActive || isSaplingActive)
-                {
-                    bs.ReadWrite(ref txVersionGroupId);
-                } */
-
-                // serialize (simulated) input transaction
-                bs.ReadWriteAsVarInt(ref txInputCount);
-                bs.ReadWrite(sha256Empty);
-                bs.ReadWrite(ref coinbaseIndex);
-                // bs.ReadWrite(serializedBlockHeightBytes);
-                bs.ReadWrite(ref script);
-                bs.ReadWrite(ref coinbaseSequence);
-
-                // serialize output transaction
-                var txOutBytes = SerializeOutputTransaction(txOut);
-                bs.ReadWrite(txOutBytes);
-
-                // misc
-                bs.ReadWrite(ref txLockTime);
-
-                if(isOverwinterActive || isSaplingActive)
-                {
-                    bs.ReadWrite(ref txExpiryHeight);
-                }
-
-                if(isSaplingActive)
-                {
-                    bs.ReadWrite(ref txBalance);
-                    bs.ReadWriteAsVarInt(ref txVShieldedSpend);
-                    bs.ReadWriteAsVarInt(ref txVShieldedOutput);
-                }
-
-                if(isOverwinterActive || isSaplingActive)
-                {
-                    bs.ReadWriteAsVarInt(ref txJoinSplits);
-                }
-
-                // done
-                coinbaseInitial = stream.ToArray();
-                coinbaseInitialHash = new byte[32];
-                sha256D.Digest(coinbaseInitial, coinbaseInitialHash);
-            }
+            var txOutBytes = SerializeOutputTransaction(txOut);
+            coinbaseInitial = ZcashCoinbaseSerializer.SerializeCoinbaseTransaction(script, txOutBytes, txVersion,
+                txVersionGroupId, isOverwinterActive, isSaplingActive, txExpiryHeight, txBalance,
+                txVShieldedSpend, txVShieldedOutput, txJoinSplits);
+            coinbaseInitialHash = new byte[32];
+            sha256D.Digest(coinbaseInitial, coinbaseInitialHash);
         }
         else
         {
