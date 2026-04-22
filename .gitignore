@@ -232,3 +232,7 @@ src/HashStormCore/build-libs.log
 src/HashStormCore/packages-deprecated.txt
 src/HashStormCore/packages-outdated.txt
 src/HashStormCore/packages-vulnerable.txt
+
+docs
+docs/
+docs/*
