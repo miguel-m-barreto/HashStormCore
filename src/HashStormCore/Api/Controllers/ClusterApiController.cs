@@ -45,7 +45,7 @@ public class ClusterApiController : ApiControllerBase
             new[] { BlockStatus.Confirmed, BlockStatus.Pending, BlockStatus.Orphaned };
 
         var blocks = (await cf.Run(con => blocksRepo.PageBlocksAsync(con, blockStates, page, pageSize, ct)))
-            .Select(mapper.Map<Responses.Block>)
+            .Select(mapper.MapApiBlock)
             .Where(x => enabledPools.Contains(x.PoolId))
             .ToArray();
 

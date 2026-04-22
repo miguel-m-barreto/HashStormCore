@@ -1,8 +1,8 @@
 using System.Data;
 using System.Data.Common;
-using AutoMapper;
 using HashStormCore.Configuration;
 using HashStormCore.Extensions;
+using HashStormCore.Mappings;
 using HashStormCore.Messaging;
 using HashStormCore.Mining;
 using HashStormCore.Notifications.Messages;
@@ -21,7 +21,7 @@ public abstract class PayoutHandlerBase
 {
     protected PayoutHandlerBase(
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,
@@ -53,7 +53,7 @@ public abstract class PayoutHandlerBase
     protected readonly IBalanceRepository balanceRepo;
     protected readonly IBlockRepository blockRepo;
     protected readonly IConnectionFactory cf;
-    protected readonly IMapper mapper;
+    protected readonly IObjectMapper mapper;
     protected readonly IPaymentRepository paymentRepo;
     protected readonly IShareRepository shareRepo;
     protected readonly IMasterClock clock;

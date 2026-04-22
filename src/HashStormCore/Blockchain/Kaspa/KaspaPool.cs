@@ -3,7 +3,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using Microsoft.IO;
 using HashStormCore.Blockchain.Bitcoin;
 using HashStormCore.Blockchain.Kaspa.Configuration;
@@ -31,7 +31,7 @@ public class KaspaPool : PoolBase
         JsonSerializerSettings serializerSettings,
         IConnectionFactory cf,
         IStatsRepository statsRepo,
-        IMapper mapper,
+        IObjectMapper mapper,
         IMasterClock clock,
         IMessageBus messageBus,
         RecyclableMemoryStreamManager rmsm,

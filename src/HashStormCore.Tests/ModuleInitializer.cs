@@ -2,8 +2,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using Autofac;
-using AutoMapper;
 using HashStormCore.Configuration;
+using HashStormCore.Mappings;
 using HashStormCore.Native;
 using HashStormCore.Tests.Util;
 using HashStormCore.Time;
@@ -35,10 +35,7 @@ public static class ModuleInitializer
 
             builder.RegisterAssemblyModules(typeof(AutofacModule).GetTypeInfo().Assembly);
 
-            // AutoMapper
-            var amConf = new MapperConfiguration(cfg => { cfg.AddProfile(new AutoMapperProfile()); });
-
-            builder.Register((ctx, parms) => amConf.CreateMapper());
+            builder.RegisterType<ObjectMapper>().As<IObjectMapper>().SingleInstance();
 
             builder.RegisterType<MockMasterClock>().AsImplementedInterfaces();
 

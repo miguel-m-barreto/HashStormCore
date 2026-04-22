@@ -1,7 +1,7 @@
 using System;
 using System.Linq;
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Xelis.Configuration;
 using HashStormCore.Blockchain.Xelis.DaemonRequests;
 using HashStormCore.Blockchain.Xelis.DaemonResponses;
@@ -31,7 +31,7 @@ public class XelisPayoutHandler : PayoutHandlerBase,
     public XelisPayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,

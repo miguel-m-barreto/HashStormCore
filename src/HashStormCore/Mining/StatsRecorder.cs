@@ -7,11 +7,11 @@ using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Autofac;
-using AutoMapper;
 using Microsoft.Extensions.Hosting;
 using HashStormCore.Configuration;
 using HashStormCore.Contracts;
 using HashStormCore.Extensions;
+using HashStormCore.Mappings;
 using HashStormCore.Messaging;
 using HashStormCore.Notifications.Messages;
 using HashStormCore.Persistence;
@@ -30,7 +30,7 @@ public class StatsRecorder : BackgroundService
         IMasterClock clock,
         IConnectionFactory cf,
         IMessageBus messageBus,
-        IMapper mapper,
+        IObjectMapper mapper,
         ClusterConfig clusterConfig,
         IShareRepository shareRepo,
         IStatsRepository statsRepo)
@@ -62,7 +62,7 @@ public class StatsRecorder : BackgroundService
     private readonly IMasterClock clock;
     private readonly IStatsRepository statsRepo;
     private readonly IConnectionFactory cf;
-    private readonly IMapper mapper;
+    private readonly IObjectMapper mapper;
     private readonly IMessageBus messageBus;
     private readonly IShareRepository shareRepo;
     private readonly ClusterConfig clusterConfig;
@@ -161,8 +161,8 @@ public class StatsRecorder : BackgroundService
                     Created = now
                 };
 
-                mapper.Map(pool.PoolStats, mapped);
-                mapper.Map(pool.NetworkStats, mapped);
+                mapped = mapper.ApplyPoolStats(pool.PoolStats, mapped);
+                mapped = mapper.ApplyBlockchainStats(pool.NetworkStats, mapped);
 
                 await statsRepo.InsertPoolStatsAsync(con, tx, mapped, ct);
             });

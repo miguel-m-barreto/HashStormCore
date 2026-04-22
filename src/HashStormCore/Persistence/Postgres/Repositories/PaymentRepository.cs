@@ -1,7 +1,7 @@
 using System.Data;
 using System.Text;
-using AutoMapper;
 using Dapper;
+using HashStormCore.Mappings;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Model.Projections;
 using HashStormCore.Persistence.Repositories;
@@ -12,16 +12,16 @@ namespace HashStormCore.Persistence.Postgres.Repositories;
 
 public class PaymentRepository : IPaymentRepository
 {
-    public PaymentRepository(IMapper mapper)
+    public PaymentRepository(IObjectMapper mapper)
     {
         this.mapper = mapper;
     }
 
-    private readonly IMapper mapper;
+    private readonly IObjectMapper mapper;
 
     public async Task InsertAsync(IDbConnection con, IDbTransaction tx, Payment payment)
     {
-        var mapped = mapper.Map<Entities.Payment>(payment);
+        var mapped = mapper.MapPaymentEntity(payment);
 
         const string query = @"INSERT INTO payments(poolid, coin, address, amount, transactionconfirmationdata, created)
             VALUES(@poolid, @coin, @address, @amount, @transactionconfirmationdata, @created)";
@@ -67,7 +67,7 @@ public class PaymentRepository : IPaymentRepository
 
         return (await con.QueryAsync<Entities.Payment>(new CommandDefinition(query.ToString(),
                 new { poolId, address, offset = page * pageSize, pageSize }, cancellationToken: ct)))
-            .Select(mapper.Map<Payment>)
+            .Select(mapper.MapPayment)
             .ToArray();
     }
 
@@ -79,7 +79,7 @@ public class PaymentRepository : IPaymentRepository
 
         return (await con.QueryAsync<Entities.BalanceChange>(new CommandDefinition(query,
                 new { poolId, address, offset = page * pageSize, pageSize }, cancellationToken: ct)))
-            .Select(mapper.Map<BalanceChange>)
+            .Select(mapper.MapBalanceChange)
             .ToArray();
     }
 

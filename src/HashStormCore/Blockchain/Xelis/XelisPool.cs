@@ -2,7 +2,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using Microsoft.IO;
 using HashStormCore.Blockchain.Xelis;
 using HashStormCore.Blockchain.Xelis.Configuration;
@@ -30,7 +30,7 @@ public class XelisPool : PoolBase
         JsonSerializerSettings serializerSettings,
         IConnectionFactory cf,
         IStatsRepository statsRepo,
-        IMapper mapper,
+        IObjectMapper mapper,
         IMasterClock clock,
         IMessageBus messageBus,
         RecyclableMemoryStreamManager rmsm,

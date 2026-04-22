@@ -6,10 +6,10 @@ using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text;
-using AutoMapper;
 using Microsoft.Extensions.Hosting;
 using HashStormCore.Configuration;
 using HashStormCore.Extensions;
+using HashStormCore.Mappings;
 using HashStormCore.Messaging;
 using HashStormCore.Notifications.Messages;
 using HashStormCore.Persistence;
@@ -31,7 +31,7 @@ namespace HashStormCore.Mining;
 public class ShareRecorder : BackgroundService
 {
     public ShareRecorder(IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         JsonSerializerSettings jsonSerializerSettings,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
@@ -68,7 +68,7 @@ public class ShareRecorder : BackgroundService
     private readonly IMessageBus messageBus;
     private readonly ClusterConfig clusterConfig;
     private readonly Dictionary<string, PoolConfig> pools;
-    private readonly IMapper mapper;
+    private readonly IObjectMapper mapper;
 
     private IAsyncPolicy faultPolicy;
     private bool hasLoggedPolicyFallbackFailure;
@@ -124,7 +124,7 @@ public class ShareRecorder : BackgroundService
         await cf.RunTx(async (con, tx) =>
         {
             // Map and batch-insert all shares (atomic transaction)
-            var mapped = shares.Select(mapper.Map<Persistence.Model.Share>).ToArray();
+            var mapped = shares.Select(mapper.MapShare).ToArray();
             await shareRepo.BatchInsertAsync(con, tx, mapped, CancellationToken.None);
 
             // Insert block candidates and notify
@@ -134,7 +134,7 @@ public class ShareRecorder : BackgroundService
                     continue;
 
                 // Create pending block record
-                var blockEntity = mapper.Map<Block>(share);
+                var blockEntity = mapper.MapBlock(share);
                 blockEntity.Status = BlockStatus.Pending;
                 await blockRepo.InsertAsync(con, tx, blockEntity);
 

@@ -1,7 +1,7 @@
 // src/HashStormCore/Blockchain/Equihash/EquihashPayoutHandler.cs
 
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Bitcoin;
 using HashStormCore.Blockchain.Bitcoin.DaemonResponses;
 using HashStormCore.Blockchain.Equihash.Configuration;
@@ -28,7 +28,7 @@ public class EquihashPayoutHandler : BitcoinPayoutHandler
     public EquihashPayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,

@@ -133,7 +133,7 @@ u128 _mm_mulhrs_epi16_emu(__m128i _a, __m128i _b)
 
 inline u128 _mm_set_epi64x_emu(uint64_t hi, uint64_t lo)
 {
-    __m128i result;
+    __m128i result = {};
     ((uint64_t *)&result)[0] = lo;
     ((uint64_t *)&result)[1] = hi;
     return result;
@@ -141,7 +141,7 @@ inline u128 _mm_set_epi64x_emu(uint64_t hi, uint64_t lo)
 
 inline u128 _mm_cvtsi64_si128_emu(uint64_t lo)
 {
-    __m128i result;
+    __m128i result = {};
     ((uint64_t *)&result)[0] = lo;
     ((uint64_t *)&result)[1] = 0;
     return result;
@@ -159,7 +159,7 @@ inline int32_t _mm_cvtsi128_si32_emu(const __m128i &a)
 
 inline u128 _mm_cvtsi32_si128_emu(uint32_t lo)
 {
-    __m128i result;
+    __m128i result = {};
     ((uint32_t *)&result)[0] = lo;
     ((uint32_t *)&result)[1] = 0;
     ((uint64_t *)&result)[1] = 0;
@@ -181,7 +181,7 @@ inline u128 _mm_cvtsi32_si128_emu(uint32_t lo)
 
 u128 _mm_setr_epi8_emu(u_char c0, u_char c1, u_char c2, u_char c3, u_char c4, u_char c5, u_char c6, u_char c7, u_char c8, u_char c9, u_char c10, u_char c11, u_char c12, u_char c13, u_char c14, u_char c15)
 {
-    __m128i result;
+    __m128i result = {};
     ((uint8_t *)&result)[0] = c0;
     ((uint8_t *)&result)[1] = c1;
     ((uint8_t *)&result)[2] = c2;
@@ -274,7 +274,7 @@ inline void _mm_store_si128_emu(void *p, __m128i val)
 
 __m128i _mm_shuffle_epi8_emu(__m128i a, __m128i b)
 {
-    __m128i result;
+    __m128i result = {};
     for (int i = 0; i < 16; i++)
     {
         if (((uint8_t *)&b)[i] & 0x80)

@@ -1,6 +1,6 @@
 using System.Data;
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Zano.Configuration;
 using HashStormCore.Blockchain.Zano.DaemonRequests;
 using HashStormCore.Blockchain.Zano.DaemonResponses;
@@ -30,7 +30,7 @@ public class ZanoPayoutHandler : PayoutHandlerBase,
     public ZanoPayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,

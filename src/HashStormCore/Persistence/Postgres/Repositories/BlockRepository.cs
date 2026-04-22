@@ -1,6 +1,6 @@
 using System.Data;
-using AutoMapper;
 using Dapper;
+using HashStormCore.Mappings;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Repositories;
 
@@ -8,16 +8,16 @@ namespace HashStormCore.Persistence.Postgres.Repositories;
 
 public class BlockRepository : IBlockRepository
 {
-    public BlockRepository(IMapper mapper)
+    public BlockRepository(IObjectMapper mapper)
     {
         this.mapper = mapper;
     }
 
-    private readonly IMapper mapper;
+    private readonly IObjectMapper mapper;
 
     public async Task InsertAsync(IDbConnection con, IDbTransaction tx, Block block)
     {
-        var mapped = mapper.Map<Entities.Block>(block);
+        var mapped = mapper.MapBlockEntity(block);
 
         const string query =
             @"INSERT INTO blocks(poolid, blockheight, networkdifficulty, status, type, transactionconfirmationdata,
@@ -36,7 +36,7 @@ public class BlockRepository : IBlockRepository
 
     public async Task UpdateBlockAsync(IDbConnection con, IDbTransaction tx, Block block)
     {
-        var mapped = mapper.Map<Entities.Block>(block);
+        var mapped = mapper.MapBlockEntity(block);
 
         const string query = @"UPDATE blocks SET blockheight = @blockheight, status = @status, type = @type,
             reward = @reward, effort = @effort, minereffort = @minereffort, confirmationprogress = @confirmationprogress, hash = @hash WHERE id = @id";
@@ -57,7 +57,7 @@ public class BlockRepository : IBlockRepository
             offset = page * pageSize,
             pageSize
         }, cancellationToken: ct)))
-            .Select(mapper.Map<Block>)
+            .Select(mapper.MapBlock)
             .ToArray();
     }
 
@@ -72,7 +72,7 @@ public class BlockRepository : IBlockRepository
             offset = page * pageSize,
             pageSize
         }, cancellationToken: ct)))
-            .Select(mapper.Map<Block>)
+            .Select(mapper.MapBlock)
             .ToArray();
     }
 
@@ -90,7 +90,7 @@ public class BlockRepository : IBlockRepository
             offset = page * pageSize,
             pageSize
         }, cancellationToken: ct)))
-            .Select(mapper.Map<Block>)
+            .Select(mapper.MapBlock)
             .ToArray();
     }
 
@@ -99,7 +99,7 @@ public class BlockRepository : IBlockRepository
         const string query = @"SELECT * FROM blocks WHERE poolid = @poolid AND status = @status";
 
         return (await con.QueryAsync<Entities.Block>(query, new { status = BlockStatus.Pending.ToString().ToLower(), poolid = poolId }))
-            .Select(mapper.Map<Block>)
+            .Select(mapper.MapBlock)
             .ToArray();
     }
 
@@ -114,7 +114,7 @@ public class BlockRepository : IBlockRepository
             status = status.Select(x => x.ToString().ToLower()).ToArray(),
             before
         }))
-            .Select(mapper.Map<Block>)
+            .Select(mapper.MapBlock)
             .FirstOrDefault();
     }
     
@@ -188,7 +188,7 @@ public class BlockRepository : IBlockRepository
             height,
             type
         }))
-            .Select(mapper.Map<Block>)
+            .Select(mapper.MapBlock)
             .FirstOrDefault();
     }
     

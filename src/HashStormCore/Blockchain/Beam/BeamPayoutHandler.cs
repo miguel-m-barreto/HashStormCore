@@ -1,6 +1,6 @@
 using System.Data;
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Beam.Configuration;
 using HashStormCore.Blockchain.Beam.DaemonRequests;
 using HashStormCore.Blockchain.Beam.DaemonResponses;
@@ -30,7 +30,7 @@ public class BeamPayoutHandler : PayoutHandlerBase,
     public BeamPayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,

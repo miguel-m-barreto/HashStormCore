@@ -1,7 +1,7 @@
 using System.Data;
 using System.Numerics;
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Ethereum.Configuration;
 using HashStormCore.Blockchain.Ethereum.DaemonRequests;
 using HashStormCore.Blockchain.Ethereum.DaemonResponses;
@@ -30,7 +30,7 @@ public class EthereumPayoutHandler : PayoutHandlerBase,
     public EthereumPayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net6.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
 
     <!-- New binary name -->
     <AssemblyName>HashStormCore</AssemblyName>
@@ -9,7 +9,7 @@
     <!-- Keep the old namespace to avoid breaking everything -->
     <RootNamespace>HashStormCore</RootNamespace>
 
-     <!-- Versioning -->
+    <!-- Versioning -->
     <Version>1.0.0</Version>
     <FileVersion>1.0.0</FileVersion>
     <InformationalVersion>1.0.0</InformationalVersion>
@@ -18,7 +18,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>true</ImplicitUsings>
 
-    <!-- Added -->
+    <!-- Build behavior -->
     <ConsoleLoggerParameters>WarningsOnly;Summary</ConsoleLoggerParameters>
     <NoLogo>true</NoLogo>
     <WarningLevel>4</WarningLevel>
@@ -77,13 +77,13 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="NLog.Extensions.Hosting" Version="5.3.8" />
-    <PackageReference Include="AutoMapper" Version="12.0.1" />
+    <PackageReference Include="Riok.Mapperly" Version="4.3.1" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Dapper" Version="2.1.35" />
     <PackageReference Include="FluentValidation" Version="11.10.0" />
     <PackageReference Include="FluentValidation.AspNetCore" Version="11.3.0" />
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.10.0" />
     <PackageReference Include="JetBrains.Annotations" Version="2024.3.0" />
-    <PackageReference Include="MailKit" Version="3.5.0" />
+    <PackageReference Include="MailKit" Version="4.16.0" />
     <PackageReference Include="McMaster.Extensions.CommandLineUtils" Version="4.0.2" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="8.0.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.1" />
@@ -129,7 +129,7 @@
     </None>
   </ItemGroup>
 
-  <!-- Reference pre-built library binaries on Windows  -->
+  <!-- Reference pre-built library binaries on Windows -->
   <ItemGroup Condition="'$(IsWindows)' == 'true'">
     <NativeLibs Include="$(ProjectDir)..\..\libs\runtimes\win-x64\*.dll" />
     <None Include="@(NativeLibs)" Visible="False">

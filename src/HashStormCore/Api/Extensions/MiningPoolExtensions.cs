@@ -1,4 +1,3 @@
-using AutoMapper;
 using HashStormCore.Api.Responses;
 using HashStormCore.Blockchain;
 using HashStormCore.Blockchain.Alephium.Configuration;
@@ -9,18 +8,19 @@ using HashStormCore.Blockchain.Kaspa.Configuration;
 using HashStormCore.Blockchain.Warthog.Configuration;
 using HashStormCore.Configuration;
 using HashStormCore.Extensions;
+using HashStormCore.Mappings;
 using HashStormCore.Mining;
 
 namespace HashStormCore.Api.Extensions;
 
 public static class MiningPoolExtensions
 {
-    public static PoolInfo ToPoolInfo(this PoolConfig poolConfig, IMapper mapper, Persistence.Model.PoolStats stats, IMiningPool pool)
+    public static PoolInfo ToPoolInfo(this PoolConfig poolConfig, IObjectMapper mapper, Persistence.Model.PoolStats stats, IMiningPool pool)
     {
-        var poolInfo = mapper.Map<PoolInfo>(poolConfig);
+        var poolInfo = mapper.MapPoolInfo(poolConfig);
 
-        poolInfo.PoolStats = mapper.Map<PoolStats>(stats);
-        poolInfo.NetworkStats = pool?.NetworkStats ?? mapper.Map<BlockchainStats>(stats);
+        poolInfo.PoolStats = mapper.MapMiningPoolStats(stats);
+        poolInfo.NetworkStats = pool?.NetworkStats ?? mapper.MapBlockchainStats(stats);
 
         // pool wallet link
         var addressInfobaseUrl = poolConfig.Template.ExplorerAccountLink;

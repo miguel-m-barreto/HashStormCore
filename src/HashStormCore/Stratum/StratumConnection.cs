@@ -110,7 +110,7 @@ public class StratumConnection
                     {
                         ServerCertificate = cert,
                         ClientCertificateRequired = false,
-                        EnabledSslProtocols = SslProtocols.Tls11 | SslProtocols.Tls12 | SslProtocols.Tls13,
+                        EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
                         CertificateRevocationCheckMode = X509RevocationMode.NoCheck
                     }, cts.Token);
 

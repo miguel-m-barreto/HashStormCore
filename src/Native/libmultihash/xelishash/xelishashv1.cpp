@@ -630,7 +630,7 @@ void xelis_hash(const unsigned char *input, uint32_t inputLen, unsigned char *ha
 {
   alignas(64) uint64_t scratchPad[XELIS_MEMORY_SIZE] = {0};
   uint64_t *int_input = const_cast<uint64_t *>(reinterpret_cast<const uint64_t *>(input));
-  uint32_t *smallPad;
+  uint32_t *smallPad = reinterpret_cast<uint32_t *>(scratchPad);
   alignas(64) uint32_t slots[XELIS_SLOT_LENGTH] = {0};
   alignas(64) unsigned char indices[XELIS_SLOT_LENGTH] = {0};
 
@@ -645,7 +645,6 @@ void xelis_hash(const unsigned char *input, uint32_t inputLen, unsigned char *ha
   // Stage 2
   __builtin_prefetch(slots, 1, 3);
   __builtin_prefetch(smallPad, 1, 3);
-  smallPad = reinterpret_cast<uint32_t *>(scratchPad);
 
   std::copy(&smallPad[XELIS_MEMORY_SIZE * 2 - XELIS_SLOT_LENGTH], &smallPad[XELIS_MEMORY_SIZE * 2], slots);
 

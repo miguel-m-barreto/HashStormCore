@@ -17,23 +17,33 @@
 
 /* These don't work everywhere */
 #if defined(__SSE2__) || defined(__x86_64__) || defined(__amd64__)
+#ifndef HAVE_SSE2
 #define HAVE_SSE2
+#endif
 #endif
 
 #if defined(__SSSE3__)
+#ifndef HAVE_SSSE3
 #define HAVE_SSSE3
+#endif
 #endif
 
 #if defined(__SSE4_1__)
+#ifndef HAVE_SSE41
 #define HAVE_SSE41
+#endif
 #endif
 
 #if defined(__AVX__)
+#ifndef HAVE_AVX
 #define HAVE_AVX
+#endif
 #endif
 
 #if defined(__XOP__)
+#ifndef HAVE_XOP
 #define HAVE_XOP
+#endif
 #endif
 
 
@@ -62,7 +72,9 @@
 #endif
 
 #ifdef HAVE_SSSE3
+#ifndef HAVE_SSE2
 #define HAVE_SSE2
+#endif
 #endif
 
 

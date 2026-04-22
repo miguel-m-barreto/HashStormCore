@@ -1,6 +1,6 @@
 using System.Data;
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Conceal.Configuration;
 using HashStormCore.Blockchain.Conceal.DaemonRequests;
 using HashStormCore.Blockchain.Conceal.DaemonResponses;
@@ -31,7 +31,7 @@ public class ConcealPayoutHandler : PayoutHandlerBase,
     public ConcealPayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,

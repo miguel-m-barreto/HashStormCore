@@ -17,7 +17,7 @@
     sqrt_result = sqrt(sqrt_input + 18446744073709551616.0) * 2.0 - 8589934592.0; \
   } while(0)
 
-//#define VARIANT2_INTEGER_MATH_SQRT_STEP_REF() \
+//#define VARIANT2_INTEGER_MATH_SQRT_STEP_REF()
 //  sqrt_result = integer_square_root_v2(sqrt_input)
 
 // Reference implementation of the integer square root for Cryptonight variant 2

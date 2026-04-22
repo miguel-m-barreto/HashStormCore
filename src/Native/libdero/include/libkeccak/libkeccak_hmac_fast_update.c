@@ -34,11 +34,11 @@ libkeccak_hmac_fast_update(struct libkeccak_hmac_state *restrict state, const vo
 		return libkeccak_fast_update(&state->sponge, msg, msglen);
 
 	if (msglen != state->buffer_size) {
-		state->buffer = realloc(old = state->buffer, msglen);
-		if (!state->buffer) {
-			state->buffer = old;
+		old = realloc(state->buffer, msglen);
+		if (!old) {
 			return -1;
 		}
+		state->buffer = old;
 		state->buffer_size = msglen;
 	}
 

@@ -106,7 +106,7 @@ sph_sm3_close(void *cc, void *dst)
 	memset(cc, 0, sizeof(sm3_ctx_t));
 }
 
-void sm3_final(sm3_ctx_t *ctx, unsigned char *digest)
+void sm3_final(sm3_ctx_t *ctx, unsigned char digest[SM3_DIGEST_LENGTH])
 {
 	int i;
 	uint32_t *pdigest = (uint32_t *)digest;

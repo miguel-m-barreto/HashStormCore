@@ -1,9 +1,9 @@
 // src/HashStormCore/Api/Controllers/ApiControllerBase.cs
 using System.Net;
 using Autofac;
-using AutoMapper;
 using Microsoft.AspNetCore.Mvc;
 using HashStormCore.Configuration;
+using HashStormCore.Mappings;
 using HashStormCore.Persistence;
 
 namespace HashStormCore.Api.Controllers;
@@ -12,14 +12,14 @@ public abstract class ApiControllerBase : ControllerBase
 {
     protected ApiControllerBase(IComponentContext ctx)
     {
-        mapper = ctx.Resolve<IMapper>();
+        mapper = ctx.Resolve<IObjectMapper>();
         clusterConfig = ctx.Resolve<ClusterConfig>();
         cf = ctx.Resolve<IConnectionFactory>();
     }
 
     protected readonly ClusterConfig clusterConfig;
     protected readonly IConnectionFactory cf;
-    protected readonly IMapper mapper;
+    protected readonly IObjectMapper mapper;
 
     protected PoolConfig GetPoolNoThrow(string poolId)
     {

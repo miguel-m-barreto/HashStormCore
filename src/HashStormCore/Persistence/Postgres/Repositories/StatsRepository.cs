@@ -1,7 +1,7 @@
 // src/HashStormCore/Persistence/Postgres/Repositories/StatsRepository.cs
 using System.Data;
-using AutoMapper;
 using Dapper;
+using HashStormCore.Mappings;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Model.Projections;
 using HashStormCore.Persistence.Repositories;
@@ -12,13 +12,13 @@ namespace HashStormCore.Persistence.Postgres.Repositories;
 
 public class StatsRepository : IStatsRepository
 {
-    public StatsRepository(IMapper mapper, IMasterClock clock)
+    public StatsRepository(IObjectMapper mapper, IMasterClock clock)
     {
         this.mapper = mapper;
         this.clock = clock;
     }
 
-    private readonly IMapper mapper;
+    private readonly IObjectMapper mapper;
     private readonly IMasterClock clock;
     private static readonly TimeSpan MinerStatsMaxAge = TimeSpan.FromMinutes(20);
 
@@ -30,7 +30,7 @@ public class StatsRepository : IStatsRepository
 
     public async Task InsertPoolStatsAsync(IDbConnection con, IDbTransaction tx, PoolStats stats, CancellationToken ct)
     {
-        var mapped = mapper.Map<Entities.PoolStats>(stats);
+        var mapped = mapper.MapPoolStatsEntity(stats);
 
         const string query = @"INSERT INTO poolstats(poolid, connectedminers, poolhashrate, networkhashrate,
             networkdifficulty, lastnetworkblocktime, blockheight, connectedpeers, sharespersecond, created)
@@ -42,7 +42,7 @@ public class StatsRepository : IStatsRepository
 
     public async Task InsertMinerWorkerPerformanceStatsAsync(IDbConnection con, IDbTransaction tx, MinerWorkerPerformanceStats stats, CancellationToken ct)
     {
-        var mapped = mapper.Map<Entities.MinerWorkerPerformanceStats>(stats);
+        var mapped = mapper.MapMinerWorkerPerformanceStatsEntity(stats);
 
         if (string.IsNullOrEmpty(mapped.Worker))
             mapped.Worker = string.Empty;
@@ -59,7 +59,7 @@ public class StatsRepository : IStatsRepository
 
         var entity = await con.QuerySingleOrDefaultAsync<Entities.PoolStats>(new CommandDefinition(query, new { poolId }, cancellationToken: ct));
 
-        return entity == null ? null : mapper.Map<PoolStats>(entity);
+        return entity == null ? null : mapper.MapPoolStats(entity);
     }
 
     public Task<decimal> GetTotalPoolPaymentsAsync(IDbConnection con, string poolId, CancellationToken ct)
@@ -88,7 +88,7 @@ public class StatsRepository : IStatsRepository
             ORDER BY created;";
 
         return (await con.QueryAsync<Entities.PoolStats>(new CommandDefinition(query, new { poolId, start, end }, cancellationToken: ct)))
-            .Select(mapper.Map<PoolStats>)
+            .Select(mapper.MapPoolStats)
             .ToArray();
     }
 
@@ -125,7 +125,7 @@ public class StatsRepository : IStatsRepository
 
                 var stats = (await con.QueryAsync<Entities.MinerWorkerPerformanceStats>(new CommandDefinition(query,
                         new { poolId, miner, created = lastUpdate }, cancellationToken: ct)))
-                    .Select(mapper.Map<MinerWorkerPerformanceStats>)
+                    .Select(mapper.MapMinerWorkerPerformanceStats)
                     .ToArray();
 
                 if (stats.Any())
@@ -344,7 +344,7 @@ public class StatsRepository : IStatsRepository
 
         return (await con.QueryAsync<Entities.MinerWorkerPerformanceStats>(new CommandDefinition(query,
                 new { poolId, from, offset = page * pageSize, pageSize }, cancellationToken: ct)))
-            .Select(mapper.Map<MinerWorkerPerformanceStats>)
+            .Select(mapper.MapMinerWorkerPerformanceStats)
             .ToArray();
     }
 

@@ -1,6 +1,6 @@
 using System.Data;
-using AutoMapper;
 using Dapper;
+using HashStormCore.Mappings;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Repositories;
 
@@ -8,12 +8,12 @@ namespace HashStormCore.Persistence.Postgres.Repositories;
 
 public class MinerRepository : IMinerRepository
 {
-    public MinerRepository(IMapper mapper)
+    public MinerRepository(IObjectMapper mapper)
     {
         this.mapper = mapper;
     }
 
-    private readonly IMapper mapper;
+    private readonly IObjectMapper mapper;
 
     public async Task<MinerSettings> GetSettingsAsync(IDbConnection con, IDbTransaction tx, string poolId, string address)
     {
@@ -21,7 +21,7 @@ public class MinerRepository : IMinerRepository
 
         var entity = await con.QuerySingleOrDefaultAsync<Entities.MinerSettings>(query, new {poolId, address}, tx);
 
-        return mapper.Map<MinerSettings>(entity);
+        return mapper.MapMinerSettings(entity);
     }
 
     public Task UpdateSettingsAsync(IDbConnection con, IDbTransaction tx, MinerSettings settings)

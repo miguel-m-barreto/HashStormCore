@@ -9,7 +9,6 @@ using AspNetCoreRateLimit;
 using Autofac;
 using Autofac.Extensions.DependencyInjection;
 using Autofac.Features.Metadata;
-using AutoMapper;
 using Dapper;
 using FluentValidation;
 using McMaster.Extensions.CommandLineUtils;
@@ -38,6 +37,7 @@ using HashStormCore.Crypto.Hashing.Progpow.Merakipow;
 using HashStormCore.Crypto.Hashing.Progpow.Phihash;
 using HashStormCore.Crypto.Hashing.Progpow.ProgpowZ;
 using HashStormCore.Crypto.Hashing.Progpow.Sccpow;
+using HashStormCore.Mappings;
 using HashStormCore.Extensions;
 using HashStormCore.Messaging;
 using HashStormCore.Mining;
@@ -354,9 +354,7 @@ public class Program : BackgroundService
         builder.RegisterInstance(pools);
         builder.RegisterInstance(gcStats);
 
-        // AutoMapper
-        var amConf = new MapperConfiguration(cfg => { cfg.AddProfile(new AutoMapperProfile()); });
-        builder.Register((ctx, parms) => amConf.CreateMapper());
+        builder.RegisterType<ObjectMapper>().As<IObjectMapper>().SingleInstance();
 
         ConfigurePersistence(builder);
     }
@@ -434,7 +432,7 @@ public class Program : BackgroundService
         logger.Info(() => $"Runtime {RuntimeInformation.FrameworkDescription.Trim()} on {RuntimeInformation.OSDescription.Trim()} [{RuntimeInformation.ProcessArchitecture}]");
     }
 
-    private static string GetVersion()
+    public static string GetVersion()
     {
         var assembly = Assembly.GetEntryAssembly();
         var infoVersion = assembly?

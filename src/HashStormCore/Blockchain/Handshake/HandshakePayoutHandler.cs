@@ -1,5 +1,5 @@
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Bitcoin;
 using HashStormCore.Blockchain.Bitcoin.Configuration;
 using HashStormCore.Blockchain.Handshake;
@@ -31,7 +31,7 @@ public class HandshakePayoutHandler : PayoutHandlerBase,
     public HandshakePayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,

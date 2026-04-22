@@ -1,6 +1,6 @@
 using System.Data;
-using AutoMapper;
 using Dapper;
+using HashStormCore.Mappings;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Model.Projections;
 using HashStormCore.Persistence.Repositories;
@@ -11,12 +11,12 @@ namespace HashStormCore.Persistence.Postgres.Repositories;
 
 public class ShareRepository : IShareRepository
 {
-    public ShareRepository(IMapper mapper)
+    public ShareRepository(IObjectMapper mapper)
     {
         this.mapper = mapper;
     }
 
-    private readonly IMapper mapper;
+    private readonly IObjectMapper mapper;
 
     public async Task BatchInsertAsync(IDbConnection con, IDbTransaction tx, IEnumerable<Share> shares, CancellationToken ct)
     {
@@ -57,7 +57,7 @@ public class ShareRepository : IShareRepository
             ORDER BY created DESC FETCH NEXT @pageSize ROWS ONLY";
 
         return (await con.QueryAsync<Entities.Share>(new CommandDefinition(query, new { poolId, before, pageSize }, cancellationToken: ct)))
-            .Select(mapper.Map<Share>)
+            .Select(mapper.MapShare)
             .ToArray();
     }
 

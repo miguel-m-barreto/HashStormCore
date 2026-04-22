@@ -1,6 +1,6 @@
 using System.Data;
-using AutoMapper;
 using Dapper;
+using HashStormCore.Mappings;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Repositories;
 
@@ -8,12 +8,12 @@ namespace HashStormCore.Persistence.Postgres.Repositories;
 
 public class BalanceRepository : IBalanceRepository
 {
-    public BalanceRepository(IMapper mapper)
+    public BalanceRepository(IObjectMapper mapper)
     {
         this.mapper = mapper;
     }
 
-    private readonly IMapper mapper;
+    private readonly IObjectMapper mapper;
 
     public async Task<int> AddAmountAsync(IDbConnection con, IDbTransaction tx, string poolId, string address, decimal amount, string usage, params string[] tags)
     {
@@ -94,7 +94,7 @@ public class BalanceRepository : IBalanceRepository
             WHERE b.poolid = @poolId AND b.amount >= COALESCE(ms.paymentthreshold, @minimum)";
 
         return (await con.QueryAsync<Entities.Balance>(query, new { poolId, minimum }))
-            .Select(mapper.Map<Balance>)
+            .Select(mapper.MapBalance)
             .ToArray();
     }
 
@@ -112,7 +112,7 @@ public class BalanceRepository : IBalanceRepository
             ORDER BY created DESC";
 
         return (await con.QueryAsync<Entities.BalanceChange>(query, new { poolId, tag = new[] { tag } }, tx))
-            .Select(mapper.Map<BalanceChange>)
+            .Select(mapper.MapBalanceChange)
             .ToArray();
     }
 }

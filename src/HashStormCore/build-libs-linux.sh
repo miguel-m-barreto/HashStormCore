@@ -68,7 +68,7 @@ maybe_patch_unistd
 build_and_move() {
   local dir="$1" so="$2"
   ( cd "$dir" && run make clean && run make )
-  mv "$dir/$so" "$OutDir"
+  cp "$dir/$so" "$OutDir/$so"
 }
 
 # ---------- libs nativas locais ----------
@@ -76,7 +76,7 @@ build_and_move ../Native/libmultihash        libmultihash.so
 build_and_move ../Native/libbeamhash         libbeamhash.so
 build_and_move ../Native/libetchash          libetchash.so
 build_and_move ../Native/libethhash          libethhash.so
-( cd ../Native/libethhashb3 && run make -j clean && run make -j ); mv ../Native/libethhashb3/libethhashb3.so "$OutDir"
+( cd ../Native/libethhashb3 && run make -j clean && run make -j ); cp ../Native/libethhashb3/libethhashb3.so "$OutDir/libethhashb3.so"
 build_and_move ../Native/libubqhash          libubqhash.so
 build_and_move ../Native/libcryptonote       libcryptonote.so
 build_and_move ../Native/libcryptonight      libcryptonight.so
@@ -107,7 +107,7 @@ build_and_move ../Native/libsccpow           libsccpow.so    || true
   run ninja
 )
 ( cd ../Native/libnexapow && cp /tmp/secp256k1/build/libsecp256k1.a . && run make clean && run make )
-mv ../Native/libnexapow/libnexapow.so "$OutDir"
+cp ../Native/libnexapow/libnexapow.so "$OutDir/libnexapow.so"
 
 # ---------- RandomX -> librandomx ----------
 (
@@ -121,7 +121,7 @@ mv ../Native/libnexapow/libnexapow.so "$OutDir"
   run make
 )
 ( cd ../Native/librandomx && cp /tmp/RandomX/build/librandomx.a . && run make clean && run make )
-mv ../Native/librandomx/librandomx.so "$OutDir"
+cp ../Native/librandomx/librandomx.so "$OutDir/librandomx.so"
 
 # ---------- RandomARQ (patch stdint.h) -> librandomarq ----------
 (
@@ -143,7 +143,7 @@ mv ../Native/librandomx/librandomx.so "$OutDir"
   run make
 )
 ( cd ../Native/librandomarq && cp /tmp/RandomARQ/build/librandomx.a . && run make clean && run make )
-mv ../Native/librandomarq/librandomarq.so "$OutDir"
+cp ../Native/librandomarq/librandomarq.so "$OutDir/librandomarq.so"
 
 # ---------- Panthera -> libpanthera ----------
 (
@@ -167,7 +167,7 @@ mv ../Native/librandomarq/librandomarq.so "$OutDir"
   run make
 )
 ( cd ../Native/libpanthera && cp /tmp/Panthera/build/librandomx.a . && run make clean && run make )
-mv ../Native/libpanthera/libpanthera.so "$OutDir"
+cp ../Native/libpanthera/libpanthera.so "$OutDir/libpanthera.so"
 
 # ---------- RandomXSCash -> librandomxscash ----------
 (
@@ -181,4 +181,4 @@ mv ../Native/libpanthera/libpanthera.so "$OutDir"
   run make
 )
 ( cd ../Native/librandomxscash && cp /tmp/RandomXSCash/build/librandomx.a . && run make clean && run make )
-mv ../Native/librandomxscash/librandomxscash.so "$OutDir"
+cp ../Native/librandomxscash/librandomxscash.so "$OutDir/librandomxscash.so"

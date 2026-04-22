@@ -57,8 +57,8 @@
 #define U64(p) ((uint64_t*)(p))
 
 #define VARIANT2_INIT(b, state) \
-  uint64_t division_result; \
-  uint64_t sqrt_result; \
+  uint64_t division_result = 0; \
+  uint64_t sqrt_result = 0; \
   do if (variant >= 2) \
   { \
     U64(b)[2] = state.hs.w[8] ^ state.hs.w[10]; \

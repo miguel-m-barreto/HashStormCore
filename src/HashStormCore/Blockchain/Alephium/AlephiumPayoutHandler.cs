@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Alephium.Configuration;
 using HashStormCore.Configuration;
 using HashStormCore.Contracts;
@@ -28,7 +28,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
     public AlephiumPayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,

@@ -31,7 +31,7 @@ public static class ZmqExtensions
 
     private static byte[] DeriveKey(string password, int length = 32)
     {
-        using(var kbd = new Rfc2898DeriveBytes(Encoding.UTF8.GetBytes(password), noSalt, PasswordIterations))
+        using(var kbd = new Rfc2898DeriveBytes(Encoding.UTF8.GetBytes(password), noSalt, PasswordIterations, HashAlgorithmName.SHA1))
         {
             var block = kbd.GetBytes(length);
             return block;

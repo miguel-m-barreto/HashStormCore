@@ -4,7 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Kaspa.Configuration;
 using HashStormCore.Configuration;
 using HashStormCore.Extensions;
@@ -30,7 +30,7 @@ public class KaspaPayoutHandler : PayoutHandlerBase, IPayoutHandler
     public KaspaPayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,

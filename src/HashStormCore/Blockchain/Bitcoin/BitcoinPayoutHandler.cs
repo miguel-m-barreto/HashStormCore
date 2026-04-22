@@ -1,5 +1,5 @@
 using Autofac;
-using AutoMapper;
+using HashStormCore.Mappings;
 using HashStormCore.Blockchain.Bitcoin.Configuration;
 using HashStormCore.Blockchain.Bitcoin.DaemonResponses;
 using HashStormCore.Configuration;
@@ -28,7 +28,7 @@ public class BitcoinPayoutHandler : PayoutHandlerBase,
     public BitcoinPayoutHandler(
         IComponentContext ctx,
         IConnectionFactory cf,
-        IMapper mapper,
+        IObjectMapper mapper,
         IShareRepository shareRepo,
         IBlockRepository blockRepo,
         IBalanceRepository balanceRepo,
