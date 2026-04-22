@@ -4,8 +4,4 @@
 The following sources were used:
    https://api.nuget.org/v3/index.json
 
-Project `HashStormCore` has the following deprecated packages
-   [net10.0]: 
-   Top-level Package                  Requested   Resolved   Reason(s)   Alternative
-   > FluentValidation.AspNetCore      11.3.0      11.3.0     Legacy                 
-
+The given project `HashStormCore` has no deprecated packages given the current sources.
