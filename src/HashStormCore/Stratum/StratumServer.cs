@@ -300,11 +300,8 @@ public abstract class StratumServer
             {
                 if(!certs.TryGetValue(port.PoolEndpoint.TlsPfxFile, out var cert))
                 {
-                    /*  WARNING: .NET 9: "Loading certificate data through the constructor or Import is obsolete. Use X509CertificateLoader instead to load certificates."
-                        More suitable method i could found is:
-                        X509CertificateLoader.LoadPkcs12FromFile(port.PoolEndpoint.TlsPfxFile, port.PoolEndpoint.TlsPfxPassword, X509KeyStorageFlags.DefaultKeySet)
-                    */
-                    cert = Guard(()=> new X509Certificate2(port.PoolEndpoint.TlsPfxFile, port.PoolEndpoint.TlsPfxPassword), ex =>
+                    cert = Guard(() => X509CertificateLoader.LoadPkcs12FromFile(port.PoolEndpoint.TlsPfxFile,
+                        port.PoolEndpoint.TlsPfxPassword, X509KeyStorageFlags.DefaultKeySet), ex =>
                     {
                         logger.Info(() => $"Failed to load TLS certificate {port.PoolEndpoint.TlsPfxFile}: {ex.Message}");
                         throw ex;

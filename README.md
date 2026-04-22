@@ -178,8 +178,21 @@ See `CONTRIBUTING.md` for guidelines (branching, PR target, coding style).
 
 ---
 
-## 📦 Installation, Build, Running  
-*(Same as Miningcore - updated instructions coming soon)*
+## 📦 Installation, Build, Running
+
+HashStormCore targets **.NET 10**. The repo root `global.json` pins SDK selection for local CLI builds.
+
+Supported build helpers in this repo:
+
+- `build-ubuntu-22.04.sh`
+- `build-ubuntu-24.04.sh`
+- `build-windows.bat` for Windows development and debugging
+
+Manual build:
+
+```bash
+dotnet publish src/HashStormCore/HashStormCore.csproj -c Release --framework net10.0 -o build
+```
 
 ---
 

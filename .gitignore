@@ -229,5 +229,6 @@ src/HashStormCore/build-libs-diagnostics.log
 src/HashStormCore/build-libs-errors-warnings.log
 src/HashStormCore/build-libs.log
 
-changes.patch
-
+src/HashStormCore/packages-deprecated.txt
+src/HashStormCore/packages-outdated.txt
+src/HashStormCore/packages-vulnerable.txt

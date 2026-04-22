@@ -223,11 +223,14 @@ public class ShareRecorder : BackgroundService
                     var shares = new List<Share>();
                     var lastProgressUpdate = DateTime.UtcNow;
 
-                    while (!reader.EndOfStream)
+                    while (true)
                     {
                         var line = await reader.ReadLineAsync();
 
-                        if (string.IsNullOrEmpty(line))
+                        if (line == null)
+                            break;
+
+                        if (line.Length == 0)
                             continue;
 
                         // skip blank lines

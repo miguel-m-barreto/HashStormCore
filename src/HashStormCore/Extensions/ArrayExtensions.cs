@@ -52,7 +52,7 @@ public static class ArrayExtensions
 
     public static string ToHexString(this Span<byte> value, int? off, int? len, bool withPrefix = false)
     {
-        if(value == null || value.Length == 0)
+        if(value.Length == 0)
             return string.Empty;
 
         var length = len ?? value.Length;
