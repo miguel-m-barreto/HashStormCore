@@ -4,9 +4,4 @@
 The following sources were used:
    https://api.nuget.org/v3/index.json
 
-Project `HashStormCore` has the following updates to its packages
-   [net10.0]: 
-   Top-level Package         Requested   Resolved   Latest
-   > Grpc.Tools              2.76.0      2.76.0     2.80.0
-   > NBitcoin.Secp256k1      3.1.6       3.1.6      4.0.0 
-
+The given project `HashStormCore` has no updates given the current sources.

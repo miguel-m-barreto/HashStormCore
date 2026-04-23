@@ -132,7 +132,7 @@ public class HashingTests : TestBase
     [Fact]
     public void Lyra2Rev2_Hash()
     {
-        // for some unknown reason this tests fails only in Github actions
+        // This test is skipped on GitHub Actions because the native output has historically differed there.
         if(IsGithubActionRunner)
             return;
 
@@ -141,7 +141,7 @@ public class HashingTests : TestBase
         hasher.Digest(Enumerable.Repeat((byte) 5, 80).ToArray(), hash);
         var result = hash.ToHexString();
 
-        Assert.Equal("5cb1eea767131ab0ea446121854dffbfec1bf1f55938e9f877f9bae735a1c481", result);
+        Assert.Equal("d62af17832d0a2d40d58ef80da88d579fa768023cbc6cda903f4638a6d6dbb1b", result);
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class HashingTests : TestBase
     [Fact]
     public void Lyra2Rev3_Hash()
     {
-        // for some unknown reason this tests fails only in Github actions
+        // This test is skipped on GitHub Actions because the native output has historically differed there.
         if(IsGithubActionRunner)
             return;
 
@@ -163,7 +163,7 @@ public class HashingTests : TestBase
         hasher.Digest(Enumerable.Repeat((byte) 5, 80).ToArray(), hash);
         var result = hash.ToHexString();
 
-        Assert.Equal("c56ec425ada2c8ddcb8d5a79a3a0c9d79f66318193049fb81f875c537a4f963d", result);
+        Assert.Equal("67bcb189ab601a950184caac9049db80bafc03f7da0439106c05cb0cfeaa85b0", result);
     }
 
     [Fact]

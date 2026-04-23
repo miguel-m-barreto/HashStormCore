@@ -1,3 +1,4 @@
+using System;
 using System.Net.Http;
 using Autofac;
 using HashStormCore.Blockchain.Warthog;
@@ -45,6 +46,9 @@ public class WarthogPayoutHandlerSigningTests
         var signed = ellipticPrivateKey.TrySignECDSA(signatureHashBytes.ToArray(), null, out var recid, out var signature);
 
         Assert.True(signed);
+        Assert.Equal(0, recid);
+        Assert.Equal("bdcd9e6d75481b7deaf33df430df00b77b2f675a337a3f2314aff2a97d2453c0", signature.r.ToBytes().ToHexString());
+        Assert.Equal("694b65e8232193a5c717e54b9e541c9ba638a81637b75136a1b99565f4570aa4", signature.s.ToBytes().ToHexString());
 
         var fullSignatureBytes = (byte[]) wrapper.Invoke("SerializeFullSignature", signature.r.ToBytes(), signature.s.ToBytes(), (byte) recid);
 
