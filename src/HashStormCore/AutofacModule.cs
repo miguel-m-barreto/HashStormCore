@@ -65,13 +65,18 @@ public class AutofacModule : Module
             .AsImplementedInterfaces()
             .SingleInstance();
 
-        builder.RegisterInstance(new RecyclableMemoryStreamManager
-        (
-            new RecyclableMemoryStreamManager.Options
-            {
-                ThrowExceptionOnToArray = true
-            }
-        ));
+        builder.Register(ctx =>
+        {
+            var clusterConfig = ctx.ResolveOptional<ClusterConfig>();
+
+            return new RecyclableMemoryStreamManager(
+                new RecyclableMemoryStreamManager.Options
+                {
+                    ThrowExceptionOnToArray = true,
+                    MaximumSmallPoolFreeBytes = clusterConfig?.Memory?.RmsmMaximumFreeSmallPoolBytes ?? 0x100000,
+                    MaximumLargePoolFreeBytes = clusterConfig?.Memory?.RmsmMaximumFreeLargePoolBytes ?? 0x800000
+                });
+        }).SingleInstance();
 
         builder.RegisterType<StandardClock>()
             .AsImplementedInterfaces()

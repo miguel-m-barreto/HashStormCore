@@ -120,7 +120,7 @@ public class BlockRepository : IBlockRepository
     
     public async Task<uint> GetBlockBeforeCountAsync(IDbConnection con, string poolId, BlockStatus[] status, DateTime before)
     {
-        const string query = @"SELECT * FROM blocks WHERE poolid = @poolid AND status = ANY(@status) AND created < @before";
+        const string query = @"SELECT COUNT(*) FROM blocks WHERE poolid = @poolid AND status = ANY(@status) AND created < @before";
         
         return await con.ExecuteScalarAsync<uint>(new CommandDefinition(query, new
         {

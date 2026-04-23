@@ -132,11 +132,14 @@ public class SimpleRestClient
 
         PrepareRequest(request, null);
 
-        using var response = await httpClient.SendAsync(request, ct);
+        var response = await httpClient.SendAsync(request, ct);
         var msg = await response.Content.ReadAsStringAsync(ct);
 
         if(!response.IsSuccessStatusCode)
+        {
+            response.Dispose();
             throw new HttpRequestException(msg, null, response.StatusCode);
+        }
 
         return new ResponseContent<T>(response, Deserialize<T>(msg));
     }

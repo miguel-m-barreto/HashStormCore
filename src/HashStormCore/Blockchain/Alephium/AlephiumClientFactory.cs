@@ -25,8 +25,6 @@ public static class AlephiumClientFactory
         var result = new AlephiumClient(baseUrl.ToString(), new HttpClient(new HttpClientHandler
         {
             AutomaticDecompression = DecompressionMethods.Deflate | DecompressionMethods.GZip,
-
-            ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true,
         }));
 
         if(!string.IsNullOrEmpty(extra?.ApiKey))

@@ -50,8 +50,6 @@ public class RpcClient
     private static readonly HttpClient httpClient = new(new HttpClientHandler
     {
         AutomaticDecompression = DecompressionMethods.All,
-
-        ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true,
     });
 
     #region API-Surface

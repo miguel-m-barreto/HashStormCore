@@ -61,6 +61,7 @@ using NLog.Extensions.Hosting;
 using NLog.Extensions.Logging;
 using NLog.Layouts;
 using NLog.Targets;
+using NLog.Targets.Wrappers;
 using Prometheus;
 using WebSocketManager;
 using ILogger = NLog.ILogger;
@@ -698,11 +699,11 @@ public class Program : BackgroundService
             // Api Log
             if (!string.IsNullOrEmpty(config.ApiLogFile) && !isShareRecoveryMode)
             {
-                var target = new FileTarget("file")
+                var target = new AsyncTargetWrapper("async-api-file", new FileTarget("api-file")
                 {
                     FileName = GetLogPath(config, config.ApiLogFile),
                     Layout = layout
-                };
+                });
 
                 loggingConfig.AddTarget(target);
                 loggingConfig.AddRule(level, NLog.LogLevel.Fatal, target, "Microsoft.AspNetCore.*", true);
@@ -712,34 +713,36 @@ public class Program : BackgroundService
             {
                 if (config.EnableConsoleColors)
                 {
-                    var target = new ColoredConsoleTarget("console")
+                    var consoleTarget = new ColoredConsoleTarget("console")
                     {
                         Layout = layout
                     };
 
-                    target.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
+                    consoleTarget.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
                     ConditionParser.ParseExpression("level == LogLevel.Trace"),
                     ConsoleOutputColor.DarkMagenta, ConsoleOutputColor.NoChange));
 
-                    target.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
+                    consoleTarget.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
                     ConditionParser.ParseExpression("level == LogLevel.Debug"),
                     ConsoleOutputColor.Gray, ConsoleOutputColor.NoChange));
 
-                    target.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
+                    consoleTarget.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
                     ConditionParser.ParseExpression("level == LogLevel.Info"),
                     ConsoleOutputColor.White, ConsoleOutputColor.NoChange));
 
-                    target.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
+                    consoleTarget.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
                     ConditionParser.ParseExpression("level == LogLevel.Warn"),
                     ConsoleOutputColor.Yellow, ConsoleOutputColor.NoChange));
 
-                    target.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
+                    consoleTarget.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
                     ConditionParser.ParseExpression("level == LogLevel.Error"),
                     ConsoleOutputColor.Red, ConsoleOutputColor.NoChange));
 
-                    target.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
+                    consoleTarget.RowHighlightingRules.Add(new ConsoleRowHighlightingRule(
                     ConditionParser.ParseExpression("level == LogLevel.Fatal"),
                     ConsoleOutputColor.DarkRed, ConsoleOutputColor.White));
+
+                    var target = new AsyncTargetWrapper("async-console-colored", consoleTarget);
 
                     loggingConfig.AddTarget(target);
                     loggingConfig.AddRule(level, NLog.LogLevel.Fatal, target);
@@ -747,10 +750,10 @@ public class Program : BackgroundService
 
                 else
                 {
-                    var target = new ConsoleTarget("console")
+                    var target = new AsyncTargetWrapper("async-console", new ConsoleTarget("console")
                     {
                         Layout = layout
-                    };
+                    });
 
                     loggingConfig.AddTarget(target);
                     loggingConfig.AddRule(level, NLog.LogLevel.Fatal, target);
@@ -759,11 +762,11 @@ public class Program : BackgroundService
 
             if (!string.IsNullOrEmpty(config.LogFile) && !isShareRecoveryMode)
             {
-                var target = new FileTarget("file")
+                var target = new AsyncTargetWrapper("async-file", new FileTarget("file")
                 {
                     FileName = GetLogPath(config, config.LogFile),
                     Layout = layout
-                };
+                });
 
                 loggingConfig.AddTarget(target);
                 loggingConfig.AddRule(level, NLog.LogLevel.Fatal, target);
@@ -773,11 +776,11 @@ public class Program : BackgroundService
             {
                 foreach (var poolConfig in clusterConfig.Pools)
                 {
-                    var target = new FileTarget(poolConfig.Id)
+                    var target = new AsyncTargetWrapper($"async-{poolConfig.Id}", new FileTarget(poolConfig.Id)
                     {
                         FileName = GetLogPath(config, poolConfig.Id + ".log"),
                         Layout = layout
-                    };
+                    });
 
                     loggingConfig.AddTarget(target);
                     loggingConfig.AddRule(level, NLog.LogLevel.Fatal, target, poolConfig.Id);
@@ -805,13 +808,6 @@ public class Program : BackgroundService
         ZcashNetworkRegistrar.EnsureRegistered();
 
         var messageBus = services.GetService<IMessageBus>();
-        var rmsm = services.GetService<RecyclableMemoryStreamManager>();
-
-        // Configure RecyclableMemoryStream
-        var rmsmOptions = rmsm.Settings;
-        rmsmOptions.MaximumSmallPoolFreeBytes = clusterConfig.Memory?.RmsmMaximumFreeSmallPoolBytes ?? 0x100000;   // 1 MB
-        rmsmOptions.MaximumLargePoolFreeBytes = clusterConfig.Memory?.RmsmMaximumFreeLargePoolBytes ?? 0x800000;   // 8 MB
-        rmsm = new RecyclableMemoryStreamManager(rmsmOptions);
 
         // Configure Equihash
         EquihashSolver.messageBus = messageBus;
@@ -970,7 +966,7 @@ public class Program : BackgroundService
 
         connectionString.Append($"CommandTimeout={pgConfig.CommandTimeout ?? 300};");
 
-        logger.Debug(() => $"Using postgres connection string: {connectionString}");
+        logger.Debug(() => $"Using postgres connection to {pgConfig.Host}:{pgConfig.Port}/{pgConfig.Database} (TLS: {pgConfig.Tls}, TrustServerCertificate: {pgConfig.TlsNoValidate})");
 
         // register connection factory
         builder.RegisterInstance(new PgConnectionFactory(connectionString.ToString()))
