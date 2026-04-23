@@ -466,10 +466,10 @@ public class WarthogJobManager : JobManagerBase<WarthogJob>
             {
                 var responsePoolAddressWalletPrivateKey = await restClient.Get<WarthogWalletResponse>(WarthogCommands.GetWallet.Replace(WarthogCommands.DataLabel, extraPoolPaymentProcessingConfig?.WalletPrivateKey), ct);
                 if(responsePoolAddressWalletPrivateKey?.Error != null)
-                    throw new PoolStartupException($"Pool address private key '{extraPoolPaymentProcessingConfig?.WalletPrivateKey}': {responsePoolAddressWalletPrivateKey.Error} (Code {responsePoolAddressWalletPrivateKey?.Code})", poolConfig.Id);
+                    throw new PoolStartupException($"Pool address private key validation failed: {responsePoolAddressWalletPrivateKey.Error} (Code {responsePoolAddressWalletPrivateKey?.Code})", poolConfig.Id);
 
                 if(responsePoolAddressWalletPrivateKey.Data.Address != poolConfig.Address)
-                    throw new PoolStartupException($"Pool address private key '{extraPoolPaymentProcessingConfig?.WalletPrivateKey}' [{responsePoolAddressWalletPrivateKey.Data.Address}] does not match pool address: {poolConfig.Address}", poolConfig.Id);
+                    throw new PoolStartupException($"Pool address private key does not match pool address. Derived address: {responsePoolAddressWalletPrivateKey.Data.Address}, configured address: {poolConfig.Address}", poolConfig.Id);
             }
 
             catch(Exception)

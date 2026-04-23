@@ -162,7 +162,7 @@ public class RpcClient
                 request.Headers.Authorization = new AuthenticationHeaderValue("Basic", auth.ToByteArrayBase64());
             }
 
-            logger.Trace(() => $"Sending RPC request to {requestUrl}: {json}");
+            logger.Trace(() => $"Sending RPC request '{method}' to {requestUrl}");
 
             // send request
             using(var response = await httpClient.SendAsync(request, ct))
@@ -170,7 +170,7 @@ public class RpcClient
                 // read response
                 var responseContent = await response.Content.ReadAsStringAsync(ct);
 
-                logger.Trace(() => $"Received RPC response: {responseContent}");
+                logger.Trace(() => $"Received RPC response for '{method}' from {requestUrl} with status {(int) response.StatusCode} ({response.StatusCode})");
 
                 // deserialize response
                 using(var jreader = new JsonTextReader(new StringReader(responseContent)))
@@ -216,7 +216,7 @@ public class RpcClient
                 request.Headers.Authorization = new AuthenticationHeaderValue("Basic", auth.ToByteArrayBase64());
             }
 
-            logger.Trace(() => $"Sending RPC request to {requestUrl}: {json}");
+            logger.Trace(() => $"Sending RPC batch request [{string.Join(", ", batch.Select(x => x.Method))}] to {requestUrl}");
 
             // send request
             using(var response = await httpClient.SendAsync(request, ct))
@@ -224,7 +224,7 @@ public class RpcClient
                 // deserialize response
                 var responseContent = await response.Content.ReadAsStringAsync(ct);
 
-                logger.Trace(() => $"Received RPC response: {responseContent}");
+                logger.Trace(() => $"Received RPC batch response from {requestUrl} with status {(int) response.StatusCode} ({response.StatusCode})");
 
                 using(var jreader = new JsonTextReader(new StringReader(responseContent)))
                 {
@@ -268,8 +268,6 @@ public class RpcClient
                                 // connect
                                 var protocol = endPoint.Ssl ? "wss" : "ws";
                                 var uri = new Uri($"{protocol}://{endPoint.Host}:{endPoint.Port}{endPoint.HttpPath}");
-                                client.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
-
                                 logger.Debug(() => $"Establishing WebSocket connection to {uri}");
                                 await client.ConnectAsync(uri, cts.Token);
 
@@ -278,7 +276,7 @@ public class RpcClient
                                 var json = JsonConvert.SerializeObject(request, payloadJsonSerializerSettings);
                                 var requestData = new ArraySegment<byte>(Encoding.UTF8.GetBytes(json));
 
-                                logger.Debug(() => $"Sending WebSocket subscription request `{json}` to {uri}");
+                                logger.Debug(() => $"Sending WebSocket subscription request '{method}' to {uri}");
                                 await client.SendAsync(requestData, WebSocketMessageType.Text, true, cts.Token);
 
                                 // stream response

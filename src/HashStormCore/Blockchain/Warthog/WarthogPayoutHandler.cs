@@ -100,7 +100,7 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
         catch(Exception e)
         {
             logger.Warn(() => $"[{LogCategory}] '{WarthogCommands.DaemonName} - {WarthogCommands.GetBlockTemplate}' daemon does not seem to be running...");
-            throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e}");
+            throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e.Message}", e);
         }
 
         if(string.IsNullOrEmpty(extraPoolPaymentProcessingConfig?.WalletPrivateKey))
@@ -111,16 +111,16 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
             {
                 var responsePoolAddressWalletPrivateKey = await restClient.Get<WarthogWalletResponse>(WarthogCommands.GetWallet.Replace(WarthogCommands.DataLabel, extraPoolPaymentProcessingConfig?.WalletPrivateKey), ct);
                 if(responsePoolAddressWalletPrivateKey?.Error != null)
-                    throw new Exception($"Pool address private key '{extraPoolPaymentProcessingConfig?.WalletPrivateKey}': {responsePoolAddressWalletPrivateKey.Error} (Code {responsePoolAddressWalletPrivateKey?.Code})");
+                    throw new Exception($"Pool address private key validation failed: {responsePoolAddressWalletPrivateKey.Error} (Code {responsePoolAddressWalletPrivateKey?.Code})");
 
                 if(responsePoolAddressWalletPrivateKey.Data.Address != poolConfig.Address)
-                    throw new Exception($"Pool address private key '{extraPoolPaymentProcessingConfig?.WalletPrivateKey}' [{responsePoolAddressWalletPrivateKey.Data.Address}] does not match pool address: {poolConfig.Address}");
+                    throw new Exception($"Pool address private key does not match pool address. Derived address: {responsePoolAddressWalletPrivateKey.Data.Address}, configured address: {poolConfig.Address}");
             }
 
             catch(Exception e)
             {
                 logger.Warn(() => $"[{LogCategory}] '{WarthogCommands.DaemonName} - {WarthogCommands.GetWallet}' daemon does not seem to be running...");
-                throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e}");
+                throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e.Message}", e);
             }
 
             ellipticPrivateKey = Context.Instance.CreateECPrivKey(extraPoolPaymentProcessingConfig.WalletPrivateKey.HexToByteArray());
@@ -182,7 +182,7 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
                 catch(Exception e)
                 {
                     logger.Warn(() => $"[{LogCategory}] '{WarthogCommands.DaemonName} - {WarthogCommands.GetBlockByHeight}' daemon does not seem to be running...");
-                    throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e}");
+                    throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e.Message}", e);
                 }
 
                 // We lost that battle
@@ -222,13 +222,13 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
                             .Where(x => x.ToAddress.Contains(poolConfig.Address))
                             .ToList();
 
-                        foreach (var blockReward in blockRewards)
+                        foreach(var blockReward in blockRewards)
                         {
                             block.Reward += (decimal) blockReward.Amount / WarthogConstants.SmallestUnit;
                         }
 
                         // security
-                        if (block.Reward > 0)
+                        if(block.Reward > 0)
                         {
                             block.Status = BlockStatus.Confirmed;
 
@@ -272,13 +272,13 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
             {
                 var responseAddress = await restClient.Get<WarthogBlockTemplate>(WarthogCommands.GetBlockTemplate.Replace(WarthogCommands.DataLabel, pair.Key), ct);
                 if(responseAddress?.Error != null)
-                    logger.Warn(()=> $"[{LogCategory}] Address {pair.Key} is not valid: {responseAddress.Error} (Code {responseAddress?.Code})");
+                    logger.Warn(() => $"[{LogCategory}] Address {pair.Key} is not valid: {responseAddress.Error} (Code {responseAddress?.Code})");
             }
 
             catch(Exception e)
             {
                 logger.Warn(() => $"[{LogCategory}] '{WarthogCommands.DaemonName} - {WarthogCommands.GetBlockTemplate}' daemon does not seem to be running...");
-                throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e}");
+                throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e.Message}", e);
             }
         }
         
@@ -287,13 +287,13 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
         {
             responseBalance = await restClient.Get<WarthogBalance>(WarthogCommands.GetBalance.Replace(WarthogCommands.DataLabel, poolConfig.Address), ct);
             if(responseBalance?.Error != null)
-                logger.Warn(()=> $"[{LogCategory}] '{WarthogCommands.GetBalance}': {responseBalance.Error} (Code {responseBalance?.Code})");
+                logger.Warn(() => $"[{LogCategory}] '{WarthogCommands.GetBalance}': {responseBalance.Error} (Code {responseBalance?.Code})");
         }
 
         catch(Exception e)
         {
             logger.Warn(() => $"[{LogCategory}] '{WarthogCommands.DaemonName} - {WarthogCommands.GetBalance}' daemon does not seem to be running...");
-            throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e}");
+            throw new Exception($"'{WarthogCommands.DaemonName}' returned error: {e.Message}", e);
         }
 
         var walletBalance = (decimal) (responseBalance?.Data.Balance == null ? 0 : responseBalance?.Data.Balance) / WarthogConstants.SmallestUnit;
@@ -328,7 +328,7 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
 
             await Guard(async () =>
             {
-                uint nonceId = (uint) randomNonceId.NextInt64((long)uint.MinValue, (long)uint.MaxValue);
+                uint nonceId = (uint) randomNonceId.NextInt64((long) uint.MinValue, (long) uint.MaxValue);
 
                 lock(nonceGenLock)
                 {
@@ -337,17 +337,17 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
                     {
                         if(!(usedNonceId.Contains(nonceId)))
                         {
-                            logger.Debug(()=> $"[{LogCategory}] Transaction nonceId: [{nonceId}]");
+                            logger.Debug(() => $"[{LogCategory}] Transaction nonceId: [{nonceId}]");
 
                             usedNonceId.Add(nonceId);
                             IsSafeToContinue = true;
                         }
                         else
-                            nonceId = (uint) randomNonceId.NextInt64((long)uint.MinValue, (long)uint.MaxValue);
+                            nonceId = (uint) randomNonceId.NextInt64((long) uint.MinValue, (long) uint.MaxValue);
                     }
                 }
 
-                logger.Info(()=> $"[{LogCategory}] [{nonceId}] Sending {FormatAmount(amount)} to {address}");
+                logger.Info(() => $"[{LogCategory}] [{nonceId}] Sending {FormatAmount(amount)} to {address}");
 
                 // WART payment is quite complex: https://www.warthog.network/docs/developers/integrations/wallet-integration/ - https://www.warthog.network/docs/developers/api/#post-transactionadd
                 var chainInfo = await restClient.Get<GetChainInfoResponse>(WarthogCommands.GetChainInfo, ct);
@@ -421,10 +421,10 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
 
         if(txFailures.Any())
         {
-            var failureBalances = txFailures.Select(x=> new Balance { Amount = x.Item1.Value }).ToArray();
+            var failureBalances = txFailures.Select(x => new Balance { Amount = x.Item1.Value }).ToArray();
             var error = string.Join(", ", txFailures.Select(x => $"{x.Item1.Key} {FormatAmount(x.Item1.Value)}: {x.Item2.Message}"));
 
-            logger.Error(()=> $"[{LogCategory}] Failed to transfer the following balances: {error}");
+            logger.Error(() => $"[{LogCategory}] Failed to transfer the following balances: {error}");
 
             NotifyPayoutFailure(poolConfig.Id, failureBalances, error, null);
         }
