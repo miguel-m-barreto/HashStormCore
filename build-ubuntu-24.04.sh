@@ -4,7 +4,9 @@
 
 # install dev-dependencies
 sudo apt-get update; \
-  sudo apt-get -y install dotnet-sdk-10.0 git cmake clang ninja-build build-essential libssl-dev pkg-config libboost-all-dev libsodium-dev libzmq5 libgmp-dev libc++-dev zlib1g-dev
+  # ZeroMQ.dll P/Invokes the unversioned native library name "libzmq",
+  # which on Ubuntu is provided by the dev package symlink.
+  sudo apt-get -y install dotnet-sdk-10.0 git cmake clang ninja-build build-essential libssl-dev pkg-config libboost-all-dev libsodium-dev libzmq5 libzmq3-dev libgmp-dev libc++-dev zlib1g-dev
 
 (cd src/HashStormCore && \
 BUILDIR=${1:-../../build} && \
