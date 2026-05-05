@@ -107,6 +107,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\HashStormCore.Contracts\HashStormCore.Contracts.csproj" />
+    <ProjectReference Include="..\HashStormCore.Eventing\HashStormCore.Eventing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="WebSocketManager">
       <HintPath>..\..\libs\WebSocketManager.dll</HintPath>
     </Reference>

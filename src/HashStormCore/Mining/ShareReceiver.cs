@@ -7,6 +7,9 @@ using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Hosting;
 using HashStormCore.Blockchain;
 using HashStormCore.Configuration;
+using HashStormCore.Contracts.Eventing;
+using HashStormCore.Eventing.Abstractions;
+using HashStormCore.Eventing.Mapping;
 using HashStormCore.Contracts;
 using HashStormCore.Extensions;
 using HashStormCore.Messaging;
@@ -29,7 +32,8 @@ public class ShareReceiver : BackgroundService
     public ShareReceiver(
         ClusterConfig clusterConfig,
         IMasterClock clock,
-        IMessageBus messageBus)
+        IMessageBus messageBus,
+        IShareEventQueue shareEventQueue = null)
     {
         Contract.RequiresNonNull(clock);
         Contract.RequiresNonNull(messageBus);
@@ -37,15 +41,22 @@ public class ShareReceiver : BackgroundService
         this.clusterConfig = clusterConfig;
         this.clock = clock;
         this.messageBus = messageBus;
+        this.shareEventQueue = shareEventQueue;
+        queue = new BufferBlock<(string Url, ZMessage Message)>(new DataflowBlockOptions
+        {
+            BoundedCapacity = Math.Max(1, clusterConfig.ShareReceiver?.MaxQueueSize ?? 10000),
+            EnsureOrdered = true
+        });
     }
 
     private static readonly ILogger logger = LogManager.GetCurrentClassLogger();
     private readonly IMasterClock clock;
     private readonly IMessageBus messageBus;
+    private readonly IShareEventQueue shareEventQueue;
     private readonly ClusterConfig clusterConfig;
     private readonly CompositeDisposable disposables = new();
     private readonly ConcurrentDictionary<string, PoolContext> pools = new();
-    private readonly BufferBlock<(string Url, ZMessage Message)> queue = new();
+    private readonly BufferBlock<(string Url, ZMessage Message)> queue;
 
     readonly JsonSerializer serializer = new()
     {
@@ -116,7 +127,7 @@ public class ShareReceiver : BackgroundService
                                     {
                                         lastMessageReceived[i] = clock.Now;
 
-                                        queue.Post((relays[i].Url, msg));
+                                        queue.SendAsync((relays[i].Url, msg), ct).GetAwaiter().GetResult();
                                     }
 
                                     else if(clock.Now - lastMessageReceived[i] > reconnectTimeout)
@@ -283,7 +294,11 @@ public class ShareReceiver : BackgroundService
         // store
         share.PoolId = topic;
         share.Created = clock.Now;
-        messageBus.SendMessage(share);
+
+        if(clusterConfig.EventPipeline?.Enabled == true)
+            EnqueueExternalShareEvent(poolContext, share);
+        else
+            messageBus.SendMessage(share);
 
         // update poolstats from shares
         if(poolContext != null)
@@ -314,6 +329,37 @@ public class ShareReceiver : BackgroundService
 
         else
             logger.Debug(() => $"External {(!string.IsNullOrEmpty(share.Source) ? $"[{share.Source.ToUpper()}] " : string.Empty)}share accepted: D={Math.Round(share.Difficulty, 4)}");
+    }
+
+    private void EnqueueExternalShareEvent(PoolContext poolContext, Share share)
+    {
+        var pool = poolContext?.Pool;
+        var shareEvent = ShareEventMapper.Map(new ShareEventSource
+        {
+            PoolId = share.PoolId,
+            CoinSymbol = pool?.Config?.Template?.Symbol ?? string.Empty,
+            CoinFamily = pool?.Config?.Template?.Family.ToString() ?? string.Empty,
+            Miner = share.Miner,
+            Worker = share.Worker,
+            Source = share.Source,
+            Created = share.Created,
+            BlockHeight = share.BlockHeight > 0 ? share.BlockHeight : null,
+            Difficulty = share.Difficulty,
+            NetworkDifficulty = share.NetworkDifficulty,
+            ShareMultiplier = pool?.ShareMultiplier ?? 1d,
+            IsBlockCandidate = share.IsBlockCandidate,
+            BlockHash = share.BlockHash,
+            IpAddress = share.IpAddress,
+            UserAgent = share.UserAgent,
+            TransactionConfirmationData = share.TransactionConfirmationData,
+            BlockReward = share.BlockReward,
+            BlockType = share.BlockType
+        }, ShareEventType.ShareAccepted);
+
+        if(shareEventQueue != null)
+            shareEventQueue.EnqueueAsync(shareEvent, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        else
+            logger.Warn(() => $"Event pipeline is enabled but no share event queue is registered for external relay share from {share.Source}; event_id={shareEvent.EventId}");
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)

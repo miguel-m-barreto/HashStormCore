@@ -49,6 +49,7 @@ public class BitcoinPayoutHandler : PayoutHandlerBase,
     protected BitcoinPoolConfigExtra extraPoolConfig;
     protected BitcoinDaemonEndpointConfigExtra extraPoolEndpointConfig;
     protected BitcoinPoolPaymentProcessingConfigExtra extraPoolPaymentProcessingConfig;
+    protected const int WalletUnlockSeconds = 5;
 
     private int payoutDecimalPlaces = 4;
     private CoinTemplate coin;
@@ -256,69 +257,55 @@ public class BitcoinPayoutHandler : PayoutHandlerBase,
 
             var didUnlockWallet = false;
 
-            // send command
-            tryTransfer:
-            var result = await rpcClient.ExecuteAsync<string>(logger, BitcoinCommands.SendMany, ct, args);
-
-            if(result.Error == null)
+            try
             {
-                if(didUnlockWallet)
+                // send command
+                tryTransfer:
+                var result = await rpcClient.ExecuteAsync<string>(logger, BitcoinCommands.SendMany, ct, args);
+
+                if(result.Error == null)
                 {
-                    // lock wallet
-                    logger.Info(() => $"[{LogCategory}] Locking wallet");
-                    await rpcClient.ExecuteAsync<JToken>(logger, BitcoinCommands.WalletLock, ct);
+                    // check result
+                    var txId = result.Response;
+
+                    if(string.IsNullOrEmpty(txId))
+                        logger.Error(() => $"[{LogCategory}] {BitcoinCommands.SendMany} did not return a transaction id!");
+                    else
+                        logger.Info(() => $"[{LogCategory}] Payment transaction id: {txId}");
+
+                    await PersistPaymentsAsync(balances, txId);
+
+                    NotifyPayoutSuccess(poolConfig.Id, balances, new[]
+                    {
+                        txId
+                    }, null);
                 }
 
-                // check result
-                var txId = result.Response;
-
-                if(string.IsNullOrEmpty(txId))
-                    logger.Error(() => $"[{LogCategory}] {BitcoinCommands.SendMany} did not return a transaction id!");
                 else
-                    logger.Info(() => $"[{LogCategory}] Payment transaction id: {txId}");
-
-                await PersistPaymentsAsync(balances, txId);
-
-                NotifyPayoutSuccess(poolConfig.Id, balances, new[]
                 {
-                    txId
-                }, null);
-            }
-
-            else
-            {
-                if(result.Error.Code == (int) BitcoinRPCErrorCode.RPC_WALLET_UNLOCK_NEEDED && !didUnlockWallet)
-                {
-                    if(!string.IsNullOrEmpty(extraPoolPaymentProcessingConfig?.WalletPassword))
+                    if(IsWalletUnlockNeeded(result) && !didUnlockWallet)
                     {
-                        logger.Info(() => $"[{LogCategory}] Unlocking wallet");
-
-                        var unlockResult = await rpcClient.ExecuteAsync<JToken>(logger, BitcoinCommands.WalletPassphrase, ct, new[]
-                        {
-                            extraPoolPaymentProcessingConfig.WalletPassword,
-                            (object) 5 // unlock for N seconds
-                        });
-
-                        if(unlockResult.Error == null)
+                        if(await TryUnlockWalletAsync(ct))
                         {
                             didUnlockWallet = true;
                             goto tryTransfer;
                         }
 
-                        else
-                            logger.Error(() => $"[{LogCategory}] {BitcoinCommands.WalletPassphrase} returned error: {result.Error.Message} code {result.Error.Code}");
+                        logger.Error(() => $"[{LogCategory}] Wallet is locked and could not be unlocked. Unable to send funds.");
+                        NotifyPayoutFailure(poolConfig.Id, balances, "Wallet is locked and could not be unlocked. Unable to send funds.", null);
                     }
 
                     else
-                        logger.Error(() => $"[{LogCategory}] Wallet is locked but walletPassword was not configured. Unable to send funds.");
-                }
+                    {
+                        logger.Error(() => $"[{LogCategory}] {BitcoinCommands.SendMany} returned error: {result.Error.Message} code {result.Error.Code}");
 
-                else
-                {
-                    logger.Error(() => $"[{LogCategory}] {BitcoinCommands.SendMany} returned error: {result.Error.Message} code {result.Error.Code}");
-
-                    NotifyPayoutFailure(poolConfig.Id, balances, $"{BitcoinCommands.SendMany} returned error: {result.Error.Message} code {result.Error.Code}", null);
+                        NotifyPayoutFailure(poolConfig.Id, balances, $"{BitcoinCommands.SendMany} returned error: {result.Error.Message} code {result.Error.Code}", null);
+                    }
                 }
+            }
+            finally
+            {
+                await LockWalletIfUnlockedAsync(didUnlockWallet, ct);
             }
         }
 
@@ -327,13 +314,7 @@ public class BitcoinPayoutHandler : PayoutHandlerBase,
             var txFailures = new List<Tuple<KeyValuePair<string, decimal>, Exception>>();
             var successBalances = new Dictionary<Balance, string>();
 
-            var parallelOptions = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = 8,
-                CancellationToken = ct
-            };
-
-            await Parallel.ForEachAsync(amounts, parallelOptions, async (x, _ct) =>
+            foreach(var x in amounts)
             {
                 var (address, amount) = x;
 
@@ -344,34 +325,59 @@ public class BitcoinPayoutHandler : PayoutHandlerBase,
 
                     logger.Info(()=> $"[{LogCategory}] [{transferId}] Sending {FormatAmount(amount)} to {address}");
 
-                    var result = await rpcClient.ExecuteAsync<string>(logger, BitcoinCommands.SendToAddress, ct, new object[]
+                    var args = new object[]
                     {
                         address,
                         amount,
-                    });
+                    };
 
-                    // check result
-                    var txId = result.Response;
+                    var didUnlockWallet = false;
 
-                    if(result.Error != null)
-                        throw new Exception($"[{transferId}] {BitcoinCommands.SendToAddress} returned error: {result.Error.Message} code {result.Error.Code}");
-
-                    if(string.IsNullOrEmpty(txId))
-                        throw new Exception($"[{transferId}] {BitcoinCommands.SendToAddress} did not return a transaction id!");
-                    else
-                        logger.Info(() => $"[{LogCategory}] [{transferId}] Payment transaction id: {txId}");
-
-                    successBalances.Add(new Balance
+                    try
                     {
-                        PoolId = poolConfig.Id,
-                        Address = address,
-                        Amount = amount,
-                    }, txId);
+                        tryTransfer:
+                        var result = await rpcClient.ExecuteAsync<string>(logger, BitcoinCommands.SendToAddress, ct, args);
+
+                        // check result
+                        var txId = result.Response;
+
+                        if(result.Error != null)
+                        {
+                            if(IsWalletUnlockNeeded(result) && !didUnlockWallet)
+                            {
+                                if(await TryUnlockWalletAsync(ct))
+                                {
+                                    didUnlockWallet = true;
+                                    goto tryTransfer;
+                                }
+
+                                throw new Exception($"[{transferId}] Wallet is locked and could not be unlocked. Unable to send funds.");
+                            }
+
+                            throw new Exception($"[{transferId}] {BitcoinCommands.SendToAddress} returned error: {result.Error.Message} code {result.Error.Code}");
+                        }
+
+                        if(string.IsNullOrEmpty(txId))
+                            throw new Exception($"[{transferId}] {BitcoinCommands.SendToAddress} did not return a transaction id!");
+                        else
+                            logger.Info(() => $"[{LogCategory}] [{transferId}] Payment transaction id: {txId}");
+
+                        successBalances.Add(new Balance
+                        {
+                            PoolId = poolConfig.Id,
+                            Address = address,
+                            Amount = amount,
+                        }, txId);
+                    }
+                    finally
+                    {
+                        await LockWalletIfUnlockedAsync(didUnlockWallet, ct);
+                    }
                 }, ex =>
                 {
                     txFailures.Add(Tuple.Create(x, ex));
                 });
-            });
+            }
 
             if(successBalances.Any())
             {
@@ -395,6 +401,43 @@ public class BitcoinPayoutHandler : PayoutHandlerBase,
     public double AdjustBlockEffort(double effort)
     {
         return effort;
+    }
+
+    protected bool IsWalletUnlockNeeded<T>(RpcResponse<T> response)
+    {
+        return response.Error?.Code == (int) BitcoinRPCErrorCode.RPC_WALLET_UNLOCK_NEEDED;
+    }
+
+    protected async Task<bool> TryUnlockWalletAsync(CancellationToken ct)
+    {
+        if(string.IsNullOrEmpty(extraPoolPaymentProcessingConfig?.WalletPassword))
+        {
+            logger.Error(() => $"[{LogCategory}] Wallet is locked but walletPassword was not configured. Unable to send funds.");
+            return false;
+        }
+
+        logger.Info(() => $"[{LogCategory}] Unlocking wallet");
+
+        var unlockResult = await rpcClient.ExecuteAsync<JToken>(logger, BitcoinCommands.WalletPassphrase, ct, new[]
+        {
+            extraPoolPaymentProcessingConfig.WalletPassword,
+            (object) WalletUnlockSeconds
+        });
+
+        if(unlockResult.Error == null)
+            return true;
+
+        logger.Error(() => $"[{LogCategory}] {BitcoinCommands.WalletPassphrase} returned error: {unlockResult.Error.Message} code {unlockResult.Error.Code}");
+        return false;
+    }
+
+    protected async Task LockWalletIfUnlockedAsync(bool didUnlockWallet, CancellationToken ct)
+    {
+        if(!didUnlockWallet)
+            return;
+
+        logger.Info(() => $"[{LogCategory}] Locking wallet");
+        await rpcClient.ExecuteAsync<JToken>(logger, BitcoinCommands.WalletLock, ct);
     }
 
     #endregion // IPayoutHandler

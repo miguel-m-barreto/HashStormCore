@@ -49,6 +49,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\HashStormCore\HashStormCore.csproj" />
+    <ProjectReference Include="..\HashStormCore.Contracts\HashStormCore.Contracts.csproj" />
+    <ProjectReference Include="..\HashStormCore.DbWriter\HashStormCore.DbWriter.csproj" />
+    <ProjectReference Include="..\HashStormCore.Eventing\HashStormCore.Eventing.csproj" />
+    <ProjectReference Include="..\HashStormCore.LiveAggregator\HashStormCore.LiveAggregator.csproj" />
   </ItemGroup>
 
   <ItemGroup>

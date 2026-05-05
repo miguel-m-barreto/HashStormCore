@@ -1,0 +1,53 @@
+{
+  "eventPipeline": {
+    "enabled": true,
+    "broker": {
+      "type": "redis-streams",
+      "connectionString": "localhost:6379,abortConnect=false",
+      "streamName": "hashstorm:share-events",
+      "producerId": "node-a",
+      "startupRequired": false,
+      "publishRetryDelayMs": 250,
+      "publishMaxRetryDelayMs": 5000,
+      "pendingMinIdleMs": 60000
+    },
+    "handoff": {
+      "softMaxBufferedEvents": 100000,
+      "softMaxBufferedBytes": 268435456,
+      "criticalBufferedEvents": 500000,
+      "criticalBufferedBytes": 1073741824
+    },
+    "outbox": {
+      "directory": "data/event-outbox",
+      "segmentMaxBytes": 67108864,
+      "writerFlushEvents": 256,
+      "writerFlushBytes": 524288,
+      "writerFlushMs": 100,
+      "fsyncMode": "periodic",
+      "fsyncIntervalMs": 1000,
+      "softBacklogBytes": 1073741824,
+      "criticalBacklogBytes": 10737418240
+    },
+    "batching": {
+      "maxEvents": 256,
+      "maxApproxBytes": 524288,
+      "maxDelayMs": 1000
+    },
+    "live": {
+      "windowSeconds": 600,
+      "redisTtlSeconds": 900,
+      "bucketSeconds": 10
+    },
+    "retention": {
+      "softStreamLengthWarning": 1000000,
+      "criticalStreamLengthWarning": 10000000
+    }
+  },
+  "poolCore": {
+    "publicApiEnabled": false,
+    "liveStateEnabled": false
+  },
+  "shareReceiver": {
+    "maxQueueSize": 10000
+  }
+}

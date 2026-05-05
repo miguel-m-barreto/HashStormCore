@@ -1,8 +1,10 @@
 using System;
 using System.Buffers;
+using System.IO;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks.Dataflow;
 using System.Threading.Tasks;
 using Autofac;
 using Microsoft.IO;
@@ -101,6 +103,17 @@ public class StratumConnectionTests : TestBase
             new ReadOnlySequence<byte>(Encoding.UTF8.GetBytes(requestString))));
 
         Assert.Equal(callCount, 1);
+    }
+
+    [Fact]
+    public async Task RespondAsync_Throws_When_SendQueue_DoesNotAccept_Message()
+    {
+        var connection = new StratumConnection(logger, rmsm, clock, ConnectionId, false);
+        var wrapper = new PrivateObject(connection);
+        var sendQueue = (IDataflowBlock) wrapper.GetField("sendQueue");
+        sendQueue.Complete();
+
+        await Assert.ThrowsAsync<IOException>(() => connection.RespondAsync(true, 1));
     }
 
     // [Fact]

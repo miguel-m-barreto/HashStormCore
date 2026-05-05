@@ -376,7 +376,11 @@ public class ShareRecorder : BackgroundService
         .ObserveOn(TaskPoolScheduler.Default)
         .Where(x => x != null)
         // HOT PATH: live stats update on share accepted (already protected inside TrackLiveShare)
-        .Do(TrackLiveShare)
+        .Do(share =>
+        {
+            if(clusterConfig.PoolCore?.LiveStateEnabled != false)
+                TrackLiveShare(share);
+        })
         // Batch for DB / blocks / recovery
         .Buffer(TimeSpan.FromSeconds(5), 250)
         .Where(shares => shares.Any())

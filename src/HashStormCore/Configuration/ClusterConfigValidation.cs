@@ -209,6 +209,14 @@ public class ClusterConfigValidator : AbstractValidator<ClusterConfig>
             .When(x => x.InstanceId.HasValue)
             .WithMessage("instanceId must either be omitted or be non-zero");;
 
+        RuleFor(j => j)
+            .Custom((config, ctx) =>
+            {
+                if(config.EventPipeline?.Enabled == true &&
+                   !string.Equals(config.EventPipeline.Broker?.Type, "redis-streams", StringComparison.OrdinalIgnoreCase))
+                    ctx.AddFailure("eventPipeline.enabled=true requires supported eventPipeline.broker.type 'redis-streams'");
+            });
+
         // ensure pool ids are unique
         RuleFor(j => j.Pools)
             .Must((pc, pools, ctx) =>

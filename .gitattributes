@@ -1,128 +1,105 @@
-* text=auto
+# Normalize text files to LF by default.
+* text=auto eol=lf
 
 ###### Git
-.gitattributes text
-.gitignore text
-.gitconfig text
-.gitmodules text
+.gitattributes text eol=lf
+.gitignore text eol=lf
+.gitconfig text eol=lf
+.gitmodules text eol=lf
 
-##### Windows
+##### Windows command files
 *.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=lf
+
+##### Linux / shell
+*.sh text eol=lf
+
+##### .NET / project files
+*.sln text eol=lf
+*.csproj text eol=lf
+*.vbproj text eol=lf
+*.fsproj text eol=lf
+*.props text eol=lf
+*.targets text eol=lf
+*.resx text eol=lf
+*.settings text eol=lf
+*.cs text eol=lf
+*.vb text eol=lf
+*.fs text eol=lf
+
+##### Native source/build files
+*.c text eol=lf
+*.cc text eol=lf
+*.cpp text eol=lf
+*.cxx text eol=lf
+*.h text eol=lf
+*.hh text eol=lf
+*.hpp text eol=lf
+*.hxx text eol=lf
+Makefile text eol=lf
+makefile text eol=lf
+*.mk text eol=lf
+CMakeLists.txt text eol=lf
+
+##### Config / docs / web text
+*.sql text eol=lf
+*.md text eol=lf
+*.markdown text eol=lf
+*.adoc text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.xml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.config text eol=lf
+*.conf text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+*.cnf text eol=lf
+*.properties text eol=lf
+*.csv text eol=lf
+*.tsv text eol=lf
+*.css text eol=lf
+*.scss text eol=lf
+*.html text eol=lf
+*.htm text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.svg text eol=lf
+Dockerfile text eol=lf
+*.dockerignore text eol=lf
+.editorconfig text eol=lf
+
+##### Common named text files
+AUTHORS text eol=lf
+CHANGELOG text eol=lf
+CHANGES text eol=lf
+CONTRIBUTING text eol=lf
+COPYING text eol=lf
+INSTALL text eol=lf
+LICENSE text eol=lf
+NEWS text eol=lf
+README text eol=lf
+TODO text eol=lf
+*README* text eol=lf
+*COPYRIGHT* text eol=lf
+
+##### Binary files
 *.exe binary
 *.dll binary
-
-##### Linux
-*.sh text eol=lf
 *.so binary
+*.dylib binary
+*.a binary
+*.lib binary
+*.obj binary
+*.o binary
+*.pdb binary
+*.pyc binary
 
-##### Global
-# Documents
-*.sql text
-*.md text
-*.adoc text
-*.textile text
-*.mustache text
-*.csv text
-*.tab text
-*.tsv text
-*.coffee text
-*.css text
-*.htm text
-*.html text
-*.xhtml text
-*.inc text
-*.js text
-*.jsx text
-*.less text
-*.od text
-*.onlydata text
-*.sass text
-*.scm text
-*.log text
-*.properties text
-*.scss text
-*.styl text
-*.tag text
-*.ts text
-*.tsx text
-*.dockerignore text
-Dockerfile text
-*.markdown text
-*.mdwn text
-*.mdown text
-*.mkd text
-*.mkdn text
-*.mdtxt text
-*.mdtext text
-*.txt text
-AUTHORS text
-CHANGELOG text
-CHANGES text
-CONTRIBUTING text
-COPYING text
-copyright text
-*COPYRIGHT* text
-INSTALL text
-license text
-LICENSE text
-NEWS text
-readme text
-*README* text
-TODO text
-# Configuration
-*.cnf text
-*.cfg text
-*.conf text
-*.config text
-*.ini text
-*.json text
-*.xml text
-*.bowerrc text
-.browserslistrc text
-.editorconfig text
-*.npmignore text
-*.yaml text
-*.yml text
-browserslist text
-Makefile text
-makefile text
-Procfile text
-.slugignore text
-# Linters
-.csslintrc text
-.eslintrc text
-.htmlhintrc text
-.jscsrc text
-.jshintrc text
-.jshintignore text
-.stylelintrc text
-# Video
-*.3gpp binary
-*.3gp binary
-*.as binary
-*.asf binary
-*.asx binary
-*.fla binary
-*.flv binary
-*.m4v binary
-*.mng binary
-*.mov binary
-*.mp4 binary
-*.mpeg binary
-*.mpg binary
-*.ogv binary
-*.swc binary
-*.swf binary
-*.webm binary
-# Audio
-*.kar binary
-*.m4a binary
-*.mid binary
-*.midi binary
-*.mp3 binary
-*.ogg binary
-*.ra binary
-# Graphics
+##### Images / graphics
 *.png binary
 *.jpg binary
 *.jpeg binary
@@ -133,60 +110,33 @@ Procfile text
 *.eps binary
 *.ai binary
 *.bmp binary
-*.jng binary
-*.jp2 binary
-*.jpx binary
-*.jxr binary
-*.pdf binary
-*.psb binary
-*.psd binary
-*.svg text
-*.svgz binary
-*.wbmp binary
 *.webp binary
-# Archives
+*.psd binary
+*.pdf binary
+*.svgz binary
+
+##### Archives/packages
 *.7z binary
 *.gz binary
 *.jar binary
 *.rar binary
 *.tar binary
 *.zip binary
-# Fonts
+*.nupkg binary
+
+##### Fonts
 *.ttf binary
 *.eot binary
 *.otf binary
 *.woff binary
 *.woff2 binary
-# Executables
-*.pyc binary
-# Objects
-*.o binary
 
-##### IDE/Editor
-# Visual Studio
-*.sln text eol=crlf
-*.csproj text eol=crlf
-*.vbproj text eol=crlf
-*.vcxproj text eol=crlf
-*.vcproj text eol=crlf
-*.dbproj text eol=crlf
-*.fsproj text eol=crlf
-*.lsproj text eol=crlf
-*.wixproj text eol=crlf
-*.modelproj text eol=crlf
-*.sqlproj text eol=crlf
-*.wmaproj text eol=crlf
-*.xproj text eol=crlf
-*.props text eol=crlf
-*.filters text eol=crlf
-*.vcxitems text eol=crlf
-
-##### Language
-# .Net
-*.resx text
-*.settings text
-*.cs text
-*.vb text
-*.cpp text
-*.h text
-*.fs text
+##### Audio/video
+*.mp3 binary
+*.ogg binary
+*.m4a binary
+*.mp4 binary
+*.mov binary
+*.webm binary
+*.avi binary
+*.mkv binary

@@ -1,0 +1,186 @@
+{
+  "logging": {
+    "level": "info",
+    "enableConsoleLog": true,
+    "enableConsoleColors": true,
+    "logFile": "core.log",
+    "apiLogFile": "api.log",
+    "logBaseDirectory": "logs",
+    "perPoolLogFile": true
+  },
+  "banning": {
+    "manager": "Integrated",
+    "banOnJunkReceive": true,
+    "banOnInvalidShares": false
+  },
+  "notifications": {
+    "enabled": false
+  },
+  "persistence": {
+    "postgres": {
+      "host": "127.0.0.1",
+      "port": 5432,
+      "user": "hashstorm",
+      "password": "YOUR_DB_PASSWORD",
+      "database": "hashstorm"
+    }
+  },
+  "paymentProcessing": {
+    "enabled": true,
+    "interval": 600,
+    "coinbaseString": "HashStorm"
+  },
+  "shareRecoveryFile": "recovered-shares.txt",
+  "api": {
+    "enabled": true,
+    "listenAddress": "127.0.0.1",
+    "port": 4000,
+    "metricsIpWhitelist": [],
+    "rateLimiting": {
+      "disabled": false,
+      "rules": [
+        {
+          "endpoint": "*",
+          "period": "1s",
+          "limit": 5
+        }
+      ],
+      "ipWhitelist": []
+    }
+  },
+  "poolCore": {
+    "publicApiEnabled": true,
+    "liveStateEnabled": true
+  },
+  "eventPipeline": {
+    "enabled": false
+  },
+  "shareReceiver": {
+    "maxQueueSize": 10000
+  },
+  "pools": [
+    {
+      "id": "btcz_solo",
+      "enabled": true,
+      "coin": "bitcoinz",
+      "address": "YOUR_BTCZ_T_ADDRESS",
+      "z-address": "YOUR_BTCZ_Z_ADDRESS",
+      "rewardRecipients": [
+        {
+          "address": "YOUR_FEE_T_ADDRESS_1",
+          "percentage": 0.25
+        },
+        {
+          "address": "YOUR_FEE_T_ADDRESS_2",
+          "percentage": 0.15
+        },
+        {
+          "address": "YOUR_FEE_T_ADDRESS_3",
+          "percentage": 0.1
+        }
+      ],
+      "blockRefreshInterval": 0,
+      "jobRebroadcastTimeout": 25,
+      "clientConnectionTimeout": 1800,
+      "banning": {
+        "enabled": true,
+        "time": 600,
+        "invalidPercent": 75,
+        "checkThreshold": 50
+      },
+      "ports": {
+        "3053": {
+          "listenAddress": "0.0.0.0",
+          "difficulty": 2,
+          "tls": false,
+          "varDiff": {
+            "minDiff": 1.0,
+            "maxDiff": 65536,
+            "targetTime": 25,
+            "retargetTime": 50,
+            "variancePercent": 25,
+            "maxDelta": 600
+          }
+        }
+      },
+      "daemons": [
+        {
+          "host": "YOUR_NODE_IP",
+          "port": 9050,
+          "user": "YOUR_NODE_USER",
+          "password": "YOUR_NODE_PASSWORD",
+          "zmqBlockNotifySocket": "tcp://YOUR_NODE_IP:YOUR_NODE_ZMQ_PORT"
+        }
+      ],
+      "paymentProcessing": {
+        "enabled": true,
+        "minimumPayment": 650,
+        "payoutScheme": "SOLO",
+        "walletPassword": "YOUR_WALLET_PASSPHRASE"
+      }
+    },
+    {
+      "id": "btcz_pplns",
+      "enabled": true,
+      "coin": "bitcoinz",
+      "address": "YOUR_BTCZ_T_ADDRESS",
+      "z-address": "YOUR_BTCZ_Z_ADDRESS",
+      "rewardRecipients": [
+        {
+          "address": "YOUR_FEE_T_ADDRESS_1",
+          "percentage": 0.25
+        },
+        {
+          "address": "YOUR_FEE_T_ADDRESS_2",
+          "percentage": 0.15
+        },
+        {
+          "address": "YOUR_FEE_T_ADDRESS_3",
+          "percentage": 0.1
+        }
+      ],
+      "blockRefreshInterval": 0,
+      "jobRebroadcastTimeout": 15,
+      "clientConnectionTimeout": 900,
+      "banning": {
+        "enabled": true,
+        "time": 600,
+        "invalidPercent": 75,
+        "checkThreshold": 50
+      },
+      "ports": {
+        "3052": {
+          "listenAddress": "0.0.0.0",
+          "difficulty": 1,
+          "tls": false,
+          "varDiff": {
+            "minDiff": 0.25,
+            "maxDiff": 16384,
+            "targetTime": 30,
+            "retargetTime": 60,
+            "variancePercent": 25,
+            "maxDelta": 300
+          }
+        }
+      },
+      "daemons": [
+        {
+          "host": "YOUR_NODE_IP",
+          "port": 9050,
+          "user": "YOUR_NODE_USER",
+          "password": "YOUR_NODE_PASSWORD",
+          "zmqBlockNotifySocket": "tcp://YOUR_NODE_IP:YOUR_NODE_ZMQ_PORT"
+        }
+      ],
+      "paymentProcessing": {
+        "enabled": true,
+        "minimumPayment": 650,
+        "payoutScheme": "PPLNS",
+        "walletPassword": "YOUR_WALLET_PASSPHRASE",
+        "payoutSchemeConfig": {
+          "factor": 2.0
+        }
+      }
+    }
+  ]
+}

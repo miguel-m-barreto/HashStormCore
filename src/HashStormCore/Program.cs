@@ -40,6 +40,7 @@ using HashStormCore.Crypto.Hashing.Progpow.ProgpowZ;
 using HashStormCore.Crypto.Hashing.Progpow.Sccpow;
 using HashStormCore.Mappings;
 using HashStormCore.Extensions;
+using HashStormCore.Eventing.Outbox;
 using HashStormCore.Messaging;
 using HashStormCore.Mining;
 using HashStormCore.Native;
@@ -91,30 +92,37 @@ public class Program : BackgroundService
                 return;
             }
 
-            if (dumpConfigOption.HasValue())
-            {
-                DumpParsedConfig(clusterConfig);
-                return;
-            }
-
             if (generateSchemaOption.HasValue())
             {
                 GenerateJsonConfigSchema();
                 return;
             }
 
-            if (!configFileOption.HasValue())
+            var configFile = ResolveConfigFile();
+            if (string.IsNullOrEmpty(configFile))
             {
                 app.ShowHelp();
+                Console.Error.WriteLine();
+                Console.Error.WriteLine("No configuration file was provided and no default configs/config.json was found.");
+                Console.Error.WriteLine("Pass one with -c|--config, set HASHSTORM_CONFIG, or place configs/config.json in one of:");
+                foreach (var path in GetDefaultConfigFileCandidates())
+                    Console.Error.WriteLine($"  {path}");
+
                 return;
             }
 
             Logo();
 
             isShareRecoveryMode = shareRecoveryOption.HasValue();
-            clusterConfig = ReadConfig(configFileOption.Value());
+            clusterConfig = ReadConfig(configFile);
 
             ValidateConfig();
+
+            if (dumpConfigOption.HasValue())
+            {
+                DumpParsedConfig(clusterConfig);
+                return;
+            }
 
             ConfigureLogging();
             LogRuntimeInfo();
@@ -143,7 +151,11 @@ public class Program : BackgroundService
                     services.AddHostedService<Program>();
                 });
 
-            if (clusterConfig.Api == null || clusterConfig.Api.Enabled)
+            var poolCorePublicApiEnabled = clusterConfig.EventPipeline?.Enabled == true
+                ? clusterConfig.PoolCore?.PublicApiEnabled == true
+                : clusterConfig.Api == null || clusterConfig.Api.Enabled;
+
+            if (poolCorePublicApiEnabled)
             {
                 var address = clusterConfig.Api?.ListenAddress != null
                     ? (clusterConfig.Api.ListenAddress != "*" ? IPAddress.Parse(clusterConfig.Api.ListenAddress) : IPAddress.Any)
@@ -301,7 +313,20 @@ public class Program : BackgroundService
         services.AddHostedService<BtStreamReceiver>();
 
         // Share processing
-        if (clusterConfig.ShareRelay == null)
+        if (clusterConfig.EventPipeline?.Enabled == true)
+        {
+            if (clusterConfig.ShareRelay != null)
+                throw new PoolStartupException("shareRelay and eventPipeline.enabled=true cannot be combined yet. Redis Streams replaces local direct persistence, but ZMQ ShareRelay publishing is not wired to the event outbox path.");
+
+            services.AddHostedService<ShareEventOutboxWriter>();
+            services.AddHostedService<ShareEventOutboxPublisher>();
+
+            if (clusterConfig.ShareRelays != null)
+                services.AddHostedService<ShareReceiver>();
+
+            logger.Info("Event pipeline is enabled; Pool Core direct share persistence/live-state recorder is disabled");
+        }
+        else if (clusterConfig.ShareRelay == null)
         {
             services.AddHostedService<ShareRecorder>();
             services.AddHostedService<ShareReceiver>();
@@ -311,7 +336,11 @@ public class Program : BackgroundService
             services.AddHostedService<ShareRelay>();
 
         // API
-        if (clusterConfig.Api == null || clusterConfig.Api.Enabled)
+        var poolCorePublicApiEnabled = clusterConfig.EventPipeline?.Enabled == true
+            ? clusterConfig.PoolCore?.PublicApiEnabled == true
+            : clusterConfig.Api == null || clusterConfig.Api.Enabled;
+
+        if (poolCorePublicApiEnabled)
             services.AddHostedService<MetricsPublisher>();
 
         // Payment processing
@@ -552,7 +581,7 @@ public class Program : BackgroundService
         };
 
         versionOption = app.Option("-v|--version", "Version Information", CommandOptionType.NoValue);
-        configFileOption = app.Option("-c|--config <configfile>", "Configuration File", CommandOptionType.SingleValue);
+        configFileOption = app.Option("-c|--config <configfile>", "Configuration File. Defaults to HASHSTORM_CONFIG or configs/config.json when omitted.", CommandOptionType.SingleValue);
         dumpConfigOption = app.Option("-dc|--dumpconfig", "Dump the configuration (useful for trouble-shooting typos in the config file)", CommandOptionType.NoValue);
         shareRecoveryOption = app.Option("-rs", "Import lost shares using existing recovery file", CommandOptionType.SingleValue);
         generateSchemaOption = app.Option("-gcs|--generate-config-schema <outputfile>", "Generate JSON schema from configuration options", CommandOptionType.SingleValue);
@@ -561,6 +590,55 @@ public class Program : BackgroundService
         app.Execute(args);
 
         return app;
+    }
+
+    private static string ResolveConfigFile()
+    {
+        if (configFileOption.HasValue())
+            return configFileOption.Value();
+
+        var envConfig = Environment.GetEnvironmentVariable("HASHSTORM_CONFIG");
+        if (!string.IsNullOrWhiteSpace(envConfig))
+            return envConfig;
+
+        return GetDefaultConfigFileCandidates().FirstOrDefault(File.Exists);
+    }
+
+    private static IEnumerable<string> GetDefaultConfigFileCandidates()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in EnumerateDefaultConfigFileCandidates())
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+
+            var fullPath = Path.GetFullPath(path);
+            if (seen.Add(fullPath))
+                yield return fullPath;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateDefaultConfigFileCandidates()
+    {
+        yield return Path.Combine(Environment.CurrentDirectory, "configs", "config.json");
+        yield return Path.Combine(Environment.CurrentDirectory, "config.json");
+
+        var basePath = AppContext.BaseDirectory;
+        yield return Path.Combine(basePath, "configs", "config.json");
+        yield return Path.Combine(basePath, "config.json");
+
+        // dotnet run: src/HashStormCore/bin/<Configuration>/<TFM>/ -> src/HashStormCore/configs/config.json
+        yield return Path.Combine(basePath, "..", "..", "..", "configs", "config.json");
+
+        // dotnet run: src/HashStormCore/bin/<Configuration>/<TFM>/ -> src/HashStormCore/config.json
+        yield return Path.Combine(basePath, "..", "..", "..", "config.json");
+
+        // Published or custom output from repo root: <output>/ -> src/HashStormCore/configs/config.json
+        yield return Path.Combine(Environment.CurrentDirectory, "src", "HashStormCore", "configs", "config.json");
+
+        // Published or custom output from repo root: <output>/ -> src/HashStormCore/config.json
+        yield return Path.Combine(Environment.CurrentDirectory, "src", "HashStormCore", "config.json");
     }
 
     private static ClusterConfig ReadConfig(string file)

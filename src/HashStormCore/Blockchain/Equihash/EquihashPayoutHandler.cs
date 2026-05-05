@@ -119,18 +119,11 @@ public class EquihashPayoutHandler : BitcoinPayoutHandler
             await PayoutSendCurrencyAsync(pool, balances, ct);
         else
             await PayoutZSendManyAsync(pool, balances, ct);
-
-        // lock wallet
-        logger.Info(() => $"[{LogCategory}] Locking wallet");
-
-        await rpcClient.ExecuteAsync<JToken>(logger, BitcoinCommands.WalletLock, ct);
     }
 
     private async Task PayoutZSendManyAsync(IMiningPool pool, Balance[] balances, CancellationToken ct)
     {
         Contract.RequiresNonNull(balances);
-
-        var coin = poolConfig.Template.As<CoinTemplate>();
 
         // Shield first
         if(supportsNativeShielding)
@@ -187,123 +180,109 @@ public class EquihashPayoutHandler : BitcoinPayoutHandler
                 ? new object[] { poolExtraConfig.ZAddress, amounts, ZMinConfirmations, TransferFee, PrivacyPolicy }
                 : new object[] { poolExtraConfig.ZAddress, amounts, ZMinConfirmations, TransferFee };
 
-        // send command
-        tryTransfer:
-            var response = await rpcClient.ExecuteAsync<string>(logger, EquihashCommands.ZSendMany, ct, args);
-
-            if(response.Error == null)
+            try
             {
-                var operationId = response.Response;
+                // send command
+                tryTransfer:
+                var response = await rpcClient.ExecuteAsync<string>(logger, EquihashCommands.ZSendMany, ct, args);
 
-                if(string.IsNullOrEmpty(operationId))
-                    logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} did not return an operation id!");
-                else
+                if(response.Error == null)
                 {
-                    logger.Info(() => $"[{LogCategory}] Tracking payment operation id: {operationId}");
+                    var operationId = response.Response;
 
-                    var continueWaiting = true;
-
-                    while(continueWaiting)
+                    if(string.IsNullOrEmpty(operationId))
+                        logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} did not return an operation id!");
+                    else
                     {
-                        var operationResultResponse = await rpcClient.ExecuteAsync<ZCashAsyncOperationStatus[]>(logger,
-                            EquihashCommands.ZGetOperationResult, ct, new object[] { new object[] { operationId } });
+                        logger.Info(() => $"[{LogCategory}] Tracking payment operation id: {operationId}");
 
-                        if(operationResultResponse.Error == null &&
-                           operationResultResponse.Response?.Any(x => x.OperationId == operationId) == true)
+                        var continueWaiting = true;
+
+                        while(continueWaiting)
                         {
-                            var operationResult = operationResultResponse.Response.First(x => x.OperationId == operationId);
+                            var operationResultResponse = await rpcClient.ExecuteAsync<ZCashAsyncOperationStatus[]>(logger,
+                                EquihashCommands.ZGetOperationResult, ct, new object[] { new object[] { operationId } });
 
-                            if(!Enum.TryParse(operationResult.Status, true, out ZOperationStatus status))
+                            if(operationResultResponse.Error == null &&
+                               operationResultResponse.Response?.Any(x => x.OperationId == operationId) == true)
                             {
-                                logger.Error(() => $"Unrecognized operation status: {operationResult.Status}");
-                                break;
+                                var operationResult = operationResultResponse.Response.First(x => x.OperationId == operationId);
+
+                                if(!Enum.TryParse(operationResult.Status, true, out ZOperationStatus status))
+                                {
+                                    logger.Error(() => $"Unrecognized operation status: {operationResult.Status}");
+                                    break;
+                                }
+
+                                switch(status)
+                                {
+                                    case ZOperationStatus.Success:
+                                        var txId = operationResult.Result?.Value<string>("txid") ?? string.Empty;
+                                        logger.Info(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} completed with transaction id: {txId}");
+
+                                        await PersistPaymentsAsync(page, txId);
+                                        NotifyPayoutSuccess(poolConfig.Id, page, new[] { txId }, null);
+
+                                        continueWaiting = false;
+                                        continue;
+
+                                    case ZOperationStatus.Cancelled:
+                                    case ZOperationStatus.Failed:
+                                        logger.Error(() => $"{EquihashCommands.ZSendMany} failed: {operationResult.Error.Message} code {operationResult.Error.Code}");
+                                        NotifyPayoutFailure(poolConfig.Id, page, $"{EquihashCommands.ZSendMany} failed: {operationResult.Error.Message} code {operationResult.Error.Code}", null);
+
+                                        continueWaiting = false;
+                                        continue;
+                                }
                             }
 
-                            switch(status)
-                            {
-                                case ZOperationStatus.Success:
-                                    var txId = operationResult.Result?.Value<string>("txid") ?? string.Empty;
-                                    logger.Info(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} completed with transaction id: {txId}");
-
-                                    await PersistPaymentsAsync(page, txId);
-                                    NotifyPayoutSuccess(poolConfig.Id, page, new[] { txId }, null);
-
-                                    continueWaiting = false;
-                                    continue;
-
-                                case ZOperationStatus.Cancelled:
-                                case ZOperationStatus.Failed:
-                                    logger.Error(() => $"{EquihashCommands.ZSendMany} failed: {operationResult.Error.Message} code {operationResult.Error.Code}");
-                                    NotifyPayoutFailure(poolConfig.Id, page, $"{EquihashCommands.ZSendMany} failed: {operationResult.Error.Message} code {operationResult.Error.Code}", null);
-
-                                    continueWaiting = false;
-                                    continue;
-                            }
+                            logger.Info(() => $"[{LogCategory}] Waiting for completion: {operationId}");
+                            await Task.Delay(TimeSpan.FromSeconds(10), ct);
                         }
-
-                        logger.Info(() => $"[{LogCategory}] Waiting for completion: {operationId}");
-                        await Task.Delay(TimeSpan.FromSeconds(10), ct);
                     }
                 }
-            }
-            else
-            {
-                // Wallet locked? Try to unlock once if password is configured
-                if(response.Error.Code == (int) BitcoinRPCErrorCode.RPC_WALLET_UNLOCK_NEEDED && !didUnlockWallet)
+                else
                 {
-                    if(!string.IsNullOrEmpty(extraPoolPaymentProcessingConfig?.WalletPassword))
+                    // Wallet locked? Try to unlock once if password is configured
+                    if(IsWalletUnlockNeeded(response) && !didUnlockWallet)
                     {
-                        logger.Info(() => $"[{LogCategory}] Unlocking wallet");
-
-                        var unlockResponse = await rpcClient.ExecuteAsync<JToken>(logger, BitcoinCommands.WalletPassphrase, ct, new[]
-                        {
-                        extraPoolPaymentProcessingConfig.WalletPassword,
-                        (object)5
-                    });
-
-                        if(unlockResponse.Error == null)
+                        if(await TryUnlockWalletAsync(ct))
                         {
                             didUnlockWallet = true;
                             goto tryTransfer;
                         }
 
-                        logger.Error(() => $"[{LogCategory}] {BitcoinCommands.WalletPassphrase} returned error: {response.Error.Message} code {response.Error.Code}");
-                        NotifyPayoutFailure(poolConfig.Id, page, $"{BitcoinCommands.WalletPassphrase} returned error: {response.Error.Message} code {response.Error.Code}", null);
+                        NotifyPayoutFailure(poolConfig.Id, page, "Wallet is locked and could not be unlocked. Unable to send funds.", null);
+                        break;
                     }
-                    else
+
+                    // Specific handling: -4 "Missing witness for Sapling note"
+                    if(response.Error.Code == -4 && response.Error.Message?.IndexOf("Missing witness", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        logger.Error(() => $"[{LogCategory}] Wallet is locked but walletPassword was not configured. Unable to send funds.");
-                        NotifyPayoutFailure(poolConfig.Id, page, "Wallet is locked but walletPassword was not configured. Unable to send funds.", null);
+                        logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} failed with 'Missing witness for Sapling note' (code -4). " +
+                                           $"Action needed on daemon: run with -rescan (or -reindex) or re-import Sapling key with rescan from first receive height.");
+                        NotifyPayoutFailure(poolConfig.Id, page, "Wallet missing Sapling witnesses. Please rescan/reindex the daemon.", null);
+                        break;
                     }
 
+                    // Default error
+                    logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} returned error: {response.Error.Message} code {response.Error.Code}");
+                    NotifyPayoutFailure(poolConfig.Id, page, $"{EquihashCommands.ZSendMany} returned error: {response.Error.Message} code {response.Error.Code}", null);
                     break;
                 }
-
-                // Specific handling: -4 "Missing witness for Sapling note"
-                if(response.Error.Code == -4 && response.Error.Message?.IndexOf("Missing witness", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} failed with 'Missing witness for Sapling note' (code -4). " +
-                                       $"Action needed on daemon: run with -rescan (or -reindex) or re-import Sapling key with rescan from first receive height.");
-                    NotifyPayoutFailure(poolConfig.Id, page, "Wallet missing Sapling witnesses. Please rescan/reindex the daemon.", null);
-                    break;
-                }
-
-                // Default error
-                logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} returned error: {response.Error.Message} code {response.Error.Code}");
-                NotifyPayoutFailure(poolConfig.Id, page, $"{EquihashCommands.ZSendMany} returned error: {response.Error.Message} code {response.Error.Code}", null);
-                break;
+            }
+            finally
+            {
+                await LockWalletIfUnlockedAsync(didUnlockWallet, ct);
             }
         }
     }
 
 
 
-
     private async Task PayoutSendCurrencyAsync(IMiningPool pool, Balance[] balances, CancellationToken ct)
     {
         Contract.RequiresNonNull(balances);
-
-        var coin = poolConfig.Template.As<CoinTemplate>();
 
         logger.Info(() => $"[{LogCategory}] Shielding ZCash Coinbase funds is not required");
 
@@ -340,110 +319,92 @@ public class EquihashPayoutHandler : BitcoinPayoutHandler
                 amounts, // addresses and associated amounts
             };
 
-        // send command
-        trySendCurrencyTransfer:
-            var response = await rpcClient.ExecuteAsync<string>(logger, EquihashCommands.SendCurrency, ct, args);
-
-            if(response.Error == null)
+            try
             {
-                var operationId = response.Response;
+                // send command
+            trySendCurrencyTransfer:
+                var response = await rpcClient.ExecuteAsync<string>(logger, EquihashCommands.SendCurrency, ct, args);
 
-                // check result
-                if(string.IsNullOrEmpty(operationId))
-                    logger.Error(() => $"[{LogCategory}] {EquihashCommands.SendCurrency} did not return an operation id!");
-                else
+                if(response.Error == null)
                 {
-                    logger.Info(() => $"[{LogCategory}] Tracking payment operation id: {operationId}");
+                    var operationId = response.Response;
 
-                    var continueWaiting = true;
-
-                    while(continueWaiting)
+                    // check result
+                    if(string.IsNullOrEmpty(operationId))
+                        logger.Error(() => $"[{LogCategory}] {EquihashCommands.SendCurrency} did not return an operation id!");
+                    else
                     {
-                        var operationResultResponse = await rpcClient.ExecuteAsync<ZCashAsyncOperationStatus[]>(logger,
-                            EquihashCommands.ZGetOperationResult, ct, new object[] { new object[] { operationId } });
+                        logger.Info(() => $"[{LogCategory}] Tracking payment operation id: {operationId}");
 
-                        if(operationResultResponse.Error == null &&
-                           operationResultResponse.Response?.Any(x => x.OperationId == operationId) == true)
+                        var continueWaiting = true;
+
+                        while(continueWaiting)
                         {
-                            var operationResult = operationResultResponse.Response.First(x => x.OperationId == operationId);
+                            var operationResultResponse = await rpcClient.ExecuteAsync<ZCashAsyncOperationStatus[]>(logger,
+                                EquihashCommands.ZGetOperationResult, ct, new object[] { new object[] { operationId } });
 
-                            if(!Enum.TryParse(operationResult.Status, true, out ZOperationStatus status))
+                            if(operationResultResponse.Error == null &&
+                               operationResultResponse.Response?.Any(x => x.OperationId == operationId) == true)
                             {
-                                logger.Error(() => $"Unrecognized operation status: {operationResult.Status}");
-                                break;
+                                var operationResult = operationResultResponse.Response.First(x => x.OperationId == operationId);
+
+                                if(!Enum.TryParse(operationResult.Status, true, out ZOperationStatus status))
+                                {
+                                    logger.Error(() => $"Unrecognized operation status: {operationResult.Status}");
+                                    break;
+                                }
+
+                                switch(status)
+                                {
+                                    case ZOperationStatus.Success:
+                                        var txId = operationResult.Result?.Value<string>("txid") ?? string.Empty;
+                                        logger.Info(() => $"[{LogCategory}] {EquihashCommands.SendCurrency} completed with transaction id: {txId}");
+
+                                        await PersistPaymentsAsync(page, txId);
+                                        NotifyPayoutSuccess(poolConfig.Id, page, new[] { txId }, null);
+
+                                        continueWaiting = false;
+                                        continue;
+
+                                    case ZOperationStatus.Cancelled:
+                                    case ZOperationStatus.Failed:
+                                        logger.Error(() => $"{EquihashCommands.SendCurrency} failed: {operationResult.Error.Message} code {operationResult.Error.Code}");
+                                        NotifyPayoutFailure(poolConfig.Id, page, $"{EquihashCommands.SendCurrency} failed: {operationResult.Error.Message} code {operationResult.Error.Code}", null);
+
+                                        continueWaiting = false;
+                                        continue;
+                                }
                             }
 
-                            switch(status)
-                            {
-                                case ZOperationStatus.Success:
-                                    var txId = operationResult.Result?.Value<string>("txid") ?? string.Empty;
-                                    logger.Info(() => $"[{LogCategory}] {EquihashCommands.SendCurrency} completed with transaction id: {txId}");
+                            logger.Info(() => $"[{LogCategory}] Waiting for completion: {operationId}");
 
-                                    await PersistPaymentsAsync(page, txId);
-                                    NotifyPayoutSuccess(poolConfig.Id, page, new[] { txId }, null);
-
-                                    continueWaiting = false;
-                                    continue;
-
-                                case ZOperationStatus.Cancelled:
-                                case ZOperationStatus.Failed:
-                                    logger.Error(() => $"{EquihashCommands.SendCurrency} failed: {operationResult.Error.Message} code {operationResult.Error.Code}");
-                                    NotifyPayoutFailure(poolConfig.Id, page, $"{EquihashCommands.SendCurrency} failed: {operationResult.Error.Message} code {operationResult.Error.Code}", null);
-
-                                    continueWaiting = false;
-                                    continue;
-                            }
+                            await Task.Delay(TimeSpan.FromSeconds(10), ct);
                         }
-
-                        logger.Info(() => $"[{LogCategory}] Waiting for completion: {operationId}");
-
-                        await Task.Delay(TimeSpan.FromSeconds(10), ct);
                     }
                 }
-            }
 
-            else
-            {
-                if(response.Error.Code == (int) BitcoinRPCErrorCode.RPC_WALLET_UNLOCK_NEEDED && !didUnlockWallet)
+                else
                 {
-                    if(!string.IsNullOrEmpty(extraPoolPaymentProcessingConfig?.WalletPassword))
+                    if(IsWalletUnlockNeeded(response) && !didUnlockWallet)
                     {
-                        logger.Info(() => $"[{LogCategory}] Unlocking wallet");
-
-                        var unlockResponse = await rpcClient.ExecuteAsync<JToken>(logger, BitcoinCommands.WalletPassphrase, ct, new[]
-                        {
-                            extraPoolPaymentProcessingConfig.WalletPassword,
-                            (object) 5 // unlock for N seconds
-                        });
-
-                        if(unlockResponse.Error == null)
+                        if(await TryUnlockWalletAsync(ct))
                         {
                             didUnlockWallet = true;
                             goto trySendCurrencyTransfer;
                         }
 
-                        else
-                        {
-                            logger.Error(() => $"[{LogCategory}] {BitcoinCommands.WalletPassphrase} returned error: {response.Error.Message} code {response.Error.Code}");
-                            NotifyPayoutFailure(poolConfig.Id, page, $"{BitcoinCommands.WalletPassphrase} returned error: {response.Error.Message} code {response.Error.Code}", null);
-                            break;
-                        }
-                    }
-
-                    else
-                    {
-                        logger.Error(() => $"[{LogCategory}] Wallet is locked but walletPassword was not configured. Unable to send funds.");
-                        NotifyPayoutFailure(poolConfig.Id, page, "Wallet is locked but walletPassword was not configured. Unable to send funds.", null);
+                        NotifyPayoutFailure(poolConfig.Id, page, "Wallet is locked and could not be unlocked. Unable to send funds.", null);
                         break;
                     }
-                }
 
-                else
-                {
                     logger.Error(() => $"[{LogCategory}] {EquihashCommands.SendCurrency} returned error: {response.Error.Message} code {response.Error.Code}");
 
                     NotifyPayoutFailure(poolConfig.Id, page, $"{EquihashCommands.SendCurrency} returned error: {response.Error.Message} code {response.Error.Code}", null);
                 }
+            }
+            finally
+            {
+                await LockWalletIfUnlockedAsync(didUnlockWallet, ct);
             }
         }
     }
@@ -465,60 +426,81 @@ public class EquihashPayoutHandler : BitcoinPayoutHandler
             poolExtraConfig.ZAddress, // dest:   pool's z-addr
         };
 
-        var response = await rpcClient.ExecuteAsync<ZCashShieldingResponse>(logger, EquihashCommands.ZShieldCoinbase, ct, args);
+        var didUnlockWallet = false;
 
-        if(response.Error != null)
+        try
         {
-            if(response.Error.Code == (int) BitcoinRPCErrorCode.RPC_WALLET_INSUFFICIENT_FUNDS || response.Error.Code == (int) BitcoinRPCErrorCode.RPC_INVALID_PARAMS || response.Error.Code == (int) BitcoinRPCErrorCode.RPC_INVALID_PARAMETER)
-                logger.Info(() => $"[{LogCategory}] No funds to shield: {response.Error.Message} code {response.Error.Code}");
-            else
-                logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZShieldCoinbase} returned an unexpected error: {response.Error.Message} code {response.Error.Code}");
+        tryShield:
+            var response = await rpcClient.ExecuteAsync<ZCashShieldingResponse>(logger, EquihashCommands.ZShieldCoinbase, ct, args);
 
-            return;
-        }
-
-        var operationId = response.Response.OperationId;
-
-        logger.Info(() => $"[{LogCategory}] {EquihashCommands.ZShieldCoinbase} operation id: {operationId}");
-
-        var continueWaiting = true;
-
-        while(continueWaiting)
-        {
-            var operationResultResponse = await rpcClient.ExecuteAsync<ZCashAsyncOperationStatus[]>(logger,
-                EquihashCommands.ZGetOperationResult, ct, new object[] { new object[] { operationId } });
-
-            if(operationResultResponse.Error == null &&
-               operationResultResponse.Response?.Any(x => x.OperationId == operationId) == true)
+            if(response.Error != null)
             {
-                var operationResult = operationResultResponse.Response.First(x => x.OperationId == operationId);
-
-                if(!Enum.TryParse(operationResult.Status, true, out ZOperationStatus status))
+                if(IsWalletUnlockNeeded(response) && !didUnlockWallet)
                 {
-                    logger.Error(() => $"Unrecognized operation status: {operationResult.Status}");
-                    break;
+                    if(await TryUnlockWalletAsync(ct))
+                    {
+                        didUnlockWallet = true;
+                        goto tryShield;
+                    }
+
+                    return;
                 }
 
-                switch(status)
-                {
-                    case ZOperationStatus.Success:
-                        logger.Info(() => $"[{LogCategory}] {EquihashCommands.ZShieldCoinbase} successful");
+                if(response.Error.Code == (int) BitcoinRPCErrorCode.RPC_WALLET_INSUFFICIENT_FUNDS || response.Error.Code == (int) BitcoinRPCErrorCode.RPC_INVALID_PARAMS || response.Error.Code == (int) BitcoinRPCErrorCode.RPC_INVALID_PARAMETER)
+                    logger.Info(() => $"[{LogCategory}] No funds to shield: {response.Error.Message} code {response.Error.Code}");
+                else
+                    logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZShieldCoinbase} returned an unexpected error: {response.Error.Message} code {response.Error.Code}");
 
-                        continueWaiting = false;
-                        continue;
-
-                    case ZOperationStatus.Cancelled:
-                    case ZOperationStatus.Failed:
-                        logger.Error(() => $"{EquihashCommands.ZShieldCoinbase} failed: {operationResult.Error.Message} code {operationResult.Error.Code}");
-
-                        continueWaiting = false;
-                        continue;
-                }
+                return;
             }
 
-            logger.Info(() => $"[{LogCategory}] Waiting for shielding operation completion: {operationId}");
+            var operationId = response.Response.OperationId;
 
-            await Task.Delay(TimeSpan.FromSeconds(10), ct);
+            logger.Info(() => $"[{LogCategory}] {EquihashCommands.ZShieldCoinbase} operation id: {operationId}");
+
+            var continueWaiting = true;
+
+            while(continueWaiting)
+            {
+                var operationResultResponse = await rpcClient.ExecuteAsync<ZCashAsyncOperationStatus[]>(logger,
+                    EquihashCommands.ZGetOperationResult, ct, new object[] { new object[] { operationId } });
+
+                if(operationResultResponse.Error == null &&
+                   operationResultResponse.Response?.Any(x => x.OperationId == operationId) == true)
+                {
+                    var operationResult = operationResultResponse.Response.First(x => x.OperationId == operationId);
+
+                    if(!Enum.TryParse(operationResult.Status, true, out ZOperationStatus status))
+                    {
+                        logger.Error(() => $"Unrecognized operation status: {operationResult.Status}");
+                        break;
+                    }
+
+                    switch(status)
+                    {
+                        case ZOperationStatus.Success:
+                            logger.Info(() => $"[{LogCategory}] {EquihashCommands.ZShieldCoinbase} successful");
+
+                            continueWaiting = false;
+                            continue;
+
+                        case ZOperationStatus.Cancelled:
+                        case ZOperationStatus.Failed:
+                            logger.Error(() => $"{EquihashCommands.ZShieldCoinbase} failed: {operationResult.Error.Message} code {operationResult.Error.Code}");
+
+                            continueWaiting = false;
+                            continue;
+                    }
+                }
+
+                logger.Info(() => $"[{LogCategory}] Waiting for shielding operation completion: {operationId}");
+
+                await Task.Delay(TimeSpan.FromSeconds(10), ct);
+            }
+        }
+        finally
+        {
+            await LockWalletIfUnlockedAsync(didUnlockWallet, ct);
         }
     }
 
@@ -566,58 +548,79 @@ public class EquihashPayoutHandler : BitcoinPayoutHandler
             TransferFee
         };
 
-        // send command
-        var sendResponse = await rpcClient.ExecuteAsync<string>(logger, EquihashCommands.ZSendMany, ct, args);
+        var didUnlockWallet = false;
 
-        if(sendResponse.Error != null)
+        try
         {
-            logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} returned error: {unspentResponse.Error.Message} code {unspentResponse.Error.Code}");
-            return;
-        }
+            // send command
+        tryShieldTransfer:
+            var sendResponse = await rpcClient.ExecuteAsync<string>(logger, EquihashCommands.ZSendMany, ct, args);
 
-        var operationId = sendResponse.Response;
-
-        logger.Info(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} operation id: {operationId}");
-
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
-
-        var continueWaiting = true;
-
-        do
-        {
-            var operationResultResponse = await rpcClient.ExecuteAsync<ZCashAsyncOperationStatus[]>(logger,
-                EquihashCommands.ZGetOperationResult, ct, new object[] { new object[] { operationId } });
-
-            if(operationResultResponse.Error == null &&
-               operationResultResponse.Response?.Any(x => x.OperationId == operationId) == true)
+            if(sendResponse.Error != null)
             {
-                var operationResult = operationResultResponse.Response.First(x => x.OperationId == operationId);
-
-                if(!Enum.TryParse(operationResult.Status, true, out ZOperationStatus status))
+                if(IsWalletUnlockNeeded(sendResponse) && !didUnlockWallet)
                 {
-                    logger.Error(() => $"Unrecognized operation status: {operationResult.Status}");
-                    break;
+                    if(await TryUnlockWalletAsync(ct))
+                    {
+                        didUnlockWallet = true;
+                        goto tryShieldTransfer;
+                    }
+
+                    return;
                 }
 
-                switch(status)
-                {
-                    case ZOperationStatus.Success:
-                        var txId = operationResult.Result?.Value<string>("txid") ?? string.Empty;
-                        logger.Info(() => $"[{LogCategory}] Transfer completed with transaction id: {txId}");
-
-                        continueWaiting = false;
-                        continue;
-
-                    case ZOperationStatus.Cancelled:
-                    case ZOperationStatus.Failed:
-                        logger.Error(() => $"{EquihashCommands.ZSendMany} failed: {operationResult.Error.Message} code {operationResult.Error.Code}");
-
-                        continueWaiting = false;
-                        continue;
-                }
+                logger.Error(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} returned error: {sendResponse.Error.Message} code {sendResponse.Error.Code}");
+                return;
             }
 
-            logger.Info(() => $"[{LogCategory}] Waiting for shielding transfer completion: {operationId}");
-        } while(continueWaiting && await timer.WaitForNextTickAsync(ct));
+            var operationId = sendResponse.Response;
+
+            logger.Info(() => $"[{LogCategory}] {EquihashCommands.ZSendMany} operation id: {operationId}");
+
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+
+            var continueWaiting = true;
+
+            do
+            {
+                var operationResultResponse = await rpcClient.ExecuteAsync<ZCashAsyncOperationStatus[]>(logger,
+                    EquihashCommands.ZGetOperationResult, ct, new object[] { new object[] { operationId } });
+
+                if(operationResultResponse.Error == null &&
+                   operationResultResponse.Response?.Any(x => x.OperationId == operationId) == true)
+                {
+                    var operationResult = operationResultResponse.Response.First(x => x.OperationId == operationId);
+
+                    if(!Enum.TryParse(operationResult.Status, true, out ZOperationStatus status))
+                    {
+                        logger.Error(() => $"Unrecognized operation status: {operationResult.Status}");
+                        break;
+                    }
+
+                    switch(status)
+                    {
+                        case ZOperationStatus.Success:
+                            var txId = operationResult.Result?.Value<string>("txid") ?? string.Empty;
+                            logger.Info(() => $"[{LogCategory}] Transfer completed with transaction id: {txId}");
+
+                            continueWaiting = false;
+                            continue;
+
+                        case ZOperationStatus.Cancelled:
+                        case ZOperationStatus.Failed:
+                            logger.Error(() => $"{EquihashCommands.ZSendMany} failed: {operationResult.Error.Message} code {operationResult.Error.Code}");
+
+                            continueWaiting = false;
+                            continue;
+                    }
+                }
+
+                logger.Info(() => $"[{LogCategory}] Waiting for shielding transfer completion: {operationId}");
+            } while(continueWaiting && await timer.WaitForNextTickAsync(ct));
+        }
+        finally
+        {
+            await LockWalletIfUnlockedAsync(didUnlockWallet, ct);
+        }
     }
 }

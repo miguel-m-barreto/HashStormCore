@@ -255,6 +255,199 @@
         }
       }
     },
+    "EventPipelineBatchingConfig": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Pool Core share-event batch sizing for Redis Stream publishes.",
+      "properties": {
+        "maxEvents": {
+          "type": "integer"
+        },
+        "maxApproxBytes": {
+          "type": "integer"
+        },
+        "maxDelayMs": {
+          "type": "integer"
+        }
+      }
+    },
+    "EventPipelineBrokerConfig": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Pool Core broker transport settings. The current supported broker type is redis-streams.",
+      "properties": {
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Broker transport type. Use redis-streams for the current event pipeline."
+        },
+        "connectionString": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "streamName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "producerId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "startupRequired": {
+          "type": "boolean",
+          "description": "When true, Pool Core connects to Redis during transport construction. The resilient default is false."
+        },
+        "publishRetryDelayMs": {
+          "type": "integer"
+        },
+        "publishMaxRetryDelayMs": {
+          "type": "integer"
+        },
+        "pendingMinIdleMs": {
+          "type": "integer",
+          "description": "Minimum idle time before stale pending Redis Stream messages can be claimed by consumers using this broker config."
+        }
+      }
+    },
+    "EventPipelineConfig": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Pool Core event-driven ShareEvent pipeline configuration. Sidecars can derive defaults from this config and may use flat configs/*.json sidecar override files.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "broker": {
+          "$ref": "#/definitions/EventPipelineBrokerConfig"
+        },
+        "handoff": {
+          "$ref": "#/definitions/EventPipelineHandoffConfig"
+        },
+        "outbox": {
+          "$ref": "#/definitions/EventPipelineOutboxConfig"
+        },
+        "batching": {
+          "$ref": "#/definitions/EventPipelineBatchingConfig"
+        },
+        "live": {
+          "$ref": "#/definitions/EventPipelineLiveConfig"
+        },
+        "retention": {
+          "$ref": "#/definitions/EventPipelineRetentionConfig"
+        }
+      }
+    },
+    "EventPipelineHandoffConfig": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Pool Core in-memory handoff warning thresholds. These are not drop limits for critical accepted share or block candidate events.",
+      "properties": {
+        "softMaxBufferedEvents": {
+          "type": "integer"
+        },
+        "softMaxBufferedBytes": {
+          "type": "integer"
+        },
+        "criticalBufferedEvents": {
+          "type": "integer"
+        },
+        "criticalBufferedBytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "EventPipelineLiveConfig": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Live window values bound by Pool Core and used as defaults by HashStormCore.LiveAggregator. The optional configs/live-aggregator.json file can override these sidecar defaults.",
+      "properties": {
+        "windowSeconds": {
+          "type": "integer"
+        },
+        "redisTtlSeconds": {
+          "type": "integer"
+        },
+        "bucketSeconds": {
+          "type": "integer"
+        }
+      }
+    },
+    "EventPipelineOutboxConfig": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Pool Core file WAL/outbox settings. When eventPipeline.enabled=true, the WAL/outbox is required.",
+      "properties": {
+        "directory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "segmentMaxBytes": {
+          "type": "integer"
+        },
+        "writerFlushEvents": {
+          "type": "integer"
+        },
+        "writerFlushBytes": {
+          "type": "integer"
+        },
+        "writerFlushMs": {
+          "type": "integer"
+        },
+        "fsyncMode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Outbox fsync mode. periodic is the low-latency default; always is slower and fsyncs each write batch."
+        },
+        "fsyncIntervalMs": {
+          "type": "integer"
+        },
+        "softBacklogBytes": {
+          "type": "integer"
+        },
+        "criticalBacklogBytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "EventPipelineRetentionConfig": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Redis Stream length warning thresholds. Pool Core does not apply MAXLEN trimming to critical or mixed critical/telemetry streams.",
+      "properties": {
+        "softStreamLengthWarning": {
+          "type": "integer"
+        },
+        "criticalStreamLengthWarning": {
+          "type": "integer"
+        }
+      }
+    },
     "DaemonEndpointConfig": {
       "type": [
         "object",
@@ -382,6 +575,23 @@
       "properties": {
         "postgres": {
           "$ref": "#/definitions/PostgresConfig"
+        }
+      }
+    },
+    "PoolCoreConfig": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Pool Core runtime toggles.",
+      "properties": {
+        "publicApiEnabled": {
+          "type": "boolean",
+          "description": "Controls Pool Core's embedded API, Prometheus metrics, and WebSocket host."
+        },
+        "liveStateEnabled": {
+          "type": "boolean",
+          "description": "Controls legacy/direct in-process live state handling. Mostly redundant when eventPipeline.enabled=true and live state is rebuilt by the LiveAggregator sidecar."
         }
       }
     },
@@ -788,6 +998,18 @@
         }
       }
     },
+    "ShareReceiverConfig": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Legacy ZMQ share receiver queue settings. This relay path is best-effort and outside the Pool Core accounting-critical event guarantee.",
+      "properties": {
+        "maxQueueSize": {
+          "type": "integer"
+        }
+      }
+    },
     "Statistics": {
       "type": [
         "object",
@@ -917,6 +1139,9 @@
         "null"
       ]
     },
+    "eventPipeline": {
+      "$ref": "#/definitions/EventPipelineConfig"
+    },
     "instanceId": {
       "type": [
         "integer",
@@ -941,6 +1166,9 @@
     "persistence": {
       "$ref": "#/definitions/PersistenceConfig"
     },
+    "poolCore": {
+      "$ref": "#/definitions/PoolCoreConfig"
+    },
     "pools": {
       "type": "array",
       "items": {
@@ -964,6 +1192,9 @@
       "items": {
         "$ref": "#/definitions/ShareRelayEndpointConfig"
       }
+    },
+    "shareReceiver": {
+      "$ref": "#/definitions/ShareReceiverConfig"
     },
     "statistics": {
       "$ref": "#/definitions/Statistics"

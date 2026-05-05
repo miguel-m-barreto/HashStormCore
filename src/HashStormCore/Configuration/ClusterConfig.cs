@@ -1272,6 +1272,11 @@ public class ShareRelayConfig
     public string SharedEncryptionKey { get; set; }
 }
 
+public class ShareReceiverConfig
+{
+    public int MaxQueueSize { get; set; } = 10000;
+}
+
 public class Statistics
 {
     /// <summary>
@@ -1317,6 +1322,12 @@ public class ClusterMemoryConfig
     /// WARNING: Don't use this if you don't know what you are doing
     /// </summary>
     public int? RmsmMaximumFreeLargePoolBytes { get; set; }
+}
+
+public class PoolCoreConfig
+{
+    public bool PublicApiEnabled { get; set; } = true;
+    public bool LiveStateEnabled { get; set; } = true;
 }
 
 public partial class PoolConfig
@@ -1398,6 +1409,9 @@ public partial class ClusterConfig
     public Statistics Statistics { get; set; }
     public NicehashClusterConfig Nicehash { get; set; }
     public ClusterMemoryConfig Memory { get; set; }
+    public HashStormCore.Eventing.Configuration.EventPipelineConfig EventPipeline { get; set; }
+    public PoolCoreConfig PoolCore { get; set; }
+    public ShareReceiverConfig ShareReceiver { get; set; }
 
     /// <summary>
     /// If this is enabled, shares are not written to the database

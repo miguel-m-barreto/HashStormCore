@@ -23,6 +23,12 @@ using HashStormCore.Crypto;
 using HashStormCore.Crypto.Hashing.Equihash;
 using HashStormCore.Crypto.Hashing.Ethash;
 using HashStormCore.Crypto.Hashing.Progpow;
+using HashStormCore.Eventing.Abstractions;
+using HashStormCore.Eventing.Configuration;
+using HashStormCore.Eventing.Outbox;
+using HashStormCore.Eventing.Publishing;
+using HashStormCore.Eventing.Queue;
+using HashStormCore.Eventing.Transport;
 using HashStormCore.Messaging;
 using HashStormCore.Mining;
 using HashStormCore.Notifications;
@@ -136,6 +142,100 @@ public class AutofacModule : Module
 
         //////////////////////
         // Background services
+
+        builder.Register(ctx =>
+        {
+            var config = ctx.Resolve<ClusterConfig>();
+            var eventPipeline = config.EventPipeline;
+            var handoff = eventPipeline?.Handoff;
+
+            return new InMemoryShareEventQueue(new ShareEventHandoffOptions
+            {
+                SoftMaxBufferedEvents = handoff?.SoftMaxBufferedEvents ?? 100000,
+                SoftMaxBufferedBytes = handoff?.SoftMaxBufferedBytes ?? 268435456,
+                CriticalBufferedEvents = handoff?.CriticalBufferedEvents ?? 500000,
+                CriticalBufferedBytes = handoff?.CriticalBufferedBytes ?? 1073741824
+            });
+        })
+        .As<IShareEventQueue>()
+        .SingleInstance();
+
+        builder.Register(ctx =>
+        {
+            var eventPipeline = ctx.Resolve<ClusterConfig>().EventPipeline;
+            var outbox = eventPipeline?.Outbox ?? new EventPipelineOutboxConfig();
+            var broker = eventPipeline?.Broker;
+            var batching = eventPipeline?.Batching;
+
+            return new ShareEventOutboxOptions
+            {
+                Directory = outbox.Directory,
+                SegmentMaxBytes = outbox.SegmentMaxBytes,
+                WriterFlushEvents = outbox.WriterFlushEvents,
+                WriterFlushBytes = outbox.WriterFlushBytes,
+                WriterFlushMs = outbox.WriterFlushMs,
+                FsyncMode = outbox.FsyncMode,
+                FsyncIntervalMs = outbox.FsyncIntervalMs,
+                SoftBacklogBytes = outbox.SoftBacklogBytes,
+                CriticalBacklogBytes = outbox.CriticalBacklogBytes,
+                PublisherMaxEvents = batching?.MaxEvents ?? 256,
+                PublisherMaxApproxBytes = batching?.MaxApproxBytes ?? 524288,
+                PublishRetryDelayMs = broker?.PublishRetryDelayMs ?? 250,
+                PublishMaxRetryDelayMs = broker?.PublishMaxRetryDelayMs ?? 5000
+            };
+        }).SingleInstance();
+
+        builder.Register(ctx =>
+        {
+            var options = ctx.Resolve<ShareEventOutboxOptions>();
+            ShareEventOutboxRecovery.Recover(options.Directory);
+            return new FileShareEventOutbox(options);
+        })
+        .As<IShareEventOutbox>()
+        .SingleInstance();
+
+        builder.Register(ctx =>
+        {
+            var config = ctx.Resolve<ClusterConfig>();
+            var eventPipeline = config.EventPipeline;
+            return new ShareBatchPublisherOptions
+            {
+                ProducerId = eventPipeline?.Broker?.ProducerId ?? Environment.MachineName,
+                NodeId = config.InstanceId?.ToString() ?? Environment.MachineName,
+                ClusterName = config.ClusterName ?? string.Empty,
+                StreamName = eventPipeline?.Broker?.StreamName ?? "hashstorm:share-events",
+                BrokerType = eventPipeline?.Broker?.Type ?? "none",
+                MaxEvents = eventPipeline?.Batching?.MaxEvents ?? 256,
+                MaxApproxBytes = eventPipeline?.Batching?.MaxApproxBytes ?? 524288,
+                MaxDelayMs = eventPipeline?.Batching?.MaxDelayMs ?? 1000,
+                PublishRetryDelayMs = eventPipeline?.Broker?.PublishRetryDelayMs ?? 250,
+                PublishMaxRetryDelayMs = eventPipeline?.Broker?.PublishMaxRetryDelayMs ?? 5000
+            };
+        }).SingleInstance();
+
+        builder.Register(ctx =>
+        {
+            var eventPipeline = ctx.Resolve<ClusterConfig>().EventPipeline;
+
+            if(eventPipeline?.Enabled == true)
+            {
+                if(string.Equals(eventPipeline.Broker?.Type, "redis-streams", StringComparison.OrdinalIgnoreCase))
+                    return (IShareEventBatchTransport) new RedisStreamsShareEventBatchTransport(eventPipeline.Broker, eventPipeline.Retention);
+
+                throw new InvalidOperationException(
+                    $"Unsupported eventPipeline.broker.type '{eventPipeline.Broker?.Type}'. eventPipeline.enabled=true requires a supported broker transport.");
+            }
+
+            return new NullShareEventBatchTransport();
+        })
+        .As<IShareEventBatchTransport>()
+        .SingleInstance();
+
+        builder.RegisterType<ShareEventOutboxWriter>()
+            .SingleInstance();
+
+        builder.RegisterType<ShareEventOutboxPublisher>()
+            .SingleInstance();
 
         builder.RegisterType<PayoutManager>()
             .SingleInstance();

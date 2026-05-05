@@ -10,7 +10,11 @@ using Microsoft.IO;
 using HashStormCore.Banning;
 using HashStormCore.Blockchain;
 using HashStormCore.Configuration;
+using HashStormCore.Contracts.Eventing;
+using HashStormCore.Eventing.Abstractions;
+using HashStormCore.Eventing.Mapping;
 using HashStormCore.Extensions;
+using HashStormCore.JsonRpc;
 using HashStormCore.Mappings;
 using HashStormCore.Messaging;
 using HashStormCore.Nicehash;
@@ -54,6 +58,7 @@ public abstract class PoolBase : StratumServer,
 
         this.serializerSettings = serializerSettings;
         this.cf = cf;
+        shareEventQueue = ctx.ResolveOptional<IShareEventQueue>();
         blocksRepo = ctx.Resolve<IBlockRepository>();
         shareRepo = ctx.Resolve<IShareRepository>();
         this.statsRepo = statsRepo;
@@ -67,6 +72,7 @@ public abstract class PoolBase : StratumServer,
     protected readonly IBlockRepository blocksRepo;
     protected readonly IShareRepository shareRepo;
     protected readonly IStatsRepository statsRepo;
+    protected readonly IShareEventQueue shareEventQueue;
     protected readonly IObjectMapper mapper;
     protected readonly NicehashService nicehashService;
     protected readonly CompositeDisposable disposables = new();
@@ -196,6 +202,121 @@ public abstract class PoolBase : StratumServer,
         connection.Context.EnqueueNewDifficulty(newDiff);
 
         return Task.CompletedTask;
+    }
+
+    protected async Task PublishShareAfterResponseAsync(StratumConnection connection, Share share)
+    {
+        if(clusterConfig.EventPipeline?.Enabled != true)
+        {
+            messageBus.SendMessage(share);
+            return;
+        }
+
+        try
+        {
+            var shareEvent = ShareEventMapper.Map(new ShareEventSource
+            {
+                PoolId = share.PoolId,
+                CoinSymbol = poolConfig.Template?.Symbol ?? string.Empty,
+                CoinFamily = poolConfig.Template?.Family.ToString() ?? string.Empty,
+                Miner = share.Miner,
+                Worker = share.Worker,
+                Source = share.Source,
+                Created = share.Created,
+                BlockHeight = share.BlockHeight > 0 ? share.BlockHeight : null,
+                Difficulty = share.Difficulty,
+                NetworkDifficulty = share.NetworkDifficulty,
+                ShareMultiplier = ShareMultiplier,
+                IsBlockCandidate = share.IsBlockCandidate,
+                BlockHash = share.BlockHash,
+                IpAddress = share.IpAddress,
+                UserAgent = share.UserAgent,
+                TransactionConfirmationData = share.TransactionConfirmationData,
+                BlockReward = share.BlockReward,
+                BlockType = share.BlockType
+            }, ShareEventType.ShareAccepted);
+
+            if(shareEventQueue == null)
+                throw new InvalidOperationException("Share event pipeline is enabled but no handoff queue is registered for critical share event");
+
+            await EnqueueShareEventOrFailAsync(shareEvent, "accepted share");
+        }
+        catch(Exception ex)
+        {
+            logger.Fatal(ex, "Critical share event pipeline handoff failure while preparing accepted share event");
+            throw;
+        }
+    }
+
+    protected Task PublishRejectedShareAfterResponseAsync(StratumConnection connection, JsonRpcRequest request, StratumException ex)
+    {
+        if(clusterConfig.EventPipeline?.Enabled != true || request?.Method?.Contains("submit", StringComparison.OrdinalIgnoreCase) != true)
+            return Task.CompletedTask;
+
+        return connection.ExecuteAfterPriorSendsAsync(() =>
+        {
+            try
+            {
+                var context = connection.Context;
+                var eventType = ex.Message.Contains("stale", StringComparison.OrdinalIgnoreCase) ||
+                    ex.Message.Contains("job not found", StringComparison.OrdinalIgnoreCase)
+                        ? ShareEventType.ShareStale
+                        : ShareEventType.ShareRejected;
+
+                var shareEvent = ShareEventMapper.Map(new ShareEventSource
+                {
+                    PoolId = poolConfig.Id,
+                    CoinSymbol = poolConfig.Template?.Symbol ?? string.Empty,
+                    CoinFamily = poolConfig.Template?.Family.ToString() ?? string.Empty,
+                    Miner = context?.Miner,
+                    Worker = context?.Worker,
+                    Created = clock.Now,
+                    Difficulty = context?.Difficulty ?? 0,
+                    ShareMultiplier = ShareMultiplier,
+                    IpAddress = connection.RemoteEndpoint?.Address?.ToString(),
+                    UserAgent = context?.UserAgent
+                }, eventType, ex.Message, ((int) ex.Code).ToString(), ex.Message);
+
+                return EnqueueTelemetryShareEventBestEffortAsync(shareEvent, "rejected share");
+            }
+            catch(Exception innerEx)
+            {
+                logger.Warn(innerEx, "Failed to prepare telemetry share event");
+                return Task.CompletedTask;
+            }
+
+        });
+    }
+
+    private async Task EnqueueShareEventOrFailAsync(ShareEvent shareEvent, string context)
+    {
+        try
+        {
+            await shareEventQueue.EnqueueAsync(shareEvent, CancellationToken.None);
+        }
+        catch(Exception ex)
+        {
+            logger.Fatal(ex, "Critical share event pipeline handoff failure for {context}; event_id={eventId}", context, shareEvent.EventId);
+            throw;
+        }
+    }
+
+    private async Task EnqueueTelemetryShareEventBestEffortAsync(ShareEvent shareEvent, string context)
+    {
+        if(shareEventQueue == null)
+        {
+            logger.Warn(() => $"Share event pipeline is enabled but no handoff queue is registered for telemetry event {context}; event_id={shareEvent.EventId}");
+            return;
+        }
+
+        try
+        {
+            await shareEventQueue.EnqueueAsync(shareEvent, CancellationToken.None);
+        }
+        catch(Exception ex)
+        {
+            logger.Warn(ex, "Failed to enqueue telemetry share event for {context}; event_id={eventId}", context, shareEvent.EventId);
+        }
     }
 
     #endregion // VarDiff

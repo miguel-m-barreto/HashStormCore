@@ -141,7 +141,25 @@ public class HashingTests : TestBase
         hasher.Digest(Enumerable.Repeat((byte) 5, 80).ToArray(), hash);
         var result = hash.ToHexString();
 
-        Assert.Equal("d62af17832d0a2d40d58ef80da88d579fa768023cbc6cda903f4638a6d6dbb1b", result);
+        Assert.Equal("5cb1eea767131ab0ea446121854dffbfec1bf1f55938e9f877f9bae735a1c481", result);
+    }
+
+    [Fact]
+    public void Lyra2Rev2_Hash_Is_Deterministic()
+    {
+        if(IsGithubActionRunner)
+            return;
+
+        var hasher = new Lyra2Rev2();
+        var input = Enumerable.Repeat((byte) 5, 80).ToArray();
+
+        for(var i = 0; i < 20; i++)
+        {
+            var hash = new byte[32];
+            hasher.Digest(input, hash);
+
+            Assert.Equal("5cb1eea767131ab0ea446121854dffbfec1bf1f55938e9f877f9bae735a1c481", hash.ToHexString());
+        }
     }
 
     [Fact]
@@ -163,7 +181,7 @@ public class HashingTests : TestBase
         hasher.Digest(Enumerable.Repeat((byte) 5, 80).ToArray(), hash);
         var result = hash.ToHexString();
 
-        Assert.Equal("67bcb189ab601a950184caac9049db80bafc03f7da0439106c05cb0cfeaa85b0", result);
+        Assert.Equal("c56ec425ada2c8ddcb8d5a79a3a0c9d79f66318193049fb81f875c537a4f963d", result);
     }
 
     [Fact]

@@ -191,7 +191,7 @@ public class BeamPool : PoolBase
 
             if(requestAge > maxShareAge)
             {
-                logger.Warn(() => $"[{connection.ConnectionId}] Dropping stale share submission request (server overloaded?)");
+                logger.Warn(() => $"[{connection.ConnectionId}] Shedding aged submit request before validation (request_age_exceeded; server overloaded?)");
                 return;
             }
 
@@ -328,7 +328,7 @@ public class BeamPool : PoolBase
                     await connection.NotifyAsync(shareAcceptedResponse);
 
                     // publish
-                    messageBus.SendMessage(share);
+                    await PublishShareAfterResponseAsync(connection, share);
 
                     // telemetry
                     PublishTelemetry(TelemetryCategory.Share, clock.Now - tsRequest.Timestamp.UtcDateTime, true);
@@ -463,6 +463,7 @@ public class BeamPool : PoolBase
         catch(StratumException ex)
         {
             await connection.RespondErrorAsync(ex.Code, ex.Message, request.Id, false);
+            await PublishRejectedShareAfterResponseAsync(connection, request, ex);
         }
     }
 

@@ -1,0 +1,10 @@
+{
+  "redisConnectionString": "localhost:6379,abortConnect=false",
+  "streamName": "hashstorm:share-events",
+  "consumerName": "hashstorm-live-aggregator-01",
+  "readBatchSize": 16,
+  "pendingMinIdleMs": 60000,
+  "liveWindowSeconds": 600,
+  "redisTtlSeconds": 900,
+  "bucketSeconds": 10
+}

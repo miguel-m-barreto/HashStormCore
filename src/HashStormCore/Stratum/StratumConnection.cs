@@ -68,6 +68,16 @@ public class StratumConnection
     private const int SendQueueCapacity = 16;
     private static readonly TimeSpan sendTimeout = TimeSpan.FromMilliseconds(5000);
 
+    private sealed class PostSendAction
+    {
+        public PostSendAction(Func<Task> action)
+        {
+            Action = action;
+        }
+
+        public Func<Task> Action { get; }
+    }
+
     #region API-Surface
 
     public async void DispatchAsync(Socket socket, CancellationToken ct,
@@ -213,6 +223,14 @@ public class StratumConnection
         return SendAsync(request);
     }
 
+    public async Task ExecuteAfterPriorSendsAsync(Func<Task> action)
+    {
+        Contract.RequiresNonNull(action);
+        var accepted = await sendQueue.SendAsync(new PostSendAction(action));
+        if(!accepted)
+            throw new IOException("Post-send action was not accepted by the stratum send queue");
+    }
+
     public void Disconnect()
     {
         networkStream.Close();
@@ -220,14 +238,16 @@ public class StratumConnection
 
     #endregion // API-Surface
 
-    private Task SendAsync<T>(T payload)
+    private async Task SendAsync<T>(T payload)
     {
         Contract.RequiresNonNull(payload);
 
         if(sendQueue.Count >= SendQueueCapacity)
             throw new IOException("Sendqueue stalled");
 
-        return sendQueue.SendAsync(payload);
+        var accepted = await sendQueue.SendAsync(payload);
+        if(!accepted)
+            throw new IOException("Message was not accepted by the stratum send queue");
     }
 
     private async Task FillReceivePipeAsync(CancellationToken ct)
@@ -335,12 +355,12 @@ public class StratumConnection
     {
         while(!ct.IsCancellationRequested)
         {
-            if(sendQueue.Count >= SendQueueCapacity)
-                throw new IOException($"Send-queue overflow at {sendQueue.Count} of {SendQueueCapacity} items");
-
             var msg = await sendQueue.ReceiveAsync(ct);
 
-            await SendMessage(msg, ct);
+            if(msg is PostSendAction postSendAction)
+                await postSendAction.Action();
+            else
+                await SendMessage(msg, ct);
         }
     }
 
