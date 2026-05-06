@@ -263,3 +263,6 @@ docs/audits/
 /packages-deprecated.txt
 /packages-outdated.txt
 /packages-vulnerable.txt
+
+
+BenchmarkDotNet.Artifacts/*
