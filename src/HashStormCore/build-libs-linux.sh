@@ -30,6 +30,16 @@ HAVE_AVX512F=$(../Native/check_cpu.sh avx512f && echo -DHAVE_AVX512F || echo)
 
 export HAVE_FEATURE="$HAVE_AES $HAVE_SSE2 $HAVE_SSE3 $HAVE_SSSE3 $HAVE_PCLMUL $HAVE_AVX $HAVE_AVX2 $HAVE_AVX512F"
 
+# Boost.Math now requires at least C++14. Keep the default at C++14 because the
+# vendored native mining code is old and should not be moved to a newer standard
+# unless a specific component requires it.
+NATIVE_CXX_STANDARD="${NATIVE_CXX_STANDARD:-14}"
+NATIVE_CMAKE_CXX_STANDARD_ARGS=(
+  "-DCMAKE_CXX_STANDARD=$NATIVE_CXX_STANDARD"
+  "-DCMAKE_CXX_STANDARD_REQUIRED=ON"
+  "-DCMAKE_CXX_EXTENSIONS=OFF"
+)
+
 # -------- Show only warnings/errors (optional) --------
 if [[ "${FILTER_WARNERR:-}" == "1" ]]; then
   filter_re='^(In file included|[[:space:]]*[0-9]+ \| |.*(warning|error|note):)'
@@ -37,6 +47,29 @@ if [[ "${FILTER_WARNERR:-}" == "1" ]]; then
 else
   run() { "$@"; }
 fi
+
+cmake() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --build|--install|-E|-P|--version|--help|--system-information)
+        command cmake "$@"
+        return
+        ;;
+      --build=*|--install=*)
+        command cmake "$@"
+        return
+        ;;
+      -DCMAKE_CXX_STANDARD=*|-DCMAKE_CXX_STANDARD_REQUIRED=*|-DCMAKE_CXX_EXTENSIONS=*)
+        command cmake "$@"
+        return
+        ;;
+    esac
+  done
+
+  command cmake "$@" "${NATIVE_CMAKE_CXX_STANDARD_ARGS[@]}"
+}
 
 # --------- Patchs GCC 13 ---------
 maybe_patch_epee_cstdint() {
