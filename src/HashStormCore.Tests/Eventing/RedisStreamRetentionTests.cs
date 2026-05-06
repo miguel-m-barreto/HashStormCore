@@ -48,7 +48,7 @@ public class RedisStreamRetentionTests
     public void ExampleConfigDoesNotExposeHardStreamOrHandoffLimits()
     {
         var config = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "config", "event-pipeline.example.json"));
+            "configs", "event-pipeline.example.json"));
 
         Assert.DoesNotContain("maxStreamLength", config);
         Assert.DoesNotContain("maxBufferedEvents", config);
@@ -68,7 +68,7 @@ public class RedisStreamRetentionTests
         Assert.DoesNotContain("Enabled", eventingNames);
 
         var config = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "config", "event-pipeline.example.json"));
+            "configs", "event-pipeline.example.json"));
 
         Assert.DoesNotContain("\"enabled\": true", ExtractOutboxBlock(config));
     }

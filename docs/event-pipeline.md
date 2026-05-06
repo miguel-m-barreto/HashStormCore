@@ -673,3 +673,8 @@ Do not change these without deliberately redesigning the architecture:
 - Do not bypass WAL/outbox for production publishing.
 - Do not treat lifecycle events as accounting-critical unless a future design promotes them.
 - Do not make Pool Core responsible for supervising sidecars in-process.
+## Submit Rejection Telemetry
+
+Accepted shares and daemon-accepted block candidates are critical event handoffs. Malformed, rejected, and stale submit telemetry is best-effort and is emitted after the miner response unless a pool family documents a stricter rule.
+
+`request_age_exceeded` is not silently dropped. A submit shed because the server processed it after `requestAge > maxShareAge` must receive a normal rejection/stale response and, when `eventPipeline.enabled=true`, emit non-penalizing `ShareStale` telemetry after the response. It must not insert an accepted share, run full share validation, call `ConsiderBan`, or perform synchronous Redis/Postgres/WAL/fsync before responding to the miner.

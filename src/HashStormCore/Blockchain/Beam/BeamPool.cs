@@ -175,6 +175,11 @@ public class BeamPool : PoolBase
         return job.GetJobParamsForStratum();
     }
 
+    protected override bool IsShareSubmitRequest(JsonRpcRequest request)
+    {
+        return request?.Method == BeamStratumMethods.Submit || base.IsShareSubmitRequest(request);
+    }
+
     protected virtual async Task OnSubmitAsync(StratumConnection connection, Timestamped<JsonRpcRequest> tsRequest, CancellationToken ct)
     {
         // Beam stratum API: https://github.com/BeamMW/beam/wiki/Beam-mining-protocol-API-(Stratum)
@@ -191,7 +196,20 @@ public class BeamPool : PoolBase
 
             if(requestAge > maxShareAge)
             {
-                logger.Warn(() => $"[{connection.ConnectionId}] Shedding aged submit request before validation (request_age_exceeded; server overloaded?)");
+                const string reason = "request_age_exceeded";
+                var ex = new StratumException(StratumError.Other, reason);
+                var agedSubmitResponse = new BeamSubmitResponse
+                {
+                    Id = request.Id,
+                    Code = BeamConstants.BeamRpcJobNotFound,
+                    Description = reason
+                };
+
+                logger.Warn(() => $"[{connection.ConnectionId}] Shedding aged submit request before validation ({reason}; server overloaded?)");
+                PublishTelemetry(TelemetryCategory.Share, requestAge, false);
+
+                await connection.NotifyAsync(agedSubmitResponse);
+                await PublishSubmitRejectedShareAfterResponseAsync(connection, tsRequest.Value, ex);
                 return;
             }
 

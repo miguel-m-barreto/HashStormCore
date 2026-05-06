@@ -49,7 +49,7 @@ public static class LiveSessionShareStatsState
     }
 
     /// <summary>
-    /// Generic entrypoint para qualquer share.
+    /// Generic entrypoint for any share.
     /// accepted = true  => accepted
     /// accepted = false + stale = true  => stale
     /// accepted = false + stale = false => rejected

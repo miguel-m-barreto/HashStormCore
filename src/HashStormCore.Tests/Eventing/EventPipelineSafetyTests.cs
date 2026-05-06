@@ -47,6 +47,88 @@ public class EventPipelineSafetyTests
     }
 
     [Fact]
+    public void AgedBitcoinSubmitRespondsAndPublishesTelemetryInsteadOfSilentDrop()
+    {
+        var bitcoinSource = ReadSource("HashStormCore", "Blockchain", "Bitcoin", "BitcoinPool.cs");
+        var method = ExtractMethod(bitcoinSource, "OnSubmitAsync", "OnSuggestDifficultyAsync");
+        var branchStart = method.IndexOf("requestAge > maxShareAge", StringComparison.Ordinal);
+        var branch = method[branchStart..method.IndexOf("// check worker state", branchStart, StringComparison.Ordinal)];
+        var poolBaseSource = ReadSource("HashStormCore", "Mining", "PoolBase.cs");
+        var helper = ExtractMethod(poolBaseSource, "RejectAgedSubmitBeforeValidationAsync", "EnqueueShareEventOrFailAsync");
+
+        Assert.Contains("RejectAgedSubmitBeforeValidationAsync", branch);
+        Assert.Contains("request_age_exceeded", helper);
+        Assert.Contains("RespondErrorAsync", helper);
+        Assert.Contains("PublishSubmitRejectedShareAfterResponseAsync", helper);
+        Assert.True(helper.IndexOf("RespondErrorAsync", StringComparison.Ordinal) <
+            helper.IndexOf("PublishSubmitRejectedShareAfterResponseAsync", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AgedSubmitBranchesUseResponseAndTelemetryPathAcrossPoolFamilies()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "HashStormCore", "Blockchain");
+        var files = Directory.GetFiles(root, "*Pool.cs", SearchOption.AllDirectories);
+
+        foreach(var file in files)
+        {
+            var source = File.ReadAllText(file);
+            var index = source.IndexOf("requestAge > maxShareAge", StringComparison.Ordinal);
+
+            while(index >= 0)
+            {
+                var branch = source[index..Math.Min(source.Length, index + 1600)];
+
+                Assert.True(
+                    branch.Contains("RejectAgedSubmitBeforeValidationAsync", StringComparison.Ordinal) ||
+                    branch.Contains("PublishRejectedShareAfterResponseAsync", StringComparison.Ordinal) ||
+                    branch.Contains("PublishSubmitRejectedShareAfterResponseAsync", StringComparison.Ordinal),
+                    $"{Path.GetFileName(file)} has an aged-submit branch without rejected/stale event telemetry");
+
+                index = source.IndexOf("requestAge > maxShareAge", index + 1, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void RequestAgeExceededTelemetryIsClassifiedAsStale()
+    {
+        var source = ReadSource("HashStormCore", "Mining", "PoolBase.cs");
+        var method = ExtractMethod(source, "PublishRejectedShareAfterResponseAsync", "EnqueueShareEventOrFailAsync");
+
+        Assert.Contains("request_age_exceeded", method);
+        Assert.Contains("ShareEventType.ShareStale", method);
+    }
+
+    [Fact]
+    public void BeamSubmitTelemetryDoesNotDependOnSubmitSubstring()
+    {
+        var methodsSource = ReadSource("HashStormCore", "Blockchain", "Beam", "BeamStratumMethods.cs");
+        var beamPoolSource = ReadSource("HashStormCore", "Blockchain", "Beam", "BeamPool.cs");
+        var poolBaseSource = ReadSource("HashStormCore", "Mining", "PoolBase.cs");
+
+        Assert.Contains("Submit = \"solution\"", methodsSource);
+        Assert.Contains("override bool IsShareSubmitRequest", beamPoolSource);
+        Assert.Contains("request?.Method == BeamStratumMethods.Submit", beamPoolSource);
+        Assert.Contains("PublishSubmitRejectedShareAfterResponseAsync", beamPoolSource);
+        Assert.Contains("PublishSubmitRejectedShareAfterResponseAsync", poolBaseSource);
+    }
+
+    [Fact]
+    public void BitcoinSubmitAndConfigureUseStrictMinerInputValidation()
+    {
+        var bitcoinPoolSource = ReadSource("HashStormCore", "Blockchain", "Bitcoin", "BitcoinPool.cs");
+        var bitcoinJobSource = ReadSource("HashStormCore", "Blockchain", "Bitcoin", "BitcoinJob.cs");
+
+        Assert.Contains("GetRawSubmitParams(request)", bitcoinPoolSource);
+        Assert.Contains("ParseHexUInt32Strict(requestedMaskValue.Value<string>()", bitcoinPoolSource);
+        Assert.DoesNotContain("requestedMask = uint.Parse", bitcoinPoolSource);
+        Assert.Contains("ValidateHex(extraNonce2", bitcoinJobSource);
+        Assert.Contains("nTimeInt.ToStringHex8()", bitcoinJobSource);
+        Assert.Contains("nonceInt.ToStringHex8()", bitcoinJobSource);
+    }
+
+    [Fact]
     public void OutboxPublisherRequiresPositivePublishResultBeforeCheckpointAdvance()
     {
         var source = ReadSource("HashStormCore.Eventing", "Outbox", "ShareEventOutboxPublisher.cs");

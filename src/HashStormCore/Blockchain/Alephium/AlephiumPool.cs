@@ -252,7 +252,7 @@ public class AlephiumPool : PoolBase
 
             if(requestAge > maxShareAge)
             {
-                logger.Warn(() => $"[{connection.ConnectionId}] Shedding aged submit request before validation (request_age_exceeded; server overloaded?)");
+                await RejectAgedSubmitBeforeValidationAsync(connection, request, requestAge);
                 return;
             }
 

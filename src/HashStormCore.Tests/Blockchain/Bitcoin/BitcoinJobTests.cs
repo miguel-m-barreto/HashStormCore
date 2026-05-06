@@ -1,3 +1,4 @@
+using System;
 using Autofac;
 using Microsoft.IO;
 using HashStormCore.Blockchain.Bitcoin;
@@ -15,6 +16,106 @@ namespace HashStormCore.Tests.Blockchain.Bitcoin;
 
 public class BitcoinJobTests : TestBase
 {
+    [Fact]
+    public void RegisterSubmit_Includes_VersionBits_When_VersionRolling_Is_Active()
+    {
+        var job = new TestBitcoinJob();
+
+        Assert.True(job.TryRegister("60000001", "01000000", "63445774", "51036775", 0x00002000));
+        Assert.True(job.TryRegister("60000001", "01000000", "63445774", "51036775", 0x00004000));
+        Assert.False(job.TryRegister("60000001", "01000000", "63445774", "51036775", 0x00002000));
+    }
+
+    [Fact]
+    public void RegisterSubmit_Still_Detects_Duplicates_Without_VersionBits()
+    {
+        var job = new TestBitcoinJob();
+
+        Assert.True(job.TryRegister("60000001", "01000000", "63445774", "51036775"));
+        Assert.False(job.TryRegister("60000001", "01000000", "63445774", "51036775"));
+    }
+
+    [Fact]
+    public void Process_Malformed_VersionBits_Throws_StratumException()
+    {
+        var (job, worker) = CreateJob();
+        worker.ContextAs<BitcoinWorkerContext>().VersionRollingMask = 0x0000f000;
+
+        var ex = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "01000000", "63445774", "51036775", "zzzzzzzz"));
+
+        Assert.Contains("invalid version bits", ex.Message);
+    }
+
+    [Fact]
+    public void Process_Wrong_Length_VersionBits_Throws_StratumException()
+    {
+        var (job, worker) = CreateJob();
+        worker.ContextAs<BitcoinWorkerContext>().VersionRollingMask = 0x0000f000;
+
+        var ex = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "01000000", "63445774", "51036775", "2000"));
+
+        Assert.Contains("incorrect size of version bits", ex.Message);
+    }
+
+    [Fact]
+    public void Process_VersionBits_Outside_Mask_Throws_StratumException()
+    {
+        var (job, worker) = CreateJob();
+        worker.ContextAs<BitcoinWorkerContext>().VersionRollingMask = 0x0000f000;
+
+        var ex = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "01000000", "63445774", "51036775", "00010000"));
+
+        Assert.Contains("rolling-version mask violation", ex.Message);
+    }
+
+    [Fact]
+    public void Process_Missing_VersionBits_When_Negotiated_Throws_StratumException()
+    {
+        var (job, worker) = CreateJob();
+        worker.ContextAs<BitcoinWorkerContext>().VersionRollingMask = 0x0000f000;
+
+        var ex = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "01000000", "63445774", "51036775"));
+
+        Assert.Contains("missing version bits", ex.Message);
+    }
+
+    [Fact]
+    public void Process_Extra_VersionBits_Without_Negotiation_Throws_StratumException()
+    {
+        var (job, worker) = CreateJob();
+
+        var ex = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "01000000", "63445774", "51036775", "00002000"));
+
+        Assert.Contains("version rolling was not negotiated", ex.Message);
+    }
+
+    [Fact]
+    public void ExtractSubmitParameters_Missing_Negotiated_VersionBits_Throws_StratumException()
+    {
+        var ex = Assert.Throws<StratumException>(() =>
+            BitcoinJobManager.ExtractSubmitParameters(
+                new object[] { "miner.worker", "1", "01000000", "63445774", "51036775" },
+                versionRollingNegotiated: true));
+
+        Assert.Contains("missing version bits", ex.Message);
+    }
+
+    [Fact]
+    public void ExtractSubmitParameters_Extra_VersionBits_Without_Negotiation_Throws_StratumException()
+    {
+        var ex = Assert.Throws<StratumException>(() =>
+            BitcoinJobManager.ExtractSubmitParameters(
+                new object[] { "miner.worker", "1", "01000000", "63445774", "51036775", "00002000" },
+                versionRollingNegotiated: false));
+
+        Assert.Contains("version rolling was not negotiated", ex.Message);
+    }
+
     [Fact]
     public void Process_Valid_Share()
     {
@@ -85,6 +186,17 @@ public class BitcoinJobTests : TestBase
     }
 
     [Fact]
+    public void Process_Invalid_Nonce_Hex_Throws_StratumException()
+    {
+        var (job, worker) = CreateJob();
+
+        var ex = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "01000000", "63445774", "zzzzzzzz"));
+
+        Assert.Contains("invalid nonce", ex.Message);
+    }
+
+    [Fact]
     public void Process_Invalid_Time()
     {
         var (job, worker) = CreateJob();
@@ -99,6 +211,85 @@ public class BitcoinJobTests : TestBase
         var nonce = submitParams[4] as string;
 
         Assert.ThrowsAny<StratumException>(() => job.ProcessShare(worker, extraNonce2, nTime, nonce));
+    }
+
+    [Fact]
+    public void Process_Invalid_Time_Hex_Throws_StratumException()
+    {
+        var (job, worker) = CreateJob();
+
+        var ex = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "01000000", "zzzzzzzz", "51036775"));
+
+        Assert.Contains("invalid ntime", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("zzzzzzzz")]
+    [InlineData("0100000z")]
+    public void Process_Invalid_ExtraNonce2_Hex_Throws_StratumException(string extraNonce2)
+    {
+        var (job, worker) = CreateJob();
+
+        var ex = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, extraNonce2, "63445774", "51036775"));
+
+        Assert.Contains("extranonce2", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Process_Invalid_ExtraNonce2_Length_Throws_StratumException()
+    {
+        var (job, worker) = CreateJob();
+
+        var ex = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "010000", "63445774", "51036775"));
+
+        Assert.Contains("extranonce2", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(" 3445774", "51036775", null)]
+    [InlineData("63445774", "5103677 ", null)]
+    [InlineData("63445774", "51036775", " 0020000")]
+    public void Process_Hex8_Fields_With_Whitespace_Throw_StratumException(string nTime, string nonce, string versionBits)
+    {
+        var (job, worker) = CreateJob();
+
+        if(versionBits != null)
+            worker.ContextAs<BitcoinWorkerContext>().VersionRollingMask = 0x1fffe000;
+
+        Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "01000000", nTime, nonce, versionBits));
+    }
+
+    [Fact]
+    public void Process_Malformed_ExtraNonce2_Does_Not_Poison_Duplicate_Registration()
+    {
+        var (job, worker) = CreateJob();
+
+        Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "zzzzzzzz", "63445774", "51036775"));
+
+        var (share, blockHex) = job.ProcessShare(worker, "01000000", "63445774", "51036775");
+
+        Assert.NotNull(share);
+        Assert.Null(blockHex);
+    }
+
+    [Fact]
+    public void Process_Repeated_Malformed_ExtraNonce2_Is_Not_Registered_As_Duplicate()
+    {
+        var (job, worker) = CreateJob();
+
+        var first = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "zzzzzzzz", "63445774", "51036775"));
+        var second = Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "zzzzzzzz", "63445774", "51036775"));
+
+        Assert.Contains("extranonce2", first.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("extranonce2", second.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("duplicate", second.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private (BitcoinJob, StratumConnection) CreateJob()
@@ -140,5 +331,13 @@ public class BitcoinJobTests : TestBase
             coin.ShareMultiplier, coin.CoinbaseHasherValue, coin.HeaderHasherValue, coin.BlockHasherValue);
 
         return (job, worker);
+    }
+
+    private sealed class TestBitcoinJob : BitcoinJob
+    {
+        public bool TryRegister(string extraNonce1, string extraNonce2, string nTime, string nonce, uint? versionBits = null)
+        {
+            return RegisterSubmit(extraNonce1, extraNonce2, nTime, nonce, versionBits);
+        }
     }
 }

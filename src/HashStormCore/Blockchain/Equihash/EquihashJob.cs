@@ -450,7 +450,7 @@ public class EquihashJob
         JobId = jobId;
         Difficulty = (double) new BigRational(networkParams.Diff1BValue, BlockTemplate.Target.HexToReverseByteArray().AsSpan().ToBigInteger());
 
-        // *** Sem tag no base (poolTagBytes não é preenchido aqui). ***
+        // No tag in the base implementation; poolTagBytes is not filled here.
 
         // ZCash Sapling & Overwinter support
         isSaplingActive = networkParams.SaplingActivationHeight.HasValue &&

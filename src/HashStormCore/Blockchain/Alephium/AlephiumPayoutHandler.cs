@@ -588,7 +588,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
         public PaymentException(string msg) : base(msg) { }
     }
 
-    // mantém a assinatura
+    // Keep the signature.
     private void ReportAndRethrowApiError(string action, Exception ex, bool rethrow = true)
     {
         var error = ex.Message;
@@ -598,7 +598,7 @@ public class AlephiumPayoutHandler : PayoutHandlerBase, IPayoutHandler
         logger.Warn(() => $"{action}: {error}");
 
         if(rethrow)
-            throw ex; // não use 'throw;' fora de catch
+            throw ex; // Do not use 'throw;' outside a catch block.
     }
 
     private async Task UnlockWallet(CancellationToken ct)

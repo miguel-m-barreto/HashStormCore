@@ -252,3 +252,14 @@ src/HashStormCore/packages-vulnerable.txt
 # Temporary package upgrade audit notes
 docs/upgrade-notes/
 docs/upgrade-notes/*.md
+docs/audits/
+
+
+# Local review/collection scripts
+/tmp_scripts/
+
+
+# Local/generated package audit reports
+/packages-deprecated.txt
+/packages-outdated.txt
+/packages-vulnerable.txt

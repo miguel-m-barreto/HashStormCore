@@ -190,7 +190,7 @@ public class BitcoinPool : PoolBase
 
             if (requestAge > maxShareAge)
             {
-                logger.Warn(() => $"[{connection.ConnectionId}] Shedding aged submit request before validation (request_age_exceeded; server overloaded?)");
+                await RejectAgedSubmitBeforeValidationAsync(connection, request, requestAge);
                 return;
             }
 
@@ -203,7 +203,7 @@ public class BitcoinPool : PoolBase
             else if (!context.IsSubscribed)
                 throw new StratumException(StratumError.NotSubscribed, "not subscribed");
 
-            var requestParams = request.ParamsAs<string[]>();
+            var requestParams = GetRawSubmitParams(request);
 
             // submit
             var share = await manager.SubmitShareAsync(connection, requestParams, ct);
@@ -252,6 +252,22 @@ public class BitcoinPool : PoolBase
             ConsiderBan(connection, context, poolConfig.Banning);
 
             throw;
+        }
+    }
+
+    private static object[] GetRawSubmitParams(JsonRpcRequest request)
+    {
+        try
+        {
+            return request.ParamsAs<object[]>() ?? throw new StratumException(StratumError.Other, "invalid params");
+        }
+        catch(StratumException)
+        {
+            throw;
+        }
+        catch(Exception ex) when(ex is JsonException or InvalidCastException or ArgumentException or NullReferenceException)
+        {
+            throw new StratumException(StratumError.Other, "invalid params");
         }
     }
 
@@ -320,9 +336,9 @@ public class BitcoinPool : PoolBase
         var request = tsRequest.Value;
         var context = connection.ContextAs<BitcoinWorkerContext>();
 
-        var requestParams = request.ParamsAs<JToken[]>();
-        var extensions = requestParams[0].ToObject<string[]>();
-        var extensionParams = requestParams[1].ToObject<Dictionary<string, JToken>>();
+        var requestParams = GetConfigureParams(request);
+        var extensions = GetConfigureExtensions(requestParams[0]);
+        var extensionParams = GetConfigureExtensionParams(requestParams[1]);
         var result = new Dictionary<string, object>();
 
         if (extensions != null)
@@ -356,6 +372,72 @@ public class BitcoinPool : PoolBase
         await connection.RespondAsync(response);
     }
 
+    private static JToken[] GetConfigureParams(JsonRpcRequest request)
+    {
+        try
+        {
+            var requestParams = request.ParamsAs<JToken[]>();
+
+            if(requestParams == null || requestParams.Length < 2 || requestParams[0] == null || requestParams[1] == null)
+                throw new StratumException(StratumError.Other, "invalid configure params");
+
+            return requestParams;
+        }
+        catch(StratumException)
+        {
+            throw;
+        }
+        catch(Exception ex) when(ex is JsonException or InvalidCastException or ArgumentException or NullReferenceException)
+        {
+            throw new StratumException(StratumError.Other, "invalid configure params");
+        }
+    }
+
+    private static string[] GetConfigureExtensions(JToken value)
+    {
+        try
+        {
+            return value.ToObject<string[]>() ?? Array.Empty<string>();
+        }
+        catch(Exception ex) when(ex is JsonException or InvalidCastException or ArgumentException or NullReferenceException)
+        {
+            throw new StratumException(StratumError.Other, "invalid configure params");
+        }
+    }
+
+    private static Dictionary<string, JToken> GetConfigureExtensionParams(JToken value)
+    {
+        try
+        {
+            return value.ToObject<Dictionary<string, JToken>>() ??
+                throw new StratumException(StratumError.Other, "invalid configure params");
+        }
+        catch(StratumException)
+        {
+            throw;
+        }
+        catch(Exception ex) when(ex is JsonException or InvalidCastException or ArgumentException or NullReferenceException)
+        {
+            throw new StratumException(StratumError.Other, "invalid configure params");
+        }
+    }
+
+    private static uint ParseHexUInt32Strict(string value, string sizeError, string invalidError)
+    {
+        if(value == null || value.Length != 8)
+            throw new StratumException(StratumError.Other, sizeError);
+
+        foreach(var ch in value)
+        {
+            var isHex = ch is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
+
+            if(!isHex)
+                throw new StratumException(StratumError.Other, invalidError);
+        }
+
+        return uint.Parse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+    }
+
     private void ConfigureVersionRolling(StratumConnection connection, BitcoinWorkerContext context,
         IReadOnlyDictionary<string, JToken> extensionParams, Dictionary<string, object> result)
     {
@@ -363,7 +445,8 @@ public class BitcoinPool : PoolBase
         var requestedMask = BitcoinConstants.VersionRollingPoolMask;
 
         if (extensionParams.TryGetValue(BitcoinStratumExtensions.VersionRollingMask, out var requestedMaskValue))
-            requestedMask = uint.Parse(requestedMaskValue.Value<string>(), NumberStyles.HexNumber);
+            requestedMask = ParseHexUInt32Strict(requestedMaskValue.Value<string>(),
+                "incorrect size of version-rolling mask", "invalid version-rolling mask");
 
         // Compute effective mask
         context.VersionRollingMask = BitcoinConstants.VersionRollingPoolMask & requestedMask;

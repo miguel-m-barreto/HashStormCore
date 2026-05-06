@@ -123,7 +123,7 @@ public class RealichainJob : ProgpowJob
                 var spk = new Script(mn.Script.HexToByteArray());
                 var pay = mn.Amount;
                 tx.Outputs.Add(pay, spk);
-                // REALI: não desconta
+                // REALI: do not subtract.
             }
         }
 
@@ -143,7 +143,7 @@ public class RealichainJob : ProgpowJob
                 var spk = new Script(c.Script.HexToByteArray());
                 var pay = c.Amount;
                 tx.Outputs.Add(pay, spk);
-                // REALI: não desconta
+                // REALI: do not subtract.
             }
         }
 
@@ -163,7 +163,7 @@ public class RealichainJob : ProgpowJob
                 var spk = new Script(d.Script.HexToByteArray());
                 var pay = d.Amount;
                 tx.Outputs.Add(pay, spk);
-                // REALI: não desconta
+                // REALI: do not subtract.
             }
         }
 

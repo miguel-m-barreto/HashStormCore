@@ -55,7 +55,7 @@ namespace HashStormCore.Blockchain.Kaspa
             return raw.PadLeft(totalLen, '0');
         }
 
-        #region Matrix/generator (para altcoins)
+        #region Matrix/generator for altcoins
 
         protected virtual ushort[][] GenerateMatrix(ReadOnlySpan<byte> prePowHash)
         {

@@ -1,5 +1,5 @@
 // src/HashStormCore/Api/Responses/GetPoolsResponse.cs
-using System.Text.Json; // para JsonElement
+using System.Text.Json; // for JsonElement
 using System.Text.Json.Serialization;
 using HashStormCore.Blockchain;
 using HashStormCore.Configuration;

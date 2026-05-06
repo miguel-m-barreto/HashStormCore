@@ -30,6 +30,50 @@ public class BitcoinJobManager : BitcoinJobManagerBase<BitcoinJob>
 
     private BitcoinTemplate coin;
 
+    internal sealed record SubmitParameters(
+        string WorkerValue,
+        string JobId,
+        string ExtraNonce2,
+        string NTime,
+        string Nonce,
+        string VersionBits);
+
+    internal static SubmitParameters ExtractSubmitParameters(object[] submitParams, bool versionRollingNegotiated)
+    {
+        if(submitParams == null || submitParams.Length < 5)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        if(versionRollingNegotiated)
+        {
+            if(submitParams.Length < 6)
+                throw new StratumException(StratumError.Other, "missing version bits");
+
+            if(submitParams.Length > 6)
+                throw new StratumException(StratumError.Other, "invalid params");
+        }
+        else if(submitParams.Length > 5)
+        {
+            throw new StratumException(StratumError.Other, "version rolling was not negotiated");
+        }
+
+        var workerValue = ReadString(submitParams, 0, "workername")?.Trim();
+        var jobId = ReadString(submitParams, 1, "job id");
+        var extraNonce2 = ReadString(submitParams, 2, "extra nonce");
+        var nTime = ReadString(submitParams, 3, "ntime");
+        var nonce = ReadString(submitParams, 4, "nonce");
+        var versionBits = versionRollingNegotiated ? ReadString(submitParams, 5, "version bits") : null;
+
+        return new SubmitParameters(workerValue, jobId, extraNonce2, nTime, nonce, versionBits);
+    }
+
+    private static string ReadString(object[] submitParams, int index, string name)
+    {
+        if(submitParams[index] is not string value)
+            throw new StratumException(StratumError.Other, $"invalid {name}");
+
+        return value;
+    }
+
     protected override object[] GetBlockTemplateParams()
     {
         var result = base.GetBlockTemplateParams();
@@ -258,29 +302,23 @@ public class BitcoinJobManager : BitcoinJobManagerBase<BitcoinJob>
 
         var context = worker.ContextAs<BitcoinWorkerContext>();
 
-        // extract params
-        var workerValue = (submitParams[0] as string)?.Trim();
-        var jobId = submitParams[1] as string;
-        var extraNonce2 = submitParams[2] as string;
-        var nTime = submitParams[3] as string;
-        var nonce = submitParams[4] as string;
-        var versionBits = context.VersionRollingMask.HasValue ? submitParams[5] as string : null;
+        var parsed = ExtractSubmitParameters(submitParams, context.VersionRollingMask.HasValue);
 
-        if(string.IsNullOrEmpty(workerValue))
+        if(string.IsNullOrEmpty(parsed.WorkerValue))
             throw new StratumException(StratumError.Other, "missing or invalid workername");
 
         BitcoinJob job;
 
         lock(context)
         {
-            job = context.GetJob(jobId);
+            job = context.GetJob(parsed.JobId);
         }
 
         if(job == null)
             throw new StratumException(StratumError.JobNotFound, "job not found");
 
         // validate & process
-        var (share, blockHex) = job.ProcessShare(worker, extraNonce2, nTime, nonce, versionBits);
+        var (share, blockHex) = job.ProcessShare(worker, parsed.ExtraNonce2, parsed.NTime, parsed.Nonce, parsed.VersionBits);
 
         // enrich share with common data
         share.PoolId = poolConfig.Id;

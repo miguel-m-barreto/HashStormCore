@@ -250,7 +250,20 @@ public abstract class PoolBase : StratumServer,
 
     protected Task PublishRejectedShareAfterResponseAsync(StratumConnection connection, JsonRpcRequest request, StratumException ex)
     {
-        if(clusterConfig.EventPipeline?.Enabled != true || request?.Method?.Contains("submit", StringComparison.OrdinalIgnoreCase) != true)
+        if(!IsShareSubmitRequest(request))
+            return Task.CompletedTask;
+
+        return PublishSubmitRejectedShareAfterResponseAsync(connection, request, ex);
+    }
+
+    protected virtual bool IsShareSubmitRequest(JsonRpcRequest request)
+    {
+        return request?.Method?.Contains("submit", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    protected Task PublishSubmitRejectedShareAfterResponseAsync(StratumConnection connection, JsonRpcRequest request, StratumException ex)
+    {
+        if(clusterConfig.EventPipeline?.Enabled != true)
             return Task.CompletedTask;
 
         return connection.ExecuteAfterPriorSendsAsync(() =>
@@ -259,7 +272,8 @@ public abstract class PoolBase : StratumServer,
             {
                 var context = connection.Context;
                 var eventType = ex.Message.Contains("stale", StringComparison.OrdinalIgnoreCase) ||
-                    ex.Message.Contains("job not found", StringComparison.OrdinalIgnoreCase)
+                    ex.Message.Contains("job not found", StringComparison.OrdinalIgnoreCase) ||
+                    ex.Message.Contains("request_age_exceeded", StringComparison.OrdinalIgnoreCase)
                         ? ShareEventType.ShareStale
                         : ShareEventType.ShareRejected;
 
@@ -286,6 +300,18 @@ public abstract class PoolBase : StratumServer,
             }
 
         });
+    }
+
+    protected async Task RejectAgedSubmitBeforeValidationAsync(StratumConnection connection, JsonRpcRequest request, TimeSpan requestAge)
+    {
+        const string reason = "request_age_exceeded";
+        var ex = new StratumException(StratumError.Other, reason);
+
+        logger.Warn(() => $"[{connection.ConnectionId}] Shedding aged submit request before validation ({reason}; server overloaded?)");
+        PublishTelemetry(TelemetryCategory.Share, requestAge, false);
+
+        await connection.RespondErrorAsync(ex.Code, ex.Message, request.Id, false);
+        await PublishSubmitRejectedShareAfterResponseAsync(connection, request, ex);
     }
 
     private async Task EnqueueShareEventOrFailAsync(ShareEvent shareEvent, string context)

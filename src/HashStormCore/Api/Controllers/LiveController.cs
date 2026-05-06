@@ -398,10 +398,10 @@ public class LiveController : ControllerBase
         if (ageSec <= 0)
             return conf;
 
-        // age mínimo para não termos média em 2 ou 3 segundos
+        // Minimum age so we do not average over only 2 or 3 seconds.
         var age = Math.Max(ageSec, MinEffectiveWindowSec);
 
-        // nunca maior do que a janela configurada
+        // Never exceed the configured window.
         if (age > conf)
             age = conf;
 

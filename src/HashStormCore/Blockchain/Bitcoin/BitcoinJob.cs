@@ -299,17 +299,50 @@ public class BitcoinJob
     }
 
     // submissions: case-insensitive comparer already ensures case-insensitive keys
-    protected bool RegisterSubmit(string extraNonce1, string extraNonce2, string nTime, string nonce)
+    protected bool RegisterSubmit(string extraNonce1, string extraNonce2, string nTime, string nonce, uint? versionBits = null)
     {
-        // Null-safe concatenation: nulls result in empty segments
-        var key = string.Concat(extraNonce1 ?? string.Empty,
-                                extraNonce2 ?? string.Empty,
-                                nTime ?? string.Empty,
-                                nonce ?? string.Empty);
+        var key = string.Join(':',
+            extraNonce1 ?? string.Empty,
+            extraNonce2 ?? string.Empty,
+            nTime ?? string.Empty,
+            nonce ?? string.Empty,
+            versionBits?.ToStringHex8() ?? string.Empty);
 
         return submissions.TryAdd(key, true);
     }
 
+    private static uint ParseHexUInt32(string value, string sizeError, string invalidError)
+    {
+        if(value?.Length != 8)
+            throw new StratumException(StratumError.Other, sizeError);
+
+        if(!uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var result))
+            throw new StratumException(StratumError.Other, invalidError);
+
+        return result;
+    }
+
+
+    private static uint ParseHexUInt32Strict(string value, string sizeError, string invalidError)
+    {
+        ValidateHex(value, 8, sizeError, invalidError);
+
+        return uint.Parse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+    }
+
+    private static void ValidateHex(string value, int expectedLength, string sizeError, string invalidError)
+    {
+        if(value == null || value.Length != expectedLength)
+            throw new StratumException(StratumError.Other, sizeError);
+
+        foreach(var ch in value)
+        {
+            var isHex = ch is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
+
+            if(!isHex)
+                throw new StratumException(StratumError.Other, invalidError);
+        }
+    }
 
     protected byte[] SerializeHeader(Span<byte> coinbaseHash, uint nTime, uint nonce, uint? versionMask, uint? versionBits)
     {
@@ -342,6 +375,8 @@ public class BitcoinJob
         StratumConnection worker, string extraNonce2, uint nTime, uint nonce, uint? versionBits)
     {
         var context = worker.ContextAs<BitcoinWorkerContext>();
+        var expectedExtraNonce2Length = extraNoncePlaceHolderLength * 2 - (context.ExtraNonce1?.Length ?? 0);
+        ValidateHex(extraNonce2, expectedExtraNonce2Length, "incorrect size of extranonce2", "invalid extranonce2");
         var extraNonce1 = context.ExtraNonce1;
 
         // build coinbase
@@ -949,43 +984,54 @@ public class BitcoinJob
         string extraNonce2, string nTime, string nonce, string versionBits = null)
     {
         Contract.RequiresNonNull(worker);
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(extraNonce2));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nTime));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
+
+        if(string.IsNullOrEmpty(extraNonce2))
+            throw new StratumException(StratumError.Other, "missing or invalid extranonce2");
+
+        if(string.IsNullOrEmpty(nTime))
+            throw new StratumException(StratumError.Other, "missing or invalid ntime");
+
+        if(string.IsNullOrEmpty(nonce))
+            throw new StratumException(StratumError.Other, "missing or invalid nonce");
 
         var context = worker.ContextAs<BitcoinWorkerContext>();
 
         // validate nTime
-        if(nTime.Length != 8)
-            throw new StratumException(StratumError.Other, "incorrect size of ntime");
-
-        var nTimeInt = uint.Parse(nTime, NumberStyles.HexNumber);
+        var nTimeInt = ParseHexUInt32Strict(nTime, "incorrect size of ntime", "invalid ntime");
         if(nTimeInt < BlockTemplate.CurTime || nTimeInt > ((DateTimeOffset) clock.Now).ToUnixTimeSeconds() + 7200)
             throw new StratumException(StratumError.Other, "ntime out of range");
 
         // validate nonce
-        if(nonce.Length != 8)
-            throw new StratumException(StratumError.Other, "incorrect size of nonce");
-
-        var nonceInt = uint.Parse(nonce, NumberStyles.HexNumber);
+        var nonceInt = ParseHexUInt32Strict(nonce, "incorrect size of nonce", "invalid nonce");
 
         // validate version-bits (overt ASIC boost)
-        uint versionBitsInt = 0;
+        uint? versionBitsKey = null;
 
-        if(context.VersionRollingMask.HasValue && versionBits != null)
+        if(context.VersionRollingMask.HasValue)
         {
-            versionBitsInt = uint.Parse(versionBits, NumberStyles.HexNumber);
+            if(versionBits == null)
+                throw new StratumException(StratumError.Other, "missing version bits");
+
+            versionBitsKey = ParseHexUInt32Strict(versionBits, "incorrect size of version bits", "invalid version bits");
 
             // enforce that only bits covered by current mask are changed by miner
-            if((versionBitsInt & ~context.VersionRollingMask.Value) != 0)
+            if((versionBitsKey.Value & ~context.VersionRollingMask.Value) != 0)
                 throw new StratumException(StratumError.Other, "rolling-version mask violation");
         }
+        else if(versionBits != null)
+        {
+            throw new StratumException(StratumError.Other, "version rolling was not negotiated");
+        }
+
+        var expectedExtraNonce2Length = extraNoncePlaceHolderLength * 2 - (context.ExtraNonce1?.Length ?? 0);
+        ValidateHex(extraNonce2, expectedExtraNonce2Length, "incorrect size of extranonce2", "invalid extranonce2");
 
         // dupe check
-        if(!RegisterSubmit(context.ExtraNonce1, extraNonce2, nTime, nonce))
+        if(!RegisterSubmit(context.ExtraNonce1, extraNonce2.ToLowerInvariant(),
+               nTimeInt.ToStringHex8(), nonceInt.ToStringHex8(), versionBitsKey))
             throw new StratumException(StratumError.DuplicateShare, "duplicate share");
 
-        return ProcessShareInternal(worker, extraNonce2, nTimeInt, nonceInt, versionBitsInt);
+        return ProcessShareInternal(worker, extraNonce2, nTimeInt, nonceInt, versionBitsKey);
     }
 
     #endregion // API-Surface
