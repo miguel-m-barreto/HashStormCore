@@ -1614,7 +1614,7 @@ public class LiveController : ControllerBase
         var unit = ResolveUnit(poolCfg.Template.Family);
         var poolInst = TryGetPoolInstance(poolCfg.Id);
 
-        // LIVE: workers do address com diffSum + lastSeen + ageSec
+        // LIVE: address workers with diffSum, lastSeen, and ageSec.
         var workers = LiveHashrateState
             .EnumerateAddressWorkersWithAge(poolCfg.Id, address, win)
             .Select(w =>
@@ -1630,7 +1630,7 @@ public class LiveController : ControllerBase
 
                 return new
                 {
-                    worker = w.worker,           // string após o ponto: address.worker
+                    worker = w.worker,           // String after the dot: address.worker.
                     hashrate,
                     sharesPerSecond = sharesPerSec,
                     online,
@@ -1649,7 +1649,7 @@ public class LiveController : ControllerBase
             poolId = poolCfg.Id,
             address,
             unit,
-            windowSec = win,   // janela "configurada"
+            windowSec = win,   // Configured window.
             items = workers
         });
     }

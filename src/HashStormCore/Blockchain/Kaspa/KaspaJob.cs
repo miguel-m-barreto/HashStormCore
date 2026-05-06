@@ -120,7 +120,7 @@ namespace HashStormCore.Blockchain.Kaspa
 
         #endregion
 
-        #region Serializações
+        #region Serialization
 
         protected virtual void SerializeCoinbase(ReadOnlySpan<byte> prePowHash, long timestamp, ulong nonce, Span<byte> dest)
         {

@@ -93,7 +93,7 @@ Telemetry and audit events are useful for diagnostics and may be persisted, but 
 
 Rejected and stale share events must not be inserted into the existing `shares` accounting table.
 
-Very old submit requests rejected before validation, for example `requestAge > maxShareAge`, are pre-admission overload shedding. They are outside the ShareEvent no-drop guarantee.
+Very old submit requests rejected before full share validation, for example `requestAge > maxShareAge`, are not accepted shares and are not accounting-critical records. They still receive a normal miner response and, when the event pipeline is enabled, emit non-penalizing stale/rejection telemetry after the response.
 
 The legacy external ShareReceiver/ZMQ path is best-effort. It is not covered by the local Pool Core accounting-critical guarantee unless future relay-side durable outbox support is added.
 

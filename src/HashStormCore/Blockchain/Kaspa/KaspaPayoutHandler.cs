@@ -108,7 +108,7 @@ public class KaspaPayoutHandler : PayoutHandlerBase, IPayoutHandler
             logger.Warn(() => $"[Kaspa Payout Handler] 'walletHttpBaseUrl' not configured – SimpleSend unavailable");
     }
 
-    // === Classificação por BlueScore virtual (confirmações) ===
+    // === Classification by virtual BlueScore (confirmations) ===
     public virtual async Task<Block[]> ClassifyBlocksAsync(IMiningPool pool, Block[] blocks, CancellationToken ct)
     {
         if(blocks == null || blocks.Length == 0)
@@ -187,7 +187,7 @@ public class KaspaPayoutHandler : PayoutHandlerBase, IPayoutHandler
         var balancesTotal = amounts.Sum(x => x.Value);
         logger.Info(() => $"[{LogCategory}] Paying {FormatAmount(balancesTotal)} to {amounts.Count} addresses");
 
-        // validar endereços
+        // Validate addresses.
         var coin = poolConfig.Template.As<KaspaCoinTemplate>();
         foreach(var pair in amounts)
         {

@@ -30,7 +30,7 @@ HAVE_AVX512F=$(../Native/check_cpu.sh avx512f && echo -DHAVE_AVX512F || echo)
 
 export HAVE_FEATURE="$HAVE_AES $HAVE_SSE2 $HAVE_SSE3 $HAVE_SSSE3 $HAVE_PCLMUL $HAVE_AVX $HAVE_AVX2 $HAVE_AVX512F"
 
-# -------- Mostrar só warnings/errors (opcional) --------
+# -------- Show only warnings/errors (optional) --------
 if [[ "${FILTER_WARNERR:-}" == "1" ]]; then
   filter_re='^(In file included|[[:space:]]*[0-9]+ \| |.*(warning|error|note):)'
   run() { "$@" 2>&1 | grep -E "$filter_re" || true; }

@@ -351,7 +351,7 @@ Telemetry/audit events:
 
 These are useful, but not payout-critical by default. They may be written to `share_events`, but they are not inserted into `shares`.
 
-Pre-admission shedding is outside the `ShareEvent` guarantee. Example: a very old submit rejected before validation because `requestAge > maxShareAge`.
+Aged mining submit requests rejected before full share validation are not accepted shares and are not accounting-critical records. They still must not be silently dropped as requests. When `requestAge > maxShareAge`, Pool Core must respond through the normal miner response path and, when `eventPipeline.enabled=true`, emit non-penalizing telemetry such as `ShareStale` with reason `request_age_exceeded` after the response. This path must not insert accepted shares, run full share validation, call `ConsiderBan`, or block the miner response on Redis/PostgreSQL/WAL/fsync.
 
 The legacy external `ShareReceiver`/ZMQ path is best-effort. It is not covered by the local Pool Core accounting-critical guarantee unless future relay-side durable outbox support is added.
 
@@ -673,6 +673,7 @@ Do not change these without deliberately redesigning the architecture:
 - Do not bypass WAL/outbox for production publishing.
 - Do not treat lifecycle events as accounting-critical unless a future design promotes them.
 - Do not make Pool Core responsible for supervising sidecars in-process.
+
 ## Submit Rejection Telemetry
 
 Accepted shares and daemon-accepted block candidates are critical event handoffs. Malformed, rejected, and stale submit telemetry is best-effort and is emitted after the miner response unless a pool family documents a stricter rule.

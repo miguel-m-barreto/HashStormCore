@@ -48,8 +48,9 @@ HashStormCore's hot paths include:
 
 - Stratum message handling
 - JobManager pipelines
-- ShareRecorder
-- LiveHashrateEngine ring updates
+- share validation and duplicate detection
+- event handoff and WAL/outbox publishing
+- LiveAggregator rolling-state updates
 
 Do **not** introduce unnecessary allocations, locks, or per-share overhead.
 
@@ -72,12 +73,11 @@ Changes to:
 
 No breaking changes merged without review.
 
-### 4. Tests (Recommended)
+### 4. Tests
 
 If you submit logic-heavy changes (VarDiff, hashing, share validation, job builder),
-include at least minimal tests, even if simple console tests.
-
-A full automated suite is planned (see ROADMAP), but not yet present.
+include focused automated tests where feasible. At minimum, explain exactly how the
+change was manually verified and which edge cases remain uncovered.
 
 ---
 
