@@ -1,1 +1,0 @@
-Could not find file or directory '/home/hashstorm/Desktop/HashStormCore/HashStormCore.csproj'.
