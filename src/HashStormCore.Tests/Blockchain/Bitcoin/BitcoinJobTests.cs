@@ -36,6 +36,15 @@ public class BitcoinJobTests : TestBase
     }
 
     [Fact]
+    public void RegisterSubmit_Treats_Hex_Casing_As_Equivalent_For_Duplicate_Detection()
+    {
+        var job = new TestBitcoinJob();
+
+        Assert.True(job.TryRegister("6000000A", "A1B2C3D4", "63445774", "51036775", 0x00002000));
+        Assert.False(job.TryRegister("6000000a", "a1b2c3d4", "63445774", "51036775", 0x00002000));
+    }
+
+    [Fact]
     public void Process_Malformed_VersionBits_Throws_StratumException()
     {
         var (job, worker) = CreateJob();
@@ -57,6 +66,20 @@ public class BitcoinJobTests : TestBase
             job.ProcessShare(worker, "01000000", "63445774", "51036775", "2000"));
 
         Assert.Contains("incorrect size of version bits", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("0002000")]
+    [InlineData("000020000")]
+    [InlineData(" 0002000")]
+    [InlineData("0002000 ")]
+    public void Process_Invalid_VersionBits_Shape_Throws_StratumException(string versionBits)
+    {
+        var (job, worker) = CreateJob();
+        worker.ContextAs<BitcoinWorkerContext>().VersionRollingMask = 0x1fffe000;
+
+        Assert.Throws<StratumException>(() =>
+            job.ProcessShare(worker, "01000000", "63445774", "51036775", versionBits));
     }
 
     [Fact]
@@ -114,6 +137,44 @@ public class BitcoinJobTests : TestBase
                 versionRollingNegotiated: false));
 
         Assert.Contains("version rolling was not negotiated", ex.Message);
+    }
+
+    [Fact]
+    public void ExtractSubmitParameters_Non_String_Param_Throws_StratumException()
+    {
+        var ex = Assert.Throws<StratumException>(() =>
+            BitcoinJobManager.ExtractSubmitParameters(
+                new object[] { "miner.worker", "1", 1, "63445774", "51036775" },
+                versionRollingNegotiated: false));
+
+        Assert.Contains("invalid extra nonce", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("00000000", 0u)]
+    [InlineData("ffffffff", 0xffffffffu)]
+    [InlineData("FFFFFFFF", 0xffffffffu)]
+    [InlineData("1a2B3c4D", 0x1a2b3c4du)]
+    public void TryParseHex8Strict_Valid_Values_Parse(string value, uint expected)
+    {
+        Assert.True(BitcoinSubmitValidation.TryParseHex8Strict(value, out var result));
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("1")]
+    [InlineData("1234567")]
+    [InlineData("123456789")]
+    [InlineData("zzzzzzzz")]
+    [InlineData("1234567g")]
+    [InlineData(" 1234567")]
+    [InlineData("1234567 ")]
+    [InlineData("+1234567")]
+    public void TryParseHex8Strict_Invalid_Values_Return_False(string value)
+    {
+        Assert.False(BitcoinSubmitValidation.TryParseHex8Strict(value, out _));
     }
 
     [Fact]
@@ -337,7 +398,16 @@ public class BitcoinJobTests : TestBase
     {
         public bool TryRegister(string extraNonce1, string extraNonce2, string nTime, string nonce, uint? versionBits = null)
         {
-            return RegisterSubmit(extraNonce1, extraNonce2, nTime, nonce, versionBits);
+            var nTimeInt = BitcoinSubmitValidation.ParseHex8Strict(nTime, "incorrect size of ntime", "invalid ntime");
+            var nonceInt = BitcoinSubmitValidation.ParseHex8Strict(nonce, "incorrect size of nonce", "invalid nonce");
+
+            return RegisterSubmit(
+                extraNonce1,
+                extraNonce2,
+                nTimeInt,
+                nonceInt,
+                versionBits ?? 0,
+                versionBits.HasValue);
         }
     }
 }

@@ -119,13 +119,16 @@ public class EventPipelineSafetyTests
     {
         var bitcoinPoolSource = ReadSource("HashStormCore", "Blockchain", "Bitcoin", "BitcoinPool.cs");
         var bitcoinJobSource = ReadSource("HashStormCore", "Blockchain", "Bitcoin", "BitcoinJob.cs");
+        var bitcoinSubmitValidationSource = ReadSource("HashStormCore", "Blockchain", "Bitcoin", "BitcoinSubmitValidation.cs");
 
         Assert.Contains("GetRawSubmitParams(request)", bitcoinPoolSource);
-        Assert.Contains("ParseHexUInt32Strict(requestedMaskValue.Value<string>()", bitcoinPoolSource);
+        Assert.Contains("BitcoinSubmitValidation.ParseHex8Strict(requestedMaskValue.Value<string>()", bitcoinPoolSource);
         Assert.DoesNotContain("requestedMask = uint.Parse", bitcoinPoolSource);
-        Assert.Contains("ValidateHex(extraNonce2", bitcoinJobSource);
-        Assert.Contains("nTimeInt.ToStringHex8()", bitcoinJobSource);
-        Assert.Contains("nonceInt.ToStringHex8()", bitcoinJobSource);
+        Assert.Contains("BitcoinSubmitValidation.ParseSubmitInput(", bitcoinJobSource);
+        Assert.Contains("BitcoinSubmitValidation.CreateDuplicateKey", bitcoinJobSource);
+        Assert.Contains("TryParseHex8Strict", bitcoinSubmitValidationSource);
+        Assert.DoesNotContain("uint.Parse", bitcoinSubmitValidationSource);
+        Assert.DoesNotContain("string.Join", bitcoinJobSource);
     }
 
     [Fact]

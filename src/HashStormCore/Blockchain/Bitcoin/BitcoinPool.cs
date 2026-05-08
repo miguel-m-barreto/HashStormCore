@@ -422,22 +422,6 @@ public class BitcoinPool : PoolBase
         }
     }
 
-    private static uint ParseHexUInt32Strict(string value, string sizeError, string invalidError)
-    {
-        if(value == null || value.Length != 8)
-            throw new StratumException(StratumError.Other, sizeError);
-
-        foreach(var ch in value)
-        {
-            var isHex = ch is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
-
-            if(!isHex)
-                throw new StratumException(StratumError.Other, invalidError);
-        }
-
-        return uint.Parse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-    }
-
     private void ConfigureVersionRolling(StratumConnection connection, BitcoinWorkerContext context,
         IReadOnlyDictionary<string, JToken> extensionParams, Dictionary<string, object> result)
     {
@@ -445,7 +429,7 @@ public class BitcoinPool : PoolBase
         var requestedMask = BitcoinConstants.VersionRollingPoolMask;
 
         if (extensionParams.TryGetValue(BitcoinStratumExtensions.VersionRollingMask, out var requestedMaskValue))
-            requestedMask = ParseHexUInt32Strict(requestedMaskValue.Value<string>(),
+            requestedMask = BitcoinSubmitValidation.ParseHex8Strict(requestedMaskValue.Value<string>(),
                 "incorrect size of version-rolling mask", "invalid version-rolling mask");
 
         // Compute effective mask
