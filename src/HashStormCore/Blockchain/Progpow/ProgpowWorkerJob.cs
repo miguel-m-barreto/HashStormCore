@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using HashStormCore.Stratum;
+using HashStormCore.Util;
 using NLog;
 using Contract = HashStormCore.Contracts.Contract;
 
@@ -45,12 +46,13 @@ public class ProgpowWorkerJob
         if(nonce is null || nonce.Length != 16)
             throw new StratumException(StratumError.Other, $"incorrect size of nonce: {nonce}");
 
+        if(!HexUtils.IsFixedLengthHex(nonce, 16) || !ulong.TryParse(nonce, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nonceLong))
+            throw new StratumException(StratumError.Other, $"invalid nonce: {nonce}");
+
         // Do NOT enforce nonce prefix == ExtraNonce1[0..4]: not all KawPoW miners follow that.
         // Just ensure dedupe is case-insensitive.
         if(!RegisterSubmit(nonce.ToLowerInvariant(), headerHash.ToLowerInvariant(), mixHash.ToLowerInvariant()))
             throw new StratumException(StratumError.DuplicateShare, "duplicate share");
-
-        var nonceLong = ulong.Parse(nonce, NumberStyles.HexNumber);
 
         return Job.ProcessShareInternal(logger, worker, nonceLong, headerHash, mixHash);
     }

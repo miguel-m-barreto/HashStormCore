@@ -222,7 +222,9 @@ public class SatoshicashJob : BitcoinJob
         if(nTime.Length != 8)
             throw new StratumException(StratumError.Other, "incorrect size of ntime");
 
-        var nTimeInt = uint.Parse(nTime, NumberStyles.HexNumber);
+        if(!HexUtils.IsFixedLengthHex(nTime, 8) || !uint.TryParse(nTime, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nTimeInt))
+            throw new StratumException(StratumError.Other, "invalid ntime");
+
         if(nTimeInt < BlockTemplate.CurTime || nTimeInt > ((DateTimeOffset) clock.Now).ToUnixTimeSeconds() + 7200)
             throw new StratumException(StratumError.Other, "ntime out of range");
 
@@ -230,7 +232,8 @@ public class SatoshicashJob : BitcoinJob
         if(nonce.Length != 8)
             throw new StratumException(StratumError.Other, "incorrect size of nonce");
 
-        var nonceInt = uint.Parse(nonce, NumberStyles.HexNumber);
+        if(!HexUtils.IsFixedLengthHex(nonce, 8) || !uint.TryParse(nonce, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nonceInt))
+            throw new StratumException(StratumError.Other, "invalid nonce");
 
         // dupe check
         if(!RegisterSubmit(context.ExtraNonce1, extraNonce2, nTime, nonce))

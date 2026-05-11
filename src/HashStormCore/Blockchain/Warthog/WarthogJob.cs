@@ -12,6 +12,7 @@ using HashStormCore.Extensions;
 using HashStormCore.Native;
 using HashStormCore.Stratum;
 using HashStormCore.Time;
+using HashStormCore.Util;
 
 namespace HashStormCore.Blockchain.Warthog;
 
@@ -319,7 +320,9 @@ public class WarthogJob
         if(nTime.Length != 8)
             throw new StratumException(StratumError.Other, "incorrect size of ntime");
 
-        var nTimeInt = uint.Parse(nTime, NumberStyles.HexNumber);
+        if(!HexUtils.IsFixedLengthHex(nTime, 8) || !uint.TryParse(nTime, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nTimeInt))
+            throw new StratumException(StratumError.Other, "invalid ntime");
+
         if(nTimeInt < uint.Parse(nTimeBytes.ToHexString(), NumberStyles.HexNumber) || nTimeInt > ((DateTimeOffset) clock.Now).ToUnixTimeSeconds() + WarthogConstants.TimeTolerance)
             throw new StratumException(StratumError.Other, "ntime out of range");
 
@@ -327,7 +330,8 @@ public class WarthogJob
         if(nonce.Length != WarthogConstants.NonceLength)
             throw new StratumException(StratumError.Other, "incorrect size of nonce");
 
-        var nonceInt = uint.Parse(nonce, NumberStyles.HexNumber);
+        if(!HexUtils.IsFixedLengthHex(nonce, WarthogConstants.NonceLength) || !uint.TryParse(nonce, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nonceInt))
+            throw new StratumException(StratumError.Other, "invalid nonce");
 
         // dupe check
         if(!RegisterSubmit(context.ExtraNonce1, extraNonce2, nTime, nonce))
