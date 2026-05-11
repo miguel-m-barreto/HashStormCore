@@ -188,7 +188,7 @@ public class RealichainJob : ProgpowJob
             else
             {
                 var single = jt.ToObject<T>();
-                if(single != null)
+                if(single is not null)
                     yield return single;
             }
             yield break;

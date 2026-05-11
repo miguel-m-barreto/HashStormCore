@@ -71,6 +71,6 @@ public class RedisLiveReadService : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await multiplexer.CloseAsync();
-        multiplexer.Dispose();
+        await multiplexer.DisposeAsync();
     }
 }

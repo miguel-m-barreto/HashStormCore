@@ -24,6 +24,7 @@ public class EthereumJob
         blockTarget = new uint256(target.HexToReverseByteArray());
     }
 
+    protected readonly object workerNoncesLock = new();
     protected Dictionary<string, HashSet<string>> workerNonces = new();
 
     public string Id { get; }
@@ -57,7 +58,7 @@ public class EthereumJob
         string workerName, string fullNonceHex, string solution, CancellationToken ct)
     {
         // dupe check
-        lock(workerNonces)
+        lock(workerNoncesLock)
         {
             RegisterNonce(worker, fullNonceHex);
         }

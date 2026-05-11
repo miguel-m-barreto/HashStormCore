@@ -345,7 +345,7 @@ public class RedisLiveStateWriter : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await multiplexer.CloseAsync();
-        multiplexer.Dispose();
+        await multiplexer.DisposeAsync();
     }
 
     private class Counter

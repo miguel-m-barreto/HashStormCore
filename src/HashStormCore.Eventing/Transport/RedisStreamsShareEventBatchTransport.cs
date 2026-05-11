@@ -54,7 +54,7 @@ public class RedisStreamsShareEventBatchTransport : IShareEventBatchTransport, I
         if(multiplexer != null)
         {
             await multiplexer.CloseAsync();
-            multiplexer.Dispose();
+            await multiplexer.DisposeAsync();
         }
     }
 

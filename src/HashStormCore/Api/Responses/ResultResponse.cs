@@ -6,7 +6,7 @@ public class ResultResponse<T>
     public ResultResponse(T result)
     {
         Result = result;
-        Success = result != null;
+        Success = result is not null;
     }
 
     public ResultResponse()

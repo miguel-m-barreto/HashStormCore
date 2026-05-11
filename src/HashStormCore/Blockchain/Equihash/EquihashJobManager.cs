@@ -339,7 +339,6 @@ public class EquihashJobManager : BitcoinJobManagerBase<EquihashJob>
         share.UserAgent = context.UserAgent;
         share.Source = clusterConfig.ClusterName;
         share.NetworkDifficulty = job.Difficulty;
-        share.Difficulty = share.Difficulty;
         share.Created = clock.Now;
 
         return share;

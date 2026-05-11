@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+
+path_filters:
+  - "!**/bin/**"
+  - "!**/obj/**"
+  - "!**/.vs/**"
+  - "!**/.idea/**"
+  - "!**/node_modules/**"
+  - "!**/logs/**"
+  - "!**/TestResults/**"
+  - "!**/BenchmarkDotNet.Artifacts/**"
+  - "!**/*.generated.cs"
+
+instructions: |
+  This repository is HashStormCore, a Miningcore-derived mining pool backend.
+
+  Review priorities:
+  - Prefer correctness, accounting safety, miner latency, and event-pipeline semantics over cosmetic cleanup.
+  - Do not suggest broad rewrites in critical submit paths unless the rewrite clearly reduces risk.
+  - Avoid hot-path allocation changes unless justified by benchmark evidence.
+  - Do not suggest moving Pool Core validation semantics into sidecars.
+
+  Critical Pool Core rules:
+  - The mining.submit hot path must prioritize miner response latency.
+  - Miner-controlled malformed submit input must be rejected through StratumException or an equivalent classified rejection path.
+  - Raw FormatException, IndexOutOfRangeException, NullReferenceException, InvalidCastException, or OverflowException must not escape normal malformed submit handling.
+  - Duplicate share registration must happen only after structured validation and canonicalization of submit inputs.
+  - Rejected, stale, duplicate, and malformed submits must preserve classified telemetry/event semantics.
+  - Block candidate submission and accounting-critical ShareAccepted semantics must not be weakened.
+  - No synchronous Redis, Postgres, HTTP, API, or filesystem durability work should be introduced before the miner response is accepted or queued.
+
+  Event pipeline rules:
+  - Pool Core owns share validation and block candidate submission.
+  - Sidecars consume events and build/write read models.
+  - Sidecars must not validate shares or repair Pool Core behavior.
+  - Nothing accounting-critical should be intentionally dropped.
+  - ShareAccepted and daemon-accepted BlockCandidate events are accounting-critical.
+
+  Input-validation rules:
+  - Miner-controlled hex fields must be shape-validated before parsing.
+  - Do not use uint.Parse/int.Parse/ulong.Parse/long.Parse directly on miner-controlled input unless exceptions are converted into classified StratumException rejections.
+  - Do not register duplicate keys before extraNonce2/versionBits/nTime/nonce validation has succeeded.
+
+  Testing expectations:
+  - Risky changes in submit paths require focused tests.
+  - Performance claims in hot paths require BenchmarkDotNet evidence.

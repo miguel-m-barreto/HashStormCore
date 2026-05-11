@@ -80,7 +80,7 @@ public class StratumConnection
 
     #region API-Surface
 
-    public async void DispatchAsync(Socket socket, CancellationToken ct,
+    public async Task DispatchAsync(Socket socket, CancellationToken ct,
         StratumEndpoint endpoint, IPEndPoint remoteEndpoint, X509Certificate2 cert,
         Func<StratumConnection, JsonRpcRequest, CancellationToken, Task> onRequestAsync,
         Action<StratumConnection> onCompleted,

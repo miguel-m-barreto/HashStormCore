@@ -61,7 +61,7 @@ public class WarthogPayoutHandler : PayoutHandlerBase,
     private decimal maximumTransactionFees;
     private ECPrivKey ellipticPrivateKey;
     private readonly IHashAlgorithm sha256S = new Sha256S();
-    private object nonceGenLock = new();
+    private readonly object nonceGenLock = new();
 
     protected override string LogCategory => "Warthog Payout Handler";
     

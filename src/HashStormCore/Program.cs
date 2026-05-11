@@ -102,11 +102,11 @@ public class Program : BackgroundService
             if (string.IsNullOrEmpty(configFile))
             {
                 app.ShowHelp();
-                Console.Error.WriteLine();
-                Console.Error.WriteLine("No configuration file was provided and no default configs/config.json was found.");
-                Console.Error.WriteLine("Pass one with -c|--config, set HASHSTORM_CONFIG, or place configs/config.json in one of:");
+                await Console.Error.WriteLineAsync();
+                await Console.Error.WriteLineAsync("No configuration file was provided and no default configs/config.json was found.");
+                await Console.Error.WriteLineAsync("Pass one with -c|--config, set HASHSTORM_CONFIG, or place configs/config.json in one of:");
                 foreach (var path in GetDefaultConfigFileCandidates())
-                    Console.Error.WriteLine($"  {path}");
+                    await Console.Error.WriteLineAsync($"  {path}");
 
                 return;
             }

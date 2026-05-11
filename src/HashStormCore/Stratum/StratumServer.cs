@@ -139,7 +139,7 @@ public abstract class StratumServer
 
     private void AcceptConnection(Socket socket, StratumEndpoint port, X509Certificate2 cert, CancellationToken ct)
     {
-        Task.Run(() => Guard(() =>
+        Task.Run(() => Guard(async () =>
         {
             var remoteEndpoint = (IPEndPoint) socket.RemoteEndPoint;
 
@@ -161,7 +161,7 @@ public abstract class StratumServer
             RegisterConnection(connection);
             OnConnect(connection, port.IPEndPoint);
 
-            connection.DispatchAsync(socket, ct, port, remoteEndpoint, cert, OnRequestAsync, OnConnectionComplete, OnConnectionError);
+            await connection.DispatchAsync(socket, ct, port, remoteEndpoint, cert, OnRequestAsync, OnConnectionComplete, OnConnectionError);
         }, ex=> logger.Error(ex)), ct);
     }
 

@@ -368,7 +368,7 @@ public class WarthogJobManager : JobManagerBase<WarthogJob>
             var response = await restClient.Get<GetPeersResponse[]>(WarthogCommands.GetPeers, ct);
 
             if(network == WarthogNetworkType.Testnet)
-                return response?.Length >= 0;
+                return response != null;
             else
                 return response?.Length > 0;
         }

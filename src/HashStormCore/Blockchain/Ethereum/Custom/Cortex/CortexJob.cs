@@ -79,7 +79,7 @@ public class CortexJob : EthereumJob
         string workerName, string fullNonceHex, string solution, CancellationToken ct)
     {
         // dupe check
-        lock(workerNonces)
+        lock(workerNoncesLock)
         {
             RegisterNonce(worker, fullNonceHex);
         }
