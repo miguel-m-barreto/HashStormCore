@@ -40,6 +40,11 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libboost-dev
+
       - name: Restore
         run: dotnet restore src/HashStormCore.sln
 
