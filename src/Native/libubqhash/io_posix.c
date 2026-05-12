@@ -89,6 +89,9 @@ bool ethash_file_size(FILE* f, size_t* ret_size)
 bool ethash_get_default_dirname(char* strbuf, size_t buffsize)
 {
 	static const char dir_suffix[] = ".ubqhash/";
+	if (!strbuf || buffsize == 0) {
+		return false;
+	}
 	strbuf[0] = '\0';
 	char* home_dir = getenv("HOME");
 	if (!home_dir || strlen(home_dir) == 0)
@@ -96,6 +99,9 @@ bool ethash_get_default_dirname(char* strbuf, size_t buffsize)
 		struct passwd* pwd = getpwuid(getuid());
 		if (pwd)
 			home_dir = pwd->pw_dir;
+	}
+	if (!home_dir || home_dir[0] == '\0') {
+		return false;
 	}
 	
 	size_t len = strlen(home_dir);
