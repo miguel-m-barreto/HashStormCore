@@ -288,6 +288,9 @@ namespace HashStormCore.Blockchain.Kaspa
 
             nonce = BuildFinalNonceHex(context.ExtraNonce1, nonce, KaspaConstants.NonceLength);
 
+            if(!HexUtils.IsFixedLengthHex(nonce, KaspaConstants.NonceLength))
+                throw new StratumException(StratumError.Other, "invalid nonce");
+
             if (!RegisterSubmit($"{JobId}:{nonce}"))
                 throw new StratumException(StratumError.DuplicateShare, "duplicate share");
 
