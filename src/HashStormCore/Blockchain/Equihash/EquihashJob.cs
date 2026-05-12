@@ -567,7 +567,12 @@ public class EquihashJob
         if(nTime.Length != 8)
             throw new StratumException(StratumError.Other, "incorrect size of ntime");
 
-        var nTimeInt = uint.Parse(nTime.HexToReverseByteArray().ToHexString(), NumberStyles.HexNumber);
+        if(!HexUtils.IsFixedLengthHex(nTime, 8))
+            throw new StratumException(StratumError.Other, "invalid ntime");
+
+        if(!uint.TryParse(nTime.HexToReverseByteArray().ToHexString(), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nTimeInt))
+            throw new StratumException(StratumError.Other, "invalid ntime");
+
         if(nTimeInt < BlockTemplate.CurTime || nTimeInt > ((DateTimeOffset) clock.Now).ToUnixTimeSeconds() + 7200)
             throw new StratumException(StratumError.Other, "ntime out of range");
 
