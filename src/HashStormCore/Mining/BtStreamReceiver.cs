@@ -42,8 +42,7 @@ public class BtStreamReceiver : BackgroundService
     {
         var subSocket = new ZSocket(ZSocketType.SUB);
 
-        if(!string.IsNullOrEmpty(relay.SharedEncryptionKey))
-            subSocket.SetupCurveTlsClient(relay.SharedEncryptionKey, logger);
+        subSocket.SetupCurveTlsClient(relay.CurveServerPublicKey, relay.CurveClientSecretKey, logger);
 
         subSocket.Connect(relay.Url);
         subSocket.SubscribeAll();
@@ -97,7 +96,7 @@ public class BtStreamReceiver : BackgroundService
                 x.Extra.SafeExtensionDataAs<BitcoinPoolConfigExtra>()?.BtStream ??
                 x.Extra.SafeExtensionDataAs<CryptonotePoolConfigExtra>()?.BtStream)
             .Where(x => x != null)
-            .DistinctBy(x => $"{x.Url}:{x.SharedEncryptionKey}")
+            .DistinctBy(x => $"{x.Url}:{x.CurveServerPublicKey}:{x.CurveClientSecretKey}")
             .ToArray();
 
         if(!endpoints.Any())
@@ -109,7 +108,7 @@ public class BtStreamReceiver : BackgroundService
             var reconnectTimeout = TimeSpan.FromSeconds(300);
 
             var relays = endpoints
-                .DistinctBy(x => $"{x.Url}:{x.SharedEncryptionKey}")
+                .DistinctBy(x => $"{x.Url}:{x.CurveServerPublicKey}:{x.CurveClientSecretKey}")
                 .ToArray();
 
             logger.Info(() => "Online");

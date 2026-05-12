@@ -30,6 +30,7 @@ public class ShareRelay : IHostedService
     private readonly int QueueSizeWarningThreshold = 1024;
     private bool hasWarnedAboutBacklogSize;
     private ZSocket pubSocket;
+    private IDisposable zapAuthenticator;
 
     private static readonly ILogger logger = LogManager.GetCurrentClassLogger();
 
@@ -107,7 +108,10 @@ public class ShareRelay : IHostedService
 
         if(!clusterConfig.ShareRelay.Connect)
         {
-            pubSocket.SetupCurveTlsServer(clusterConfig.ShareRelay.SharedEncryptionKey, logger);
+            zapAuthenticator = pubSocket.SetupCurveTlsServer(
+                clusterConfig.ShareRelay.CurveServerSecretKey,
+                clusterConfig.ShareRelay.AllowedClientPublicKeys,
+                logger);
 
             pubSocket.Bind(clusterConfig.ShareRelay.PublishUrl);
 
@@ -119,7 +123,8 @@ public class ShareRelay : IHostedService
 
         else
         {
-            if(!string.IsNullOrEmpty(clusterConfig.ShareRelay.SharedEncryptionKey?.Trim()))
+            if(!string.IsNullOrEmpty(clusterConfig.ShareRelay.CurveServerSecretKey?.Trim()) ||
+               clusterConfig.ShareRelay.AllowedClientPublicKeys?.Any(x => !string.IsNullOrEmpty(x?.Trim())) == true)
                 throw new PoolStartupException("ZeroMQ Curve is not supported in ShareRelay Connect-Mode");
 
             pubSocket.Connect(clusterConfig.ShareRelay.PublishUrl);
@@ -137,6 +142,8 @@ public class ShareRelay : IHostedService
     public Task StopAsync(CancellationToken ct)
     {
         pubSocket.Dispose();
+        zapAuthenticator?.Dispose();
+        zapAuthenticator = null;
 
         queueSub?.Dispose();
         queueSub = null;

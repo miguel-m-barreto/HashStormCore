@@ -44,15 +44,18 @@ In your primary server’s configuration file—typically `config.json`—you’
 "shareRelays": [
     {
         "url": "tcp://stratum-a.example.com:6000",
-        "sharedEncryptionKey": "password"
+        "curveServerPublicKey": "SERVER_PUBLIC_KEY_Z85_40_CHARS",
+        "curveClientSecretKey": "CLIENT_A_SECRET_KEY_Z85_40_CHARS"
     },
     {
         "url": "tcp://stratum-b.example.com:6000",
-        "sharedEncryptionKey": "password"
+        "curveServerPublicKey": "SERVER_PUBLIC_KEY_Z85_40_CHARS",
+        "curveClientSecretKey": "CLIENT_B_SECRET_KEY_Z85_40_CHARS"
     },
     {
         "url": "tcp://stratum-c.example.com:6000",
-        "sharedEncryptionKey": "password"
+        "curveServerPublicKey": "SERVER_PUBLIC_KEY_Z85_40_CHARS",
+        "curveClientSecretKey": "CLIENT_C_SECRET_KEY_Z85_40_CHARS"
     }
 ]
 ```
@@ -60,7 +63,7 @@ In your primary server’s configuration file—typically `config.json`—you’
 **Steps:**
 
 1. **Replace the URL:** For each entry, change the example hostname with the actual IP address or domain name of the stratum server.
-2. **Update the shared encryption key:** Change the value for `"sharedEncryptionKey"` from `"password"` to your unique key. This shared key is critical for ensuring that both the primary and stratum servers can authenticate each other securely.
+2. **Configure CURVE keys:** Generate one ZeroMQ CURVE keypair for the relay server and one keypair for each stratum client. Put the server public key in `curveServerPublicKey`, and put each client secret key in that client's `curveClientSecretKey`.
 
 #### On Each Stratum Server
 
@@ -70,15 +73,18 @@ Similarly, on each individual stratum server, you must configure a corresponding
 
 ```json
 "shareRelay": {
-    "PublishUrl": "tcp://stratum-a.example.com:6000",
-    "SharedEncryptionKey": "password"
+    "publishUrl": "tcp://stratum-a.example.com:6000",
+    "curveServerSecretKey": "SERVER_SECRET_KEY_Z85_40_CHARS",
+    "allowedClientPublicKeys": [
+        "CLIENT_A_PUBLIC_KEY_Z85_40_CHARS"
+    ]
 }
 ```
 
 **Steps:**
 
-1. **Update the Publish URL:** Change the `PublishUrl` to reflect that server's public IP address or hostname.
-2. **Ensure Matching Encryption:** The `"SharedEncryptionKey"` must match the encryption key specified on the primary server for that relay. This ensures that both ends can securely exchange data.
+1. **Update the Publish URL:** Change `publishUrl` to reflect that server's public IP address or hostname.
+2. **Ensure Matching Encryption:** Put the server secret key only on the `shareRelay` server. Put the matching server public key on receivers. Put each receiver's client public key in `allowedClientPublicKeys` and the matching client secret key only on that receiver.
 
 ---
 

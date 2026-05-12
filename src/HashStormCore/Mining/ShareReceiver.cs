@@ -98,7 +98,7 @@ public class ShareReceiver : BackgroundService
             var reconnectTimeout = TimeSpan.FromSeconds(60);
 
             var relays = clusterConfig.ShareRelays
-                .DistinctBy(x => $"{x.Url}:{x.SharedEncryptionKey}")
+                .DistinctBy(x => $"{x.Url}:{x.CurveServerPublicKey}:{x.CurveClientSecretKey}")
                 .ToArray();
 
             while(!ct.IsCancellationRequested)
@@ -183,7 +183,7 @@ public class ShareReceiver : BackgroundService
     private static ZSocket SetupSubSocket(ShareRelayEndpointConfig relay, bool silent = false)
     {
         var subSocket = new ZSocket(ZSocketType.SUB);
-        subSocket.SetupCurveTlsClient(relay.SharedEncryptionKey, logger);
+        subSocket.SetupCurveTlsClient(relay.CurveServerPublicKey, relay.CurveClientSecretKey, logger);
         subSocket.Connect(relay.Url);
         subSocket.SubscribeAll();
 

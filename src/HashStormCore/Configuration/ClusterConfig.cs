@@ -1245,8 +1245,11 @@ public class ZmqPubSubEndpointConfig
     public string Url { get; set; }
     public string Topic { get; set; }
 
-    // Curve Transport Layer Security Encryption key shared by client and server
-    public string SharedEncryptionKey { get; set; }
+    // ZeroMQ Curve server public key in Z85 format
+    public string CurveServerPublicKey { get; set; }
+
+    // ZeroMQ Curve client secret key in Z85 format
+    public string CurveClientSecretKey { get; set; }
 }
 
 public class ShareRelayEndpointConfig
@@ -1254,9 +1257,14 @@ public class ShareRelayEndpointConfig
     public string Url { get; set; }
 
     /// <summary>
-    /// Curve Transport Layer Security Encryption key shared by client and server
+    /// ZeroMQ Curve server public key in Z85 format
     /// </summary>
-    public string SharedEncryptionKey { get; set; }
+    public string CurveServerPublicKey { get; set; }
+
+    /// <summary>
+    /// ZeroMQ Curve client secret key in Z85 format
+    /// </summary>
+    public string CurveClientSecretKey { get; set; }
 }
 
 public class ShareRelayConfig
@@ -1268,8 +1276,11 @@ public class ShareRelayConfig
     /// </summary>
     public bool Connect { get; set; }
 
-    // Curve Transport Layer Security Encryption key shared by client and server
-    public string SharedEncryptionKey { get; set; }
+    // ZeroMQ Curve server secret key in Z85 format
+    public string CurveServerSecretKey { get; set; }
+
+    // ZeroMQ Curve client public keys allowed to connect, in Z85 format
+    public string[] AllowedClientPublicKeys { get; set; }
 }
 
 public class ShareReceiverConfig

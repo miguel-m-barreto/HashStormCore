@@ -960,6 +960,7 @@
         "object",
         "null"
       ],
+      "additionalProperties": false,
       "properties": {
         "connect": {
           "type": "boolean"
@@ -970,11 +971,28 @@
             "null"
           ]
         },
-        "sharedEncryptionKey": {
+        "allowedClientPublicKeys": {
+          "description": "ZeroMQ CURVE client public keys allowed to connect. Each key must be a 40-character Z85 public key.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 40,
+            "pattern": "^[0-9A-Za-z.\\-:+=^!/*?&<>()\\[\\]{}@%$#]{40}$"
+          }
+        },
+        "curveServerSecretKey": {
+          "description": "ZeroMQ CURVE server secret key. Must be a 40-character Z85 secret key.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "minLength": 40,
+          "maxLength": 40,
+          "pattern": "^[0-9A-Za-z.\\-:+=^!/*?&<>()\\[\\]{}@%$#]{40}$"
         }
       }
     },
@@ -983,12 +1001,27 @@
         "object",
         "null"
       ],
+      "additionalProperties": false,
       "properties": {
-        "sharedEncryptionKey": {
+        "curveClientSecretKey": {
+          "description": "ZeroMQ CURVE client secret key. Must be a 40-character Z85 secret key.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "minLength": 40,
+          "maxLength": 40,
+          "pattern": "^[0-9A-Za-z.\\-:+=^!/*?&<>()\\[\\]{}@%$#]{40}$"
+        },
+        "curveServerPublicKey": {
+          "description": "ZeroMQ CURVE server public key. Must be a 40-character Z85 public key.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 40,
+          "maxLength": 40,
+          "pattern": "^[0-9A-Za-z.\\-:+=^!/*?&<>()\\[\\]{}@%$#]{40}$"
         },
         "url": {
           "type": [
