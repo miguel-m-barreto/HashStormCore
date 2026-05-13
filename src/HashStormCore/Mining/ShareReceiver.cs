@@ -3,7 +3,6 @@ using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text;
-using System.Threading.Tasks.Dataflow;
 using Microsoft.Extensions.Hosting;
 using HashStormCore.Blockchain;
 using HashStormCore.Configuration;
@@ -42,11 +41,7 @@ public class ShareReceiver : BackgroundService
         this.clock = clock;
         this.messageBus = messageBus;
         this.shareEventQueue = shareEventQueue;
-        queue = new BufferBlock<(string Url, ZMessage Message)>(new DataflowBlockOptions
-        {
-            BoundedCapacity = Math.Max(1, clusterConfig.ShareReceiver?.MaxQueueSize ?? 10000),
-            EnsureOrdered = true
-        });
+        queue = new BlockingCollection<RelayShareMessage>(Math.Max(1, clusterConfig.ShareReceiver?.MaxQueueSize ?? 10000));
     }
 
     private static readonly ILogger logger = LogManager.GetCurrentClassLogger();
@@ -56,7 +51,7 @@ public class ShareReceiver : BackgroundService
     private readonly ClusterConfig clusterConfig;
     private readonly CompositeDisposable disposables = new();
     private readonly ConcurrentDictionary<string, PoolContext> pools = new();
-    private readonly BufferBlock<(string Url, ZMessage Message)> queue;
+    private readonly BlockingCollection<RelayShareMessage> queue;
 
     readonly JsonSerializer serializer = new()
     {
@@ -76,6 +71,8 @@ public class ShareReceiver : BackgroundService
         public DateTime? LastBlock { get; set; }
         public long BlockHeight { get; set; }
     }
+
+    private sealed record RelayShareMessage(string Url, string Topic, uint Flags, byte[] Data);
 
     private void AttachPool(IMiningPool pool)
     {
@@ -127,7 +124,16 @@ public class ShareReceiver : BackgroundService
                                     {
                                         lastMessageReceived[i] = clock.Now;
 
-                                        queue.SendAsync((relays[i].Url, msg), ct).GetAwaiter().GetResult();
+                                        RelayShareMessage relayMessage;
+                                        using(msg)
+                                        {
+                                            // ZMessage/ZFrame instances are owned by the ZMQ receiver thread.
+                                            // Copy managed frame data before handing work to async processors.
+                                            if(!TryCreateRelayShareMessage(relays[i].Url, msg, out relayMessage))
+                                                continue;
+                                        }
+
+                                        queue.Add(relayMessage, ct);
                                     }
 
                                     else if(clock.Now - lastMessageReceived[i] > reconnectTimeout)
@@ -198,11 +204,30 @@ public class ShareReceiver : BackgroundService
         return subSocket;
     }
 
+    private static bool TryCreateRelayShareMessage(string url, ZMessage msg, out RelayShareMessage relayMessage)
+    {
+        relayMessage = null;
+
+        try
+        {
+            var topic = msg[0].ToString(Encoding.UTF8);
+            var flags = msg[1].ReadUInt32();
+            var data = msg[2].Read()?.ToArray();
+            relayMessage = new RelayShareMessage(url, topic, flags, data);
+            return true;
+        }
+
+        catch(Exception ex)
+        {
+            logger.Warn(ex, $"Malformed relay message from {url}. Ignoring ...");
+            return false;
+        }
+    }
+
     private Task StartMessageProcessors(CancellationToken ct)
     {
-        var tasks = Enumerable.Repeat(ProcessMessages(ct), Environment.ProcessorCount);
-
-        return Task.WhenAll(tasks);
+        // Preserve the previous effective single-processor behavior; pool stats updates are not synchronized.
+        return Task.Run(() => ProcessMessages(ct), ct);
     }
 
     private async Task ProcessMessages(CancellationToken ct)
@@ -211,12 +236,8 @@ public class ShareReceiver : BackgroundService
         {
             try
             {
-                var (url, msg) = await queue.ReceiveAsync(ct);
-
-                using(msg)
-                {
-                    ProcessMessage(url, msg);
-                }
+                var msg = queue.Take(ct);
+                await ProcessMessage(msg);
             }
 
             catch(Exception ex)
@@ -226,27 +247,23 @@ public class ShareReceiver : BackgroundService
         }
     }
 
-    private void ProcessMessage(string url, ZMessage msg)
+    private async Task ProcessMessage(RelayShareMessage msg)
     {
-        // extract frames
-        var topic = msg[0].ToString(Encoding.UTF8);
-        var flags = msg[1].ReadUInt32();
-        var data = msg[2].Read();
-
         // validate
-        if(string.IsNullOrEmpty(topic) || !pools.TryGetValue(topic, out var poolContext))
+        if(string.IsNullOrEmpty(msg.Topic) || !pools.TryGetValue(msg.Topic, out var poolContext))
         {
-            logger.Warn(() => $"Received share for pool '{topic}' which is not known locally. Ignoring ...");
+            logger.Warn(() => $"Received share for pool '{msg.Topic}' which is not known locally. Ignoring ...");
             return;
         }
 
-        if(data?.Length == 0)
+        if(msg.Data?.Length == 0)
         {
-            logger.Warn(() => $"Received empty data from {url}/{topic}. Ignoring ...");
+            logger.Warn(() => $"Received empty data from {msg.Url}/{msg.Topic}. Ignoring ...");
             return;
         }
 
         // TMP FIX
+        var flags = msg.Flags;
         if((flags & ShareRelay.WireFormatMask) == 0)
             flags = BitConverter.ToUInt32(BitConverter.GetBytes(flags).ToNewReverseArray());
 
@@ -258,7 +275,7 @@ public class ShareReceiver : BackgroundService
         switch(wireFormat)
         {
             case ShareRelay.WireFormat.Json:
-                using(var stream = new MemoryStream(data))
+                using(var stream = new MemoryStream(msg.Data))
                 {
                     using(var reader = new StreamReader(stream, Encoding.UTF8))
                     {
@@ -272,7 +289,7 @@ public class ShareReceiver : BackgroundService
                 break;
 
             case ShareRelay.WireFormat.ProtocolBuffers:
-                using(var stream = new MemoryStream(data))
+                using(var stream = new MemoryStream(msg.Data))
                 {
                     share = Serializer.Deserialize<Share>(stream);
                     share.BlockReward = (decimal) share.BlockRewardDouble;
@@ -281,22 +298,22 @@ public class ShareReceiver : BackgroundService
                 break;
 
             default:
-                logger.Error(() => $"Unsupported wire format {wireFormat} of share received from {url}/{topic} ");
+                logger.Error(() => $"Unsupported wire format {wireFormat} of share received from {msg.Url}/{msg.Topic} ");
                 break;
         }
 
         if(share == null)
         {
-            logger.Error(() => $"Unable to deserialize share received from {url}/{topic}");
+            logger.Error(() => $"Unable to deserialize share received from {msg.Url}/{msg.Topic}");
             return;
         }
 
         // store
-        share.PoolId = topic;
+        share.PoolId = msg.Topic;
         share.Created = clock.Now;
 
         if(clusterConfig.EventPipeline?.Enabled == true)
-            EnqueueExternalShareEvent(poolContext, share);
+            await EnqueueExternalShareEvent(poolContext, share);
         else
             messageBus.SendMessage(share);
 
@@ -331,7 +348,7 @@ public class ShareReceiver : BackgroundService
             logger.Debug(() => $"External {(!string.IsNullOrEmpty(share.Source) ? $"[{share.Source.ToUpper()}] " : string.Empty)}share accepted: D={Math.Round(share.Difficulty, 4)}");
     }
 
-    private void EnqueueExternalShareEvent(PoolContext poolContext, Share share)
+    private async Task EnqueueExternalShareEvent(PoolContext poolContext, Share share)
     {
         var pool = poolContext?.Pool;
         var shareEvent = ShareEventMapper.Map(new ShareEventSource
@@ -357,7 +374,7 @@ public class ShareReceiver : BackgroundService
         }, ShareEventType.ShareAccepted);
 
         if(shareEventQueue != null)
-            shareEventQueue.EnqueueAsync(shareEvent, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+            await shareEventQueue.EnqueueAsync(shareEvent, CancellationToken.None);
         else
             logger.Warn(() => $"Event pipeline is enabled but no share event queue is registered for external relay share from {share.Source}; event_id={shareEvent.EventId}");
     }
