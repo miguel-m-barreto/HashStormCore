@@ -89,7 +89,13 @@ enum ethash_io_rc ethash_io_prepare(
 				ETHASH_CRITICAL("Could not query size of DAG file: \"%s\"", tmpfile);
 				goto free_memo;
 			}
-			if (file_size != found_size - ETHASH_DAG_MAGIC_NUM_SIZE) {
+			if (found_size < ETHASH_DAG_MAGIC_NUM_SIZE) {
+				fclose(f);
+				ret = ETHASH_IO_MEMO_SIZE_MISMATCH;
+				goto free_memo;
+			}
+			const uint64_t found_payload_size = (uint64_t) found_size - ETHASH_DAG_MAGIC_NUM_SIZE;
+			if (file_size != found_payload_size) {
 				fclose(f);
 				ret = ETHASH_IO_MEMO_SIZE_MISMATCH;
 				goto free_memo;

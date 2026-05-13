@@ -185,7 +185,7 @@ cp ../Native/librandomarq/librandomarq.so "$OutDir/librandomarq.so"
   cd Panthera
   git checkout cc7425f468d935ba328fba5bbb05f8227f4f22d7
 
-  # PATCH igual ao RandomARQ: tests/utility.hpp precisa de <stdint.h>
+  # tests/utility.hpp needs <stdint.h>
   UTILITY_HEADER="src/tests/utility.hpp"
   if [[ -f "$UTILITY_HEADER" ]]; then
     echo "[patch] Panthera: adding <stdint.h> in $UTILITY_HEADER"
