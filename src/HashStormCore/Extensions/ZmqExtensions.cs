@@ -224,36 +224,8 @@ public static class ZmqExtensions
 
                 while(!cts.IsCancellationRequested)
                 {
-                    try
-                    {
-                        if(!sockets.PollIn(pollItems, out var messages, out var error, timeout))
-                            continue;
-
-                        if(error != null)
-                        {
-                            logger.Error(() => $"ZeroMQ ZAP authenticator: {error.Name} [{error.Name}] during receive");
-                            continue;
-                        }
-
-                        using var request = messages[0];
-
-                        if(request == null)
-                            continue;
-
-                        using var response = CreateResponse(request);
-                        socket.SendMessage(response);
-                    }
-
-                    catch(ObjectDisposedException)
-                    {
+                    if(!ProcessZapRequest(socket, sockets, pollItems, timeout))
                         break;
-                    }
-
-                    catch(Exception ex)
-                    {
-                        if(!cts.IsCancellationRequested)
-                            logger.Error(ex, "ZeroMQ ZAP authentication error");
-                    }
                 }
             }
 
@@ -264,6 +236,43 @@ public static class ZmqExtensions
 
                 if(!cts.IsCancellationRequested)
                     logger.Error(ex, "ZeroMQ ZAP authenticator stopped");
+            }
+        }
+
+        private bool ProcessZapRequest(ZSocket socket, ZSocket[] sockets, ZPollItem[] pollItems, TimeSpan timeout)
+        {
+            try
+            {
+                if(!sockets.PollIn(pollItems, out var messages, out var error, timeout))
+                    return true;
+
+                if(error != null)
+                {
+                    logger.Error(() => $"ZeroMQ ZAP authenticator: {error.Name} [{error.Name}] during receive");
+                    return true;
+                }
+
+                using var request = messages[0];
+
+                if(request == null)
+                    return true;
+
+                using var response = CreateResponse(request);
+                socket.SendMessage(response);
+                return true;
+            }
+
+            catch(ObjectDisposedException)
+            {
+                return false;
+            }
+
+            catch(Exception ex)
+            {
+                if(!cts.IsCancellationRequested)
+                    logger.Error(ex, "ZeroMQ ZAP authentication error");
+
+                return true;
             }
         }
 
@@ -315,6 +324,7 @@ public static class ZmqExtensions
 
             catch(AggregateException)
             {
+                // Observe and suppress shutdown exceptions from the internal authenticator task.
             }
 
             cts.Dispose();

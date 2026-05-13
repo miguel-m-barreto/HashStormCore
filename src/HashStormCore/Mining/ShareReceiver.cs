@@ -219,7 +219,7 @@ public class ShareReceiver : BackgroundService
 
         catch(Exception ex)
         {
-            logger.Warn(ex, $"Malformed relay message from {url}. Ignoring ...");
+            logger.Warn(ex, "Malformed relay message from {url}. Ignoring ...", url);
             return false;
         }
     }
@@ -249,64 +249,11 @@ public class ShareReceiver : BackgroundService
 
     private async Task ProcessMessage(RelayShareMessage msg)
     {
-        // validate
-        if(string.IsNullOrEmpty(msg.Topic) || !pools.TryGetValue(msg.Topic, out var poolContext))
-        {
-            logger.Warn(() => $"Received share for pool '{msg.Topic}' which is not known locally. Ignoring ...");
+        if(!TryGetPoolContext(msg, out var poolContext))
             return;
-        }
 
-        if(msg.Data?.Length == 0)
-        {
-            logger.Warn(() => $"Received empty data from {msg.Url}/{msg.Topic}. Ignoring ...");
+        if(!TryDeserializeShare(msg, out var share))
             return;
-        }
-
-        // TMP FIX
-        var flags = msg.Flags;
-        if((flags & ShareRelay.WireFormatMask) == 0)
-            flags = BitConverter.ToUInt32(BitConverter.GetBytes(flags).ToNewReverseArray());
-
-        // deserialize
-        var wireFormat = (ShareRelay.WireFormat) (flags & ShareRelay.WireFormatMask);
-
-        Share share = null;
-
-        switch(wireFormat)
-        {
-            case ShareRelay.WireFormat.Json:
-                using(var stream = new MemoryStream(msg.Data))
-                {
-                    using(var reader = new StreamReader(stream, Encoding.UTF8))
-                    {
-                        using(var jreader = new JsonTextReader(reader))
-                        {
-                            share = serializer.Deserialize<Share>(jreader);
-                        }
-                    }
-                }
-
-                break;
-
-            case ShareRelay.WireFormat.ProtocolBuffers:
-                using(var stream = new MemoryStream(msg.Data))
-                {
-                    share = Serializer.Deserialize<Share>(stream);
-                    share.BlockReward = (decimal) share.BlockRewardDouble;
-                }
-
-                break;
-
-            default:
-                logger.Error(() => $"Unsupported wire format {wireFormat} of share received from {msg.Url}/{msg.Topic} ");
-                break;
-        }
-
-        if(share == null)
-        {
-            logger.Error(() => $"Unable to deserialize share received from {msg.Url}/{msg.Topic}");
-            return;
-        }
 
         // store
         share.PoolId = msg.Topic;
@@ -317,7 +264,77 @@ public class ShareReceiver : BackgroundService
         else
             messageBus.SendMessage(share);
 
-        // update poolstats from shares
+        UpdatePoolStats(poolContext, share);
+    }
+
+    private bool TryGetPoolContext(RelayShareMessage msg, out PoolContext poolContext)
+    {
+        if(string.IsNullOrEmpty(msg.Topic) || !pools.TryGetValue(msg.Topic, out poolContext))
+        {
+            logger.Warn(() => $"Received share for pool '{msg.Topic}' which is not known locally. Ignoring ...");
+            return false;
+        }
+
+        if(msg.Data?.Length == 0)
+        {
+            logger.Warn(() => $"Received empty data from {msg.Url}/{msg.Topic}. Ignoring ...");
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryDeserializeShare(RelayShareMessage msg, out Share share)
+    {
+        // TMP FIX
+        var flags = msg.Flags;
+        if((flags & ShareRelay.WireFormatMask) == 0)
+            flags = BitConverter.ToUInt32(BitConverter.GetBytes(flags).ToNewReverseArray());
+
+        var wireFormat = (ShareRelay.WireFormat) (flags & ShareRelay.WireFormatMask);
+        share = wireFormat switch
+        {
+            ShareRelay.WireFormat.Json => DeserializeJsonShare(msg.Data),
+            ShareRelay.WireFormat.ProtocolBuffers => DeserializeProtocolBuffersShare(msg.Data),
+            _ => null
+        };
+
+        if(share != null)
+            return true;
+
+        if(!Enum.IsDefined(typeof(ShareRelay.WireFormat), wireFormat))
+            logger.Error(() => $"Unsupported wire format {wireFormat} of share received from {msg.Url}/{msg.Topic} ");
+
+        logger.Error(() => $"Unable to deserialize share received from {msg.Url}/{msg.Topic}");
+        return false;
+    }
+
+    private Share DeserializeJsonShare(byte[] data)
+    {
+        using(var stream = new MemoryStream(data))
+        {
+            using(var reader = new StreamReader(stream, Encoding.UTF8))
+            {
+                using(var jreader = new JsonTextReader(reader))
+                {
+                    return serializer.Deserialize<Share>(jreader);
+                }
+            }
+        }
+    }
+
+    private static Share DeserializeProtocolBuffersShare(byte[] data)
+    {
+        using(var stream = new MemoryStream(data))
+        {
+            var share = Serializer.Deserialize<Share>(stream);
+            share.BlockReward = (decimal) share.BlockRewardDouble;
+            return share;
+        }
+    }
+
+    private void UpdatePoolStats(PoolContext poolContext, Share share)
+    {
         if(poolContext != null)
         {
             var pool = poolContext.Pool;
