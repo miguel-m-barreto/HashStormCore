@@ -1,3 +1,4 @@
+using System.IO;
 using System.Linq;
 using FluentValidation;
 using HashStormCore.Configuration;
@@ -71,6 +72,28 @@ public class ClusterConfigValidationTests
         Assert.Null(ex);
     }
 
+    [Fact]
+    public void Validate_AllowsAbsoluteOutboxDirectory_WhenEventPipelineEnabled()
+    {
+        var config = CreateValidClusterConfig();
+        config.EventPipeline = new EventPipelineConfig
+        {
+            Enabled = true,
+            Broker = new EventPipelineBrokerConfig
+            {
+                Type = "redis-streams"
+            },
+            Outbox = new EventPipelineOutboxConfig
+            {
+                Directory = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "hashstorm-outbox-validation"))
+            }
+        };
+
+        var ex = Record.Exception(() => config.Validate());
+
+        Assert.Null(ex);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -91,6 +114,32 @@ public class ClusterConfigValidationTests
         var messages = ex.Errors.Select(x => x.ErrorMessage).ToArray();
 
         Assert.Contains("eventPipeline.enabled=true requires supported eventPipeline.broker.type 'redis-streams'", messages);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Validate_RejectsEmptyOutboxDirectory_WhenEventPipelineEnabled(string directory)
+    {
+        var config = CreateValidClusterConfig();
+        config.EventPipeline = new EventPipelineConfig
+        {
+            Enabled = true,
+            Broker = new EventPipelineBrokerConfig
+            {
+                Type = "redis-streams"
+            },
+            Outbox = new EventPipelineOutboxConfig
+            {
+                Directory = directory
+            }
+        };
+
+        var ex = Assert.Throws<ValidationException>(() => config.Validate());
+        var messages = ex.Errors.Select(x => x.ErrorMessage).ToArray();
+
+        Assert.Contains("eventPipeline.enabled=true requires non-empty eventPipeline.outbox.directory", messages);
     }
 
     private static ClusterConfig CreateValidClusterConfig()

@@ -215,6 +215,10 @@ public class ClusterConfigValidator : AbstractValidator<ClusterConfig>
                 if(config.EventPipeline?.Enabled == true &&
                    !string.Equals(config.EventPipeline.Broker?.Type, "redis-streams", StringComparison.OrdinalIgnoreCase))
                     ctx.AddFailure("eventPipeline.enabled=true requires supported eventPipeline.broker.type 'redis-streams'");
+
+                if(config.EventPipeline?.Enabled == true &&
+                   string.IsNullOrWhiteSpace(config.EventPipeline.Outbox?.Directory))
+                    ctx.AddFailure("eventPipeline.enabled=true requires non-empty eventPipeline.outbox.directory");
             });
 
         // ensure pool ids are unique
