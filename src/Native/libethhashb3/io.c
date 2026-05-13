@@ -22,6 +22,35 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <limits.h>
+#ifndef _WIN32
+#include <sys/types.h>
+#endif
+#ifndef EOVERFLOW
+#define EOVERFLOW ERANGE
+#endif
+
+int ethash_fseek(FILE* f, uint64_t offset, int origin)
+{
+    if (offset > (uint64_t) INT64_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+#ifdef _WIN32
+    return _fseeki64(f, (__int64) offset, origin);
+#else
+    if (sizeof(off_t) < sizeof(uint64_t)) {
+        uint64_t max_off_t = ((uint64_t) 1 << (sizeof(off_t) * CHAR_BIT - 1)) - 1;
+        if (offset > max_off_t) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+    }
+
+    return fseeko(f, (off_t) offset, origin);
+#endif
+}
 
 enum ethash_io_rc ethash_io_prepare(
 	char const* dirname,
@@ -91,7 +120,7 @@ enum ethash_io_rc ethash_io_prepare(
 		goto free_memo;
 	}
 	// make sure it's of the proper size
-	if (fseek(f, (long int)(file_size + ETHASH_DAG_MAGIC_NUM_SIZE - 1), SEEK_SET) != 0) {
+	if (ethash_fseek(f, file_size + ETHASH_DAG_MAGIC_NUM_SIZE - 1, SEEK_SET) != 0) {
 		fclose(f);
 		ETHASH_CRITICAL("Could not seek to the end of DAG file: \"%s\". Insufficient space?", tmpfile);
 		goto free_memo;

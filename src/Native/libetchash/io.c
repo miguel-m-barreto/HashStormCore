@@ -22,13 +22,33 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <limits.h>
+#ifndef _WIN32
+#include <sys/types.h>
+#endif
+#ifndef EOVERFLOW
+#define EOVERFLOW ERANGE
+#endif
 
-int ethash_fseek(FILE* f, size_t offset, int origin)
+int ethash_fseek(FILE* f, uint64_t offset, int origin)
 {
+    if (offset > (uint64_t) INT64_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
 #ifdef _WIN32
-    return _fseeki64(f, offset, origin);
+    return _fseeki64(f, (__int64) offset, origin);
 #else
-    return fseeko(f, offset, origin);
+    if (sizeof(off_t) < sizeof(uint64_t)) {
+        uint64_t max_off_t = ((uint64_t) 1 << (sizeof(off_t) * CHAR_BIT - 1)) - 1;
+        if (offset > max_off_t) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+    }
+
+    return fseeko(f, (off_t) offset, origin);
 #endif
 }
 

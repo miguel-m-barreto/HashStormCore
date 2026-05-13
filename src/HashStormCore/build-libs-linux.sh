@@ -165,7 +165,7 @@ cp ../Native/librandomx/librandomx.so "$OutDir/librandomx.so"
 
   UTILITY_HEADER="src/tests/utility.hpp"
   if [[ -f "$UTILITY_HEADER" ]]; then
-    echo "[patch] RandomARQ: a injetar <stdint.h> em $UTILITY_HEADER"
+    echo "[patch] RandomARQ: adding <stdint.h> in $UTILITY_HEADER"
     grep -qE '^[[:space:]]*#include[[:space:]]*<stdint\.h>' "$UTILITY_HEADER" \
       || sed -i '1i #include <stdint.h>' "$UTILITY_HEADER"
   fi
@@ -188,7 +188,7 @@ cp ../Native/librandomarq/librandomarq.so "$OutDir/librandomarq.so"
   # PATCH igual ao RandomARQ: tests/utility.hpp precisa de <stdint.h>
   UTILITY_HEADER="src/tests/utility.hpp"
   if [[ -f "$UTILITY_HEADER" ]]; then
-    echo "[patch] Panthera: a injetar <stdint.h> em $UTILITY_HEADER"
+    echo "[patch] Panthera: adding <stdint.h> in $UTILITY_HEADER"
     grep -qE '^[[:space:]]*#include[[:space:]]*<stdint\.h>' "$UTILITY_HEADER" \
       || sed -i '1i #include <stdint.h>' "$UTILITY_HEADER"
   fi
