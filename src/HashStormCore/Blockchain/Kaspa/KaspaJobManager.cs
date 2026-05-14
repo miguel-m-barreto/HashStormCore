@@ -340,74 +340,69 @@ public class KaspaJobManager : JobManagerBase<KaspaJob>
         return new KaspaJob(customBlockHeaderHasher, customCoinbaseHasher, customShareHasher);
     }
 
-    private async Task<bool> UpdateJob(CancellationToken ct, string via = null, kaspad.RpcBlock blockTemplate = null)
+    private Task<bool> UpdateJob(CancellationToken ct, string via = null, kaspad.RpcBlock blockTemplate = null)
     {
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if(ct.IsCancellationRequested)
+            return Task.FromResult(false);
 
-        return await Task.Run(() =>
+        try
         {
-            using(cts)
+            if(blockTemplate == null)
+                return Task.FromResult(false);
+
+            var job = currentJob;
+
+            var isNew = (job == null || job.BlockTemplate?.Header.DaaScore < blockTemplate.Header.DaaScore);
+
+            if(isNew)
+                messageBus.NotifyChainHeight(poolConfig.Id, blockTemplate.Header.DaaScore, poolConfig.Template);
+
+            if(isNew)
             {
-                try
+                job = CreateJob(blockTemplate.Header.DaaScore);
+
+                job.Init(blockTemplate, NextJobId("D"), ShareMultiplier);
+
+                logger.Debug(() => $"blockTargetValue: {job.blockTargetValue}");
+                logger.Debug(() => $"Difficulty: {job.Difficulty}");
+
+                if(via != null)
+                    logger.Info(() => $"Detected new block {job.BlockTemplate.Header.DaaScore} [{via}]");
+                else
+                    logger.Info(() => $"Detected new block {job.BlockTemplate.Header.DaaScore}");
+
+                // update stats
+                if(job.BlockTemplate.Header.DaaScore > BlockchainStats.BlockHeight)
                 {
-                    if(blockTemplate == null)
-                        return false;
-
-                    var job = currentJob;
-
-                    var isNew = (job == null || job.BlockTemplate?.Header.DaaScore < blockTemplate.Header.DaaScore);
-
-                    if(isNew)
-                        messageBus.NotifyChainHeight(poolConfig.Id, blockTemplate.Header.DaaScore, poolConfig.Template);
-
-                    if(isNew)
-                    {
-                        job = CreateJob(blockTemplate.Header.DaaScore);
-
-                        job.Init(blockTemplate, NextJobId("D"), ShareMultiplier);
-
-                        logger.Debug(() => $"blockTargetValue: {job.blockTargetValue}");
-                        logger.Debug(() => $"Difficulty: {job.Difficulty}");
-
-                        if(via != null)
-                            logger.Info(() => $"Detected new block {job.BlockTemplate.Header.DaaScore} [{via}]");
-                        else
-                            logger.Info(() => $"Detected new block {job.BlockTemplate.Header.DaaScore}");
-
-                        // update stats
-                        if(job.BlockTemplate.Header.DaaScore > BlockchainStats.BlockHeight)
-                        {
-                            BlockchainStats.LastNetworkBlockTime = clock.Now;
-                            BlockchainStats.BlockHeight = job.BlockTemplate.Header.DaaScore;
-                            BlockchainStats.NetworkDifficulty = job.Difficulty;
-                        }
-
-                        currentJob = job;
-                    }
-                    else
-                    {
-                        if(via != null)
-                            logger.Debug(() => $"Template update {job.BlockTemplate.Header.DaaScore}");
-                        else
-                            logger.Debug(() => $"Template update {job.BlockTemplate.Header.DaaScore}");
-                    }
-
-                    return isNew;
+                    BlockchainStats.LastNetworkBlockTime = clock.Now;
+                    BlockchainStats.BlockHeight = job.BlockTemplate.Header.DaaScore;
+                    BlockchainStats.NetworkDifficulty = job.Difficulty;
                 }
 
-                catch(OperationCanceledException)
-                {
-                    // ignore
-                }
-
-                catch(Exception ex)
-                {
-                    logger.Error(() => $"{ex.GetType().Name} '{ex.Message}' while updating new job");
-                }
-
-                return false;
+                currentJob = job;
             }
-        }, cts.Token);
+            else
+            {
+                if(via != null)
+                    logger.Debug(() => $"Template update {job.BlockTemplate.Header.DaaScore}");
+                else
+                    logger.Debug(() => $"Template update {job.BlockTemplate.Header.DaaScore}");
+            }
+
+            return Task.FromResult(isNew);
+        }
+
+        catch(OperationCanceledException)
+        {
+            // ignore
+        }
+
+        catch(Exception ex)
+        {
+            logger.Error(() => $"{ex.GetType().Name} '{ex.Message}' while updating new job");
+        }
+
+        return Task.FromResult(false);
     }
 
     private async Task UpdateNetworkStatsAsync(CancellationToken ct)
