@@ -277,16 +277,13 @@ public class XelisJobManager : JobManagerBase<XelisJob>
         CancellationToken ct)
     {
         Contract.RequiresNonNull(worker);
-        Contract.RequiresNonNull(submission);
-
-        if(submission is not object[] submitParams)
-            throw new StratumException(StratumError.Other, "invalid params");
+        var submitParams = GetSubmitParamsOrThrow(submission, 3);
 
         var context = worker.ContextAs<XelisWorkerContext>();
 
         // extract params
-        var jobId = submitParams[1] as string;
-        var nonce = submitParams[2] as string;
+        var jobId = ReadSubmitString(submitParams, 1);
+        var nonce = ReadSubmitString(submitParams, 2);
 
         XelisJob job;
 
@@ -341,6 +338,22 @@ public class XelisJobManager : JobManagerBase<XelisJob>
         }
 
         return share;
+    }
+
+    private static object[] GetSubmitParamsOrThrow(object submission, int minLength)
+    {
+        if(submission is not object[] submitParams || submitParams.Length < minLength)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return submitParams;
+    }
+
+    private static string ReadSubmitString(object[] submitParams, int index)
+    {
+        if(submitParams[index] is not string value)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return value;
     }
 
     public async Task<string> NormalizeAddressAsync(string address, CancellationToken ct)

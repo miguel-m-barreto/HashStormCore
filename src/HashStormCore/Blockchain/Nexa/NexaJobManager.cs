@@ -218,18 +218,15 @@ public class NexaJobManager : BitcoinJobManagerBase<NexaJob>
         CancellationToken ct)
     {
         Contract.RequiresNonNull(worker);
-        Contract.RequiresNonNull(submission);
-
-        if(submission is not object[] submitParams)
-            throw new StratumException(StratumError.Other, "invalid params");
+        var submitParams = GetSubmitParamsOrThrow(submission, 5);
 
         var context = worker.ContextAs<NexaWorkerContext>();
 
-        var workerValue = (submitParams[0] as string)?.Trim();
-        var jobId = submitParams[1] as string;
-        var extraNonce1 = submitParams[2] as string;
+        var workerValue = ReadSubmitString(submitParams, 0).Trim();
+        var jobId = ReadSubmitString(submitParams, 1);
+        var extraNonce1 = ReadSubmitString(submitParams, 2);
         //var nTime = submitParams[3] as string; // not really required
-        var nonce = submitParams[4] as string;
+        var nonce = ReadSubmitString(submitParams, 4);
 
         if(string.IsNullOrEmpty(workerValue))
             throw new StratumException(StratumError.Other, "missing or invalid workername");
@@ -289,6 +286,22 @@ public class NexaJobManager : BitcoinJobManagerBase<NexaJob>
         }
 
         return share;
+    }
+
+    private static object[] GetSubmitParamsOrThrow(object submission, int minLength)
+    {
+        if(submission is not object[] submitParams || submitParams.Length < minLength)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return submitParams;
+    }
+
+    private static string ReadSubmitString(object[] submitParams, int index)
+    {
+        if(submitParams[index] is not string value)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return value;
     }
 
     public double ShareMultiplier => coin.ShareMultiplier;

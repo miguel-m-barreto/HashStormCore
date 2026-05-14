@@ -234,18 +234,15 @@ public class WarthogJobManager : JobManagerBase<WarthogJob>
         CancellationToken ct)
     {
         Contract.RequiresNonNull(worker);
-        Contract.RequiresNonNull(submission);
-
-        if(submission is not object[] submitParams)
-            throw new StratumException(StratumError.Other, "invalid params");
+        var submitParams = GetSubmitParamsOrThrow(submission, 4);
 
         var context = worker.ContextAs<WarthogWorkerContext>();
 
         // extract params
-        var jobId = submitParams[0] as string;
-        var extraNonce2 = submitParams[1] as string;
-        var nTime = submitParams[2] as string;
-        var nonce = submitParams[3] as string;
+        var jobId = ReadSubmitString(submitParams, 0);
+        var extraNonce2 = ReadSubmitString(submitParams, 1);
+        var nTime = ReadSubmitString(submitParams, 2);
+        var nonce = ReadSubmitString(submitParams, 3);
 
         WarthogJob job;
 
@@ -297,6 +294,22 @@ public class WarthogJobManager : JobManagerBase<WarthogJob>
         }
 
         return share;
+    }
+
+    private static object[] GetSubmitParamsOrThrow(object submission, int minLength)
+    {
+        if(submission is not object[] submitParams || submitParams.Length < minLength)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return submitParams;
+    }
+
+    private static string ReadSubmitString(object[] submitParams, int index)
+    {
+        if(submitParams[index] is not string value)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return value;
     }
 
     public async Task<bool> ValidateAddressAsync(string address, CancellationToken ct)

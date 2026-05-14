@@ -310,14 +310,17 @@ public class WarthogJob
     public virtual (Share Share, string HeaderHex) ProcessShare(StratumConnection worker,
         string extraNonce2, string nTime, string nonce)
     {
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(extraNonce2));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nTime));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
-
         var context = worker.ContextAs<WarthogWorkerContext>();
+        var expectedExtraNonce2Length = WarthogConstants.ExtranoncePlaceHolderLength * 2 - (context.ExtraNonce1?.Length ?? 0);
+
+        if(string.IsNullOrEmpty(extraNonce2) || extraNonce2.Length != expectedExtraNonce2Length)
+            throw new StratumException(StratumError.Other, "incorrect size of extranonce2");
+
+        if(!HexUtils.IsFixedLengthHex(extraNonce2, expectedExtraNonce2Length))
+            throw new StratumException(StratumError.Other, "invalid extranonce2");
 
         // validate nTime
-        if(nTime.Length != 8)
+        if(string.IsNullOrEmpty(nTime) || nTime.Length != 8)
             throw new StratumException(StratumError.Other, "incorrect size of ntime");
 
         if(!HexUtils.IsFixedLengthHex(nTime, 8) || !uint.TryParse(nTime, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nTimeInt))
@@ -327,7 +330,7 @@ public class WarthogJob
             throw new StratumException(StratumError.Other, "ntime out of range");
 
         // validate nonce
-        if(nonce.Length != WarthogConstants.NonceLength)
+        if(string.IsNullOrEmpty(nonce) || nonce.Length != WarthogConstants.NonceLength)
             throw new StratumException(StratumError.Other, "incorrect size of nonce");
 
         if(!HexUtils.IsFixedLengthHex(nonce, WarthogConstants.NonceLength) || !uint.TryParse(nonce, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nonceInt))

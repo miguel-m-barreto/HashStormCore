@@ -566,15 +566,12 @@ public class KaspaJobManager : JobManagerBase<KaspaJob>
     public virtual async ValueTask<Share> SubmitShareAsync(StratumConnection worker, object submission, CancellationToken ct)
     {
         Contract.RequiresNonNull(worker);
-        Contract.RequiresNonNull(submission);
-
-        if(submission is not object[] submitParams)
-            throw new StratumException(StratumError.Other, "invalid params");
+        var submitParams = GetSubmitParamsOrThrow(submission, 3);
 
         var context = worker.ContextAs<KaspaWorkerContext>();
 
-        var jobId = submitParams[1] as string;
-        var nonce = submitParams[2] as string;
+        var jobId = ReadSubmitString(submitParams, 1);
+        var nonce = ReadSubmitString(submitParams, 2);
 
         KaspaJob job;
 
@@ -586,7 +583,7 @@ public class KaspaJobManager : JobManagerBase<KaspaJob>
             {
                 // hack for ASICs sending wrong jobIds (IceRiver/Bitmain)
                 if(ValidateIsGodMiner(context.UserAgent) || ValidateIsIceRiverMiner(context.UserAgent))
-                    job = context.validJobs.ToArray().FirstOrDefault(x => Int64.Parse(x.JobId) < Int64.Parse(jobId));
+                    job = TryGetFallbackJob(context, jobId);
             }
 
             if(job == null)
@@ -633,6 +630,31 @@ public class KaspaJobManager : JobManagerBase<KaspaJob>
         }
 
         return share;
+    }
+
+    private static object[] GetSubmitParamsOrThrow(object submission, int minLength)
+    {
+        if(submission is not object[] submitParams || submitParams.Length < minLength)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return submitParams;
+    }
+
+    private static string ReadSubmitString(object[] submitParams, int index)
+    {
+        if(submitParams[index] is not string value)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return value;
+    }
+
+    private static KaspaJob TryGetFallbackJob(KaspaWorkerContext context, string jobId)
+    {
+        if(!long.TryParse(jobId, out var submittedJobId))
+            return null;
+
+        return context.validJobs.ToArray().FirstOrDefault(x =>
+            long.TryParse(x.JobId, out var validJobId) && validJobId < submittedJobId);
     }
 
     public bool ValidateIsLargeJob(string userAgent)

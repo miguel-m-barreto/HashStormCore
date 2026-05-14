@@ -253,19 +253,16 @@ public class EquihashJobManager : BitcoinJobManagerBase<EquihashJob>
         object submission, CancellationToken ct)
     {
         Contract.RequiresNonNull(worker);
-        Contract.RequiresNonNull(submission);
-
-        if(submission is not object[] submitParams)
-            throw new StratumException(StratumError.Other, "invalid params");
+        var submitParams = GetSubmitParamsOrThrow(submission, 5);
 
         var context = worker.ContextAs<EquihashWorkerContext>();
 
         // extract params
-        var workerValue = (submitParams[0] as string)?.Trim();
-        var jobId = submitParams[1] as string;
-        var nTime = submitParams[2] as string;
-        var extraNonce2 = submitParams[3] as string;
-        var solution = submitParams[4] as string;
+        var workerValue = ReadSubmitString(submitParams, 0).Trim();
+        var jobId = ReadSubmitString(submitParams, 1);
+        var nTime = ReadSubmitString(submitParams, 2);
+        var extraNonce2 = ReadSubmitString(submitParams, 3);
+        var solution = ReadSubmitString(submitParams, 4);
 
         if(string.IsNullOrEmpty(workerValue))
             throw new StratumException(StratumError.Other, "missing or invalid workername");
@@ -342,6 +339,22 @@ public class EquihashJobManager : BitcoinJobManagerBase<EquihashJob>
         share.Created = clock.Now;
 
         return share;
+    }
+
+    private static object[] GetSubmitParamsOrThrow(object submission, int minLength)
+    {
+        if(submission is not object[] submitParams || submitParams.Length < minLength)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return submitParams;
+    }
+
+    private static string ReadSubmitString(object[] submitParams, int index)
+    {
+        if(submitParams[index] is not string value)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return value;
     }
 
     protected async Task<SubmitResult> SubmitVeruscoinBlockAsync(Share share, string blockHex, bool isPBaaSActive, CancellationToken ct)
