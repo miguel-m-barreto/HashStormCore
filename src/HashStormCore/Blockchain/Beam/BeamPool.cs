@@ -248,7 +248,7 @@ public class BeamPool : PoolBase
             else
             {
                 // submit
-                var (share, stratumError) = manager.SubmitShare(connection, request?.Id, request?.Nonce, request?.Output, ct);
+                var (share, stratumError) = await manager.SubmitShareAsync(connection, request?.Id, request?.Nonce, request?.Output, ct);
                 
                 if (stratumError == BeamConstants.BeamRpcInvalidShare)
                 {

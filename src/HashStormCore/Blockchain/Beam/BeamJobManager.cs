@@ -344,55 +344,110 @@ public class BeamJobManager : JobManagerBase<BeamJob>
         return context.ExtraNonce1;
     }
 
-    private void SubmitBlock(CancellationToken ct, DaemonEndpointConfig endPoint, object request, Share share, object payload = null, JsonSerializerSettings payloadJsonSerializerSettings = null)
+    private async Task<bool> SubmitBlockAsync(DaemonEndpointConfig endPoint, object request, Share share, object payload = null, JsonSerializerSettings payloadJsonSerializerSettings = null)
     {
         Contract.RequiresNonNull(request);
         Contract.RequiresNonNull(share);
-        
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        Task.Run(async () =>
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        byte[] receiveBuffer = new byte[1024];
+        var responseBuffer = new StringBuilder();
+
+        try
         {
-            using(cts)
+            int port = endPoint.Port;
+            IPAddress[] iPAddress = await Dns.GetHostAddressesAsync(endPoint.Host, AddressFamily.InterNetwork, cts.Token);
+            IPEndPoint ipEndPoint = new IPEndPoint(iPAddress.First(), port);
+            using Socket client = new(SocketType.Stream, ProtocolType.Tcp);
+            //client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.SendTimeout, 1);
+            client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReceiveTimeout, 1);
+            client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
+            logger.Debug(() => $"[Submit Block] - Establishing socket connection with `{iPAddress.First().ToString()}:{port}`");
+            await client.ConnectAsync(ipEndPoint, cts.Token);
+            if (client.Connected)
+                logger.Debug(() => $"[Submitting block] - Socket connection successfully established");
+
+            using NetworkStream stream = new NetworkStream(client, false);
+            string json = JsonConvert.SerializeObject(request, payloadJsonSerializerSettings);
+            byte[] requestData = Encoding.UTF8.GetBytes($"{json}\r\n");
+
+            logger.Debug(() => $"[Submitting block] - Sending request `{json}`");
+            await stream.WriteAsync(requestData, 0, requestData.Length, cts.Token);
+
+            int receivedBytes;
+            while((receivedBytes = await stream.ReadAsync(receiveBuffer, 0, receiveBuffer.Length, cts.Token)) != 0)
             {
-                byte[] receiveBuffer = new byte[1024];
+                logger.Debug(() => $"{receivedBytes} byte(s) of block submission response data have been received");
 
-                try
+                responseBuffer.Append(Encoding.UTF8.GetString(receiveBuffer, 0, receivedBytes));
+                var responseText = responseBuffer.ToString();
+                var lines = responseText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+
+                for(var i = 0; i < lines.Length - 1; i++)
                 {
-                    int port = endPoint.Port;
-                    IPAddress[] iPAddress = await Dns.GetHostAddressesAsync(endPoint.Host, AddressFamily.InterNetwork, cts.Token);
-                    IPEndPoint ipEndPoint = new IPEndPoint(iPAddress.First(), port);
-                    using Socket client = new(SocketType.Stream, ProtocolType.Tcp);
-                    //client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-                    client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.SendTimeout, 1);
-                    client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReceiveTimeout, 1);
-                    client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay, true);
-                    logger.Debug(() => $"[Submit Block] - Establishing socket connection with `{iPAddress.First().ToString()}:{port}`");
-                    await client.ConnectAsync(ipEndPoint, cts.Token);
-                    if (client.Connected)
-                        logger.Debug(() => $"[Submitting block] - Socket connection succesffuly established");
-
-                    using NetworkStream stream = new NetworkStream(client, false);
-                    string json = JsonConvert.SerializeObject(request, payloadJsonSerializerSettings);
-                    byte[] requestData = Encoding.UTF8.GetBytes($"{json}\r\n");
-
-                    logger.Debug(() => $"[Submitting block] - Sending request `{json}`");
-                    // send
-                    await stream.WriteAsync(requestData, 0, requestData.Length, cts.Token);
-
-                    client.Shutdown(SocketShutdown.Both);
+                    if(TryParseSubmitBlockResponse(lines[i], share, out var accepted))
+                        return accepted;
                 }
 
-                catch(Exception)
-                {
-                    // We lost that battle
-                    messageBus.SendMessage(new AdminNotification("Block submission failed", $"Pool {poolConfig.Id} {(!string.IsNullOrEmpty(share.Source) ? $"[{share.Source.ToUpper()}] " : string.Empty)}failed to submit block {share.BlockHeight}"));
-                }
-                
-                if(!cts.IsCancellationRequested)
-                    await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
+                responseBuffer.Clear();
+                responseBuffer.Append(lines[^1]);
+
+                var pendingResponse = responseBuffer.ToString().Trim();
+                if(pendingResponse.EndsWith('}') && TryParseSubmitBlockResponse(pendingResponse, share, out var pendingAccepted))
+                    return pendingAccepted;
             }
-        }, cts.Token);
+
+            if(responseBuffer.Length > 0 && TryParseSubmitBlockResponse(responseBuffer.ToString(), share, out var finalAccepted))
+                return finalAccepted;
+
+            var error = "daemon closed the block submission socket without a parseable response";
+            logger.Warn(() => $"Block {share.BlockHeight} submission failed with: {error}");
+            messageBus.SendMessage(new AdminNotification("Block submission failed", $"Pool {poolConfig.Id} {(!string.IsNullOrEmpty(share.Source) ? $"[{share.Source.ToUpper()}] " : string.Empty)}failed to submit block {share.BlockHeight}: {error}"));
+        }
+
+        catch(Exception ex)
+        {
+            var error = ex is OperationCanceledException ? "timed out waiting for daemon block submission response" : ex.Message;
+            logger.Warn(() => $"Block {share.BlockHeight} submission failed with: {error}");
+            messageBus.SendMessage(new AdminNotification("Block submission failed", $"Pool {poolConfig.Id} {(!string.IsNullOrEmpty(share.Source) ? $"[{share.Source.ToUpper()}] " : string.Empty)}failed to submit block {share.BlockHeight}: {error}"));
+        }
+
+        return false;
+    }
+
+    private bool TryParseSubmitBlockResponse(string line, Share share, out bool accepted)
+    {
+        accepted = false;
+
+        if(string.IsNullOrWhiteSpace(line))
+            return false;
+
+        try
+        {
+            var response = JsonConvert.DeserializeObject<BeamSubmitResponse>(line);
+
+            if(response?.Code == BeamConstants.BeamRpcShareAccepted)
+            {
+                accepted = true;
+                return true;
+            }
+
+            if(response?.Code != null)
+            {
+                var error = response.Description ?? $"daemon returned code {response.Code}";
+                logger.Warn(() => $"Block {share.BlockHeight} submission failed with: {error}");
+                messageBus.SendMessage(new AdminNotification("Block submission failed", $"Pool {poolConfig.Id} {(!string.IsNullOrEmpty(share.Source) ? $"[{share.Source.ToUpper()}] " : string.Empty)}failed to submit block {share.BlockHeight}: {error}"));
+                return true;
+            }
+        }
+
+        catch(JsonException ex)
+        {
+            logger.Warn(() => $"Unable to parse block submission response for block {share.BlockHeight}: {ex.Message}");
+        }
+
+        return false;
     }
     
     public object[] GetJobParamsForStratum()
@@ -494,7 +549,7 @@ public class BeamJobManager : JobManagerBase<BeamJob>
         return responseWalletRpc.Response?.IsValid == true;
     }
 
-    public (Share share, short stratumError) SubmitShare(StratumConnection worker,
+    public async ValueTask<(Share share, short stratumError)> SubmitShareAsync(StratumConnection worker,
         string JobId, string nonce, string solution, CancellationToken ct)
     {
         Contract.RequiresNonNull(worker);
@@ -542,16 +597,26 @@ public class BeamJobManager : JobManagerBase<BeamJob>
                 Output = solution
             };
             
-            SubmitBlock(ct, daemonEndpoints.First(), shareSubmitRequest, share);
-            
-            logger.Info(() => $"Daemon accepted block {share.BlockHeight} [{share.BlockHash}] submitted by {context.Miner}");
-                            
-            // persist the coinbase transaction-hash to allow the payment processor
-            // Be aware for BEAM, the block verification and confirmation must be performed with `share.BlockHash` if the socket did not return a `Nonceprefix` after login
-            share.TransactionConfirmationData = (!string.IsNullOrEmpty(PoolNoncePrefix)) ? share.BlockHash : share.BlockHeight.ToString();
-            share.BlockHash = (!string.IsNullOrEmpty(PoolNoncePrefix)) ? null : solution + nonce;
-            
-            OnBlockFound();
+            var accepted = await SubmitBlockAsync(daemonEndpoints.First(), shareSubmitRequest, share);
+
+            share.IsBlockCandidate = accepted;
+
+            if(share.IsBlockCandidate)
+            {
+                logger.Info(() => $"Daemon accepted block {share.BlockHeight} [{share.BlockHash}] submitted by {context.Miner}");
+
+                // Beam block unlocking relies on different identifiers depending on the node's nonce-prefix mode.
+                share.TransactionConfirmationData = (!string.IsNullOrEmpty(PoolNoncePrefix)) ? share.BlockHash : share.BlockHeight.ToString();
+                share.BlockHash = (!string.IsNullOrEmpty(PoolNoncePrefix)) ? null : solution + nonce;
+
+                OnBlockFound();
+            }
+
+            else
+            {
+                share.TransactionConfirmationData = null;
+                share.BlockHash = null;
+            }
         }
 
         return (share, stratumError);
