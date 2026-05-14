@@ -29,6 +29,8 @@ namespace HashStormCore.Blockchain.Beam;
 [CoinFamily(CoinFamily.Beam)]
 public class BeamPool : PoolBase
 {
+    private const string JobNotFoundMessage = "job not found";
+
     public BeamPool(IComponentContext ctx,
         JsonSerializerSettings serializerSettings,
         IConnectionFactory cf,
@@ -193,11 +195,11 @@ public class BeamPool : PoolBase
                 var submitJobNotFoundResponse = new BeamSubmitResponse {
                     Id = request?.Id,
                     Code = BeamConstants.BeamRpcJobNotFound,
-                    Description = "job not found"
+                    Description = JobNotFoundMessage
                 };
 
                 await connection.NotifyAsync(submitJobNotFoundResponse);
-                throw new StratumException(StratumError.Other, "job not found");
+                throw new StratumException(StratumError.Other, JobNotFoundMessage);
             }
 
             // check age of submission (aged submissions are usually caused by high server load)
@@ -335,12 +337,12 @@ public class BeamPool : PoolBase
                     var submitJobNotFoundResponse = new BeamSubmitResponse {
                         Id = request?.Id,
                         Code = BeamConstants.BeamRpcJobNotFound,
-                        Description = "job not found"
+                        Description = JobNotFoundMessage
                     };
 
                     // respond
                     await connection.NotifyAsync(submitJobNotFoundResponse);
-                    throw new StratumException(StratumError.Other, "job not found");
+                    throw new StratumException(StratumError.Other, JobNotFoundMessage);
                 }
                 
                 else

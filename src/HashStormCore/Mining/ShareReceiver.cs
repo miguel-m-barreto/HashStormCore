@@ -219,7 +219,7 @@ public class ShareReceiver : BackgroundService
 
         catch(Exception ex)
         {
-            logger.Warn(ex, "Malformed relay message from {url}. Ignoring ...", url);
+            logger.Warn(ex, "Malformed relay message from {Url}. Ignoring ...", url);
             return false;
         }
     }
@@ -304,7 +304,7 @@ public class ShareReceiver : BackgroundService
         if(share != null)
             return true;
 
-        if(!Enum.IsDefined(typeof(ShareRelay.WireFormat), wireFormat))
+        if(!Enum.IsDefined(wireFormat))
             logger.Error(() => $"Unsupported wire format {wireFormat} of share received from {msg.Url}/{msg.Topic} ");
 
         logger.Error(() => $"Unable to deserialize share received from {msg.Url}/{msg.Topic}");

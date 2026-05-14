@@ -70,6 +70,7 @@ public class BeamJobManager : JobManagerBase<BeamJob>
     public ulong? Forkheight2;
     protected string PoolNoncePrefix;
     private BeamCoinTemplate coin;
+    private static readonly string[] SubmitResponseLineSeparators = new[] { "\r\n", "\r", "\n" };
     
     protected IObservable<string> BeamSubscribeStratumApiSocketClient(CancellationToken ct, DaemonEndpointConfig endPoint,
         object request, object payload = null,
@@ -376,44 +377,66 @@ public class BeamJobManager : JobManagerBase<BeamJob>
             await stream.WriteAsync(requestData, 0, requestData.Length, cts.Token);
 
             int receivedBytes;
-            while((receivedBytes = await stream.ReadAsync(receiveBuffer, 0, receiveBuffer.Length, cts.Token)) != 0)
+            while((receivedBytes = await stream.ReadAsync(receiveBuffer.AsMemory(0, receiveBuffer.Length), cts.Token)) != 0)
             {
                 logger.Debug(() => $"{receivedBytes} byte(s) of block submission response data have been received");
 
-                responseBuffer.Append(Encoding.UTF8.GetString(receiveBuffer, 0, receivedBytes));
-                var responseText = responseBuffer.ToString();
-                var lines = responseText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-
-                for(var i = 0; i < lines.Length - 1; i++)
-                {
-                    if(TryParseSubmitBlockResponse(lines[i], share, out var accepted))
-                        return accepted;
-                }
-
-                responseBuffer.Clear();
-                responseBuffer.Append(lines[^1]);
-
-                var pendingResponse = responseBuffer.ToString().Trim();
-                if(pendingResponse.EndsWith('}') && TryParseSubmitBlockResponse(pendingResponse, share, out var pendingAccepted))
-                    return pendingAccepted;
+                if(TryParseBufferedSubmitBlockResponse(responseBuffer, Encoding.UTF8.GetString(receiveBuffer, 0, receivedBytes), share, out var accepted))
+                    return accepted;
             }
 
             if(responseBuffer.Length > 0 && TryParseSubmitBlockResponse(responseBuffer.ToString(), share, out var finalAccepted))
                 return finalAccepted;
 
             var error = "daemon closed the block submission socket without a parseable response";
-            logger.Warn(() => $"Block {share.BlockHeight} submission failed with: {error}");
-            messageBus.SendMessage(new AdminNotification("Block submission failed", $"Pool {poolConfig.Id} {(!string.IsNullOrEmpty(share.Source) ? $"[{share.Source.ToUpper()}] " : string.Empty)}failed to submit block {share.BlockHeight}: {error}"));
+            NotifyBlockSubmissionFailed(share, error);
         }
 
         catch(Exception ex)
         {
             var error = ex is OperationCanceledException ? "timed out waiting for daemon block submission response" : ex.Message;
-            logger.Warn(() => $"Block {share.BlockHeight} submission failed with: {error}");
-            messageBus.SendMessage(new AdminNotification("Block submission failed", $"Pool {poolConfig.Id} {(!string.IsNullOrEmpty(share.Source) ? $"[{share.Source.ToUpper()}] " : string.Empty)}failed to submit block {share.BlockHeight}: {error}"));
+            NotifyBlockSubmissionFailed(share, error, ex);
         }
 
         return false;
+    }
+
+    private bool TryParseBufferedSubmitBlockResponse(StringBuilder responseBuffer, string responseChunk, Share share, out bool accepted)
+    {
+        responseBuffer.Append(responseChunk);
+        var lines = responseBuffer.ToString().Split(SubmitResponseLineSeparators, StringSplitOptions.None);
+
+        if(TryParseCompletedResponseLines(lines, share, out accepted))
+            return true;
+
+        responseBuffer.Clear();
+        responseBuffer.Append(lines[^1]);
+
+        var pendingResponse = responseBuffer.ToString().Trim();
+        return pendingResponse.EndsWith('}') && TryParseSubmitBlockResponse(pendingResponse, share, out accepted);
+    }
+
+    private bool TryParseCompletedResponseLines(string[] lines, Share share, out bool accepted)
+    {
+        accepted = false;
+
+        for(var i = 0; i < lines.Length - 1; i++)
+        {
+            if(TryParseSubmitBlockResponse(lines[i], share, out accepted))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void NotifyBlockSubmissionFailed(Share share, string error, Exception ex = null)
+    {
+        if(ex != null)
+            logger.Warn(ex, $"Block {share.BlockHeight} submission failed with: {error}");
+        else
+            logger.Warn(() => $"Block {share.BlockHeight} submission failed with: {error}");
+
+        messageBus.SendMessage(new AdminNotification("Block submission failed", $"Pool {poolConfig.Id} {(!string.IsNullOrEmpty(share.Source) ? $"[{share.Source.ToUpper()}] " : string.Empty)}failed to submit block {share.BlockHeight}: {error}"));
     }
 
     private bool TryParseSubmitBlockResponse(string line, Share share, out bool accepted)
@@ -444,7 +467,7 @@ public class BeamJobManager : JobManagerBase<BeamJob>
 
         catch(JsonException ex)
         {
-            logger.Warn(() => $"Unable to parse block submission response for block {share.BlockHeight}: {ex.Message}");
+            logger.Warn(ex, $"Unable to parse block submission response for block {share.BlockHeight}: {ex.Message}");
         }
 
         return false;
@@ -597,7 +620,7 @@ public class BeamJobManager : JobManagerBase<BeamJob>
                 Output = solution
             };
             
-            var accepted = await SubmitBlockAsync(daemonEndpoints.First(), shareSubmitRequest, share);
+            var accepted = await SubmitBlockAsync(daemonEndpoints[0], shareSubmitRequest, share);
 
             share.IsBlockCandidate = accepted;
 

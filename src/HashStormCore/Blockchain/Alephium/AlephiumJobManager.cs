@@ -333,34 +333,9 @@ public class AlephiumJobManager : JobManagerBase<AlephiumJob>
                 messageBus.NotifyChainHeight(poolConfig.Id, blockTemplate.Height, poolConfig.Template);
 
             if(isNew)
-            {
-                job = new AlephiumJob();
-
-                job.Init(blockTemplate);
-
-                if(via != null)
-                    logger.Info(() => $"Detected new block {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}] [{via}]");
-                else
-                    logger.Info(() => $"Detected new block {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}]");
-
-                // update stats
-                if ((job.BlockTemplate.Height - 1) > BlockchainStats.BlockHeight)
-                {
-                    // update stats
-                    BlockchainStats.LastNetworkBlockTime = clock.Now;
-                    BlockchainStats.BlockHeight = job.BlockTemplate.Height - 1;
-                }
-
-                currentJob = job;
-            }
-
+                currentJob = CreateAndPublishJob(blockTemplate, via);
             else
-            {
-                if(via != null)
-                    logger.Debug(() => $"Template update {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}] [{via}]");
-                else
-                    logger.Debug(() => $"Template update {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}]");
-            }
+                LogTemplateUpdate(job, via);
 
             return Task.FromResult(isNew);
         }
@@ -376,6 +351,38 @@ public class AlephiumJobManager : JobManagerBase<AlephiumJob>
         }
 
         return Task.FromResult(false);
+    }
+
+    private AlephiumJob CreateAndPublishJob(AlephiumBlockTemplate blockTemplate, string via)
+    {
+        var job = new AlephiumJob();
+
+        job.Init(blockTemplate);
+        LogNewJob(job, via);
+        UpdateJobStats(job);
+
+        return job;
+    }
+
+    private void LogNewJob(AlephiumJob job, string via)
+    {
+        var suffix = via != null ? $" [{via}]" : string.Empty;
+        logger.Info(() => $"Detected new block {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}]{suffix}");
+    }
+
+    private void LogTemplateUpdate(AlephiumJob job, string via)
+    {
+        var suffix = via != null ? $" [{via}]" : string.Empty;
+        logger.Debug(() => $"Template update {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}]{suffix}");
+    }
+
+    private void UpdateJobStats(AlephiumJob job)
+    {
+        if((job.BlockTemplate.Height - 1) > BlockchainStats.BlockHeight)
+        {
+            BlockchainStats.LastNetworkBlockTime = clock.Now;
+            BlockchainStats.BlockHeight = job.BlockTemplate.Height - 1;
+        }
     }
     
     private async Task UpdateNetworkStatsAsync(CancellationToken ct)

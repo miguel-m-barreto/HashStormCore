@@ -417,8 +417,22 @@ public class VeruscoinJob : EquihashJob
         Contract.RequiresNonNull(worker);
 
         var context = worker.ContextAs<EquihashWorkerContext>();
+        var nTimeInt = ParseSubmittedNTime(nTime);
+        var nonce = BuildAndValidateNonce(context, extraNonce2);
 
-        // validate nTime
+        ValidateSubmittedSolution(solution);
+
+        // dupe check
+        if(!RegisterVersucoinSubmit(nonce, solution))
+            throw new StratumException(StratumError.DuplicateShare, "duplicate share");
+        
+        nonce = ApplyPbaasNonceOverrideIfNeeded(context, nonce, solution);
+            
+        return ProcessShareInternal(worker, nonce, nTimeInt, solution);
+    }
+
+    private uint ParseSubmittedNTime(string nTime)
+    {
         if(string.IsNullOrEmpty(nTime) || nTime.Length != 8)
             throw new StratumException(StratumError.Other, "incorrect size of ntime");
 
@@ -434,27 +448,33 @@ public class VeruscoinJob : EquihashJob
         if(nTimeInt != BlockTemplate.CurTime)
             throw new StratumException(StratumError.Other, "ntime out of range");
 
+        return nTimeInt;
+    }
+
+    private string BuildAndValidateNonce(EquihashWorkerContext context, string extraNonce2)
+    {
         var nonce = context.ExtraNonce1 + extraNonce2;
 
-        // validate nonce
         if(string.IsNullOrEmpty(extraNonce2) || nonce.Length != 64)
             throw new StratumException(StratumError.Other, "incorrect size of extraNonce2");
 
         if(!HexUtils.IsFixedLengthHex(nonce, 64))
             throw new StratumException(StratumError.Other, "invalid extraNonce2");
-        
-        // validate solution
+
+        return nonce;
+    }
+
+    private void ValidateSubmittedSolution(string solution)
+    {
         if(string.IsNullOrEmpty(solution) || solution.Length != (networkParams.SolutionSize + networkParams.SolutionPreambleSize) * 2)
             throw new StratumException(StratumError.Other, "incorrect size of solution");
 
         if(!HexUtils.IsFixedLengthHex(solution, (networkParams.SolutionSize + networkParams.SolutionPreambleSize) * 2))
             throw new StratumException(StratumError.Other, "invalid solution");
+    }
 
-        // dupe check
-        if(!RegisterVersucoinSubmit(nonce, solution))
-            throw new StratumException(StratumError.DuplicateShare, "duplicate share");
-        
-        // when pbaas activates use block header nonce from daemon, pool/miner can no longer manipulate
+    private string ApplyPbaasNonceOverrideIfNeeded(EquihashWorkerContext context, string nonce, string solution)
+    {
         if(isPBaaSActive)
         {
             if(string.IsNullOrEmpty(BlockTemplate.Nonce))
@@ -467,8 +487,8 @@ public class VeruscoinJob : EquihashJob
             if(solutionExtraData.IndexOf(context.ExtraNonce1) < 0)
                 throw new StratumException(StratumError.Other, "invalid solution, pool nonce missing");
         }
-            
-        return ProcessShareInternal(worker, nonce, nTimeInt, solution);
+
+        return nonce;
     }
     
     public override object GetJobParams(bool isNew)

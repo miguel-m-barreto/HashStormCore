@@ -358,36 +358,9 @@ public class KaspaJobManager : JobManagerBase<KaspaJob>
                 messageBus.NotifyChainHeight(poolConfig.Id, blockTemplate.Header.DaaScore, poolConfig.Template);
 
             if(isNew)
-            {
-                job = CreateJob(blockTemplate.Header.DaaScore);
-
-                job.Init(blockTemplate, NextJobId("D"), ShareMultiplier);
-
-                logger.Debug(() => $"blockTargetValue: {job.blockTargetValue}");
-                logger.Debug(() => $"Difficulty: {job.Difficulty}");
-
-                if(via != null)
-                    logger.Info(() => $"Detected new block {job.BlockTemplate.Header.DaaScore} [{via}]");
-                else
-                    logger.Info(() => $"Detected new block {job.BlockTemplate.Header.DaaScore}");
-
-                // update stats
-                if(job.BlockTemplate.Header.DaaScore > BlockchainStats.BlockHeight)
-                {
-                    BlockchainStats.LastNetworkBlockTime = clock.Now;
-                    BlockchainStats.BlockHeight = job.BlockTemplate.Header.DaaScore;
-                    BlockchainStats.NetworkDifficulty = job.Difficulty;
-                }
-
-                currentJob = job;
-            }
+                currentJob = CreateAndPublishJob(blockTemplate, via);
             else
-            {
-                if(via != null)
-                    logger.Debug(() => $"Template update {job.BlockTemplate.Header.DaaScore}");
-                else
-                    logger.Debug(() => $"Template update {job.BlockTemplate.Header.DaaScore}");
-            }
+                LogTemplateUpdate(job);
 
             return Task.FromResult(isNew);
         }
@@ -403,6 +376,44 @@ public class KaspaJobManager : JobManagerBase<KaspaJob>
         }
 
         return Task.FromResult(false);
+    }
+
+    private KaspaJob CreateAndPublishJob(kaspad.RpcBlock blockTemplate, string via)
+    {
+        var job = CreateJob(blockTemplate.Header.DaaScore);
+
+        job.Init(blockTemplate, NextJobId("D"), ShareMultiplier);
+
+        logger.Debug(() => $"blockTargetValue: {job.blockTargetValue}");
+        logger.Debug(() => $"Difficulty: {job.Difficulty}");
+
+        LogNewJob(job, via);
+        UpdateJobStats(job);
+
+        return job;
+    }
+
+    private void LogNewJob(KaspaJob job, string via)
+    {
+        if(via != null)
+            logger.Info(() => $"Detected new block {job.BlockTemplate.Header.DaaScore} [{via}]");
+        else
+            logger.Info(() => $"Detected new block {job.BlockTemplate.Header.DaaScore}");
+    }
+
+    private void LogTemplateUpdate(KaspaJob job)
+    {
+        logger.Debug(() => $"Template update {job.BlockTemplate.Header.DaaScore}");
+    }
+
+    private void UpdateJobStats(KaspaJob job)
+    {
+        if(job.BlockTemplate.Header.DaaScore > BlockchainStats.BlockHeight)
+        {
+            BlockchainStats.LastNetworkBlockTime = clock.Now;
+            BlockchainStats.BlockHeight = job.BlockTemplate.Header.DaaScore;
+            BlockchainStats.NetworkDifficulty = job.Difficulty;
+        }
     }
 
     private async Task UpdateNetworkStatsAsync(CancellationToken ct)
