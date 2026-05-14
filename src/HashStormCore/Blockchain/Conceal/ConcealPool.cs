@@ -249,6 +249,8 @@ public class ConcealPool : PoolBase
                     throw new StratumException(StratumError.MinusOne, "invalid jobid");
             }
 
+            ValidateSubmitFields(submitRequest);
+
             // dupe check
             if(!job.Submissions.TryAdd(submitRequest.Nonce, true))
                 throw new StratumException(StratumError.MinusOne, "duplicate share");
@@ -301,6 +303,36 @@ public class ConcealPool : PoolBase
 
             throw;
         }
+    }
+
+    private static void ValidateSubmitFields(ConcealSubmitShareRequest submitRequest)
+    {
+        if(submitRequest == null)
+            throw new StratumException(StratumError.MinusOne, "invalid request");
+
+        if(string.IsNullOrEmpty(submitRequest.Nonce) || !ConcealConstants.RegexValidNonce.IsMatch(submitRequest.Nonce))
+            throw new StratumException(StratumError.MinusOne, "malformed nonce");
+
+        if(!IsLowercaseHex(submitRequest.Hash, 64))
+            throw new StratumException(StratumError.MinusOne, "bad hash");
+    }
+
+    private static bool IsLowercaseHex(string value, int length)
+    {
+        if(value == null || value.Length != length)
+            return false;
+
+        for(var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+
+            if((uint) (c - '0') <= 9 || (uint) (c - 'a') <= 5)
+                continue;
+
+            return false;
+        }
+
+        return true;
     }
 
     private string NextJobId()

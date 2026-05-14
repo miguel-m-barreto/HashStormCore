@@ -109,15 +109,16 @@ public class ConcealJob
 
     public (Share Share, string BlobHex) ProcessShare(string nonce, uint workerExtraNonce, string workerHash, StratumConnection worker)
     {
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(workerHash));
         Contract.Requires<ArgumentException>(workerExtraNonce != 0);
 
         var context = worker.ContextAs<ConcealWorkerContext>();
 
         // validate nonce
-        if(!ConcealConstants.RegexValidNonce.IsMatch(nonce))
+        if(string.IsNullOrEmpty(nonce) || !ConcealConstants.RegexValidNonce.IsMatch(nonce))
             throw new StratumException(StratumError.MinusOne, "malformed nonce");
+
+        if(!IsLowercaseHex(workerHash, 64))
+            throw new StratumException(StratumError.MinusOne, "bad hash");
 
         // clone template
         Span<byte> blob = stackalloc byte[blobTemplate.Length];
@@ -188,6 +189,24 @@ public class ConcealJob
         }
 
         return (result, blob.ToHexString());
+    }
+
+    private static bool IsLowercaseHex(string value, int length)
+    {
+        if(value == null || value.Length != length)
+            return false;
+
+        for(var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+
+            if((uint) (c - '0') <= 9 || (uint) (c - 'a') <= 5)
+                continue;
+
+            return false;
+        }
+
+        return true;
     }
 
     #endregion // API-Surface

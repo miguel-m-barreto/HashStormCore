@@ -140,15 +140,16 @@ public class CryptonoteJob
 
     public (Share Share, string BlobHex) ProcessShare(string nonce, uint workerExtraNonce, string workerHash, StratumConnection worker)
     {
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(workerHash));
         Contract.Requires<ArgumentException>(workerExtraNonce != 0);
 
         var context = worker.ContextAs<CryptonoteWorkerContext>();
 
         // validate nonce
-        if (!CryptonoteConstants.RegexValidNonce.IsMatch(nonce))
+        if (string.IsNullOrEmpty(nonce) || !CryptonoteConstants.RegexValidNonce.IsMatch(nonce))
             throw new StratumException(StratumError.MinusOne, "malformed nonce");
+
+        if(!IsLowercaseHex(workerHash, 64))
+            throw new StratumException(StratumError.MinusOne, "bad hash");
 
         // clone template
         Span<byte> blob = stackalloc byte[blobTemplate.Length];
@@ -173,7 +174,7 @@ public class CryptonoteJob
 
         var headerHashString = headerHash.ToHexString();
         if (headerHashString != workerHash)
-            throw new StratumException(StratumError.MinusOne, $"bad hash [generated: {headerHashString}, received: {workerHash}]");
+            throw new StratumException(StratumError.MinusOne, "bad hash");
 
         // check difficulty
         var headerValue = headerHash.ToBigInteger();
@@ -224,6 +225,24 @@ public class CryptonoteJob
         }
 
         return (result, blob.ToHexString());
+    }
+
+    private static bool IsLowercaseHex(string value, int length)
+    {
+        if(value == null || value.Length != length)
+            return false;
+
+        for(var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+
+            if((uint) (c - '0') <= 9 || (uint) (c - 'a') <= 5)
+                continue;
+
+            return false;
+        }
+
+        return true;
     }
 
     #endregion // API-Surface

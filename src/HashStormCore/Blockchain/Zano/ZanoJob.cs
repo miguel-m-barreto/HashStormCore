@@ -105,17 +105,16 @@ public class ZanoJob
 
     public virtual (Share Share, string BlobHex) ProcessShare(ILogger logger, string nonce, uint workerExtraNonce, StratumConnection worker)
     {
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
         Contract.Requires<ArgumentException>(workerExtraNonce != 0);
 
         var context = worker.ContextAs<ZanoWorkerContext>();
 
         // validate nonce
-        if(!ZanoConstants.RegexValidNonce.IsMatch(nonce))
+        if(string.IsNullOrEmpty(nonce) || !ZanoConstants.RegexValidNonce.IsMatch(nonce))
             throw new StratumException(StratumError.MinusOne, "malformed nonce");
 
         if(!ulong.TryParse(nonce, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var fullNonce))
-            throw new StratumException(StratumError.MinusOne, "bad nonce " + nonce);
+            throw new StratumException(StratumError.MinusOne, "bad nonce");
 
         var blobBytes = ZanonoteBindings.ConvertBlock(blobTemplate, blobTemplate.Length, fullNonce);
 

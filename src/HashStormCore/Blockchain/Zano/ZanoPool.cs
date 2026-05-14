@@ -227,7 +227,7 @@ public class ZanoPool : PoolBase
 
             var requestParams = request.ParamsAs<string[]>();
 
-            if(requestParams == null || requestParams.Length < 3 || requestParams.Any(string.IsNullOrEmpty))
+            if(requestParams == null || requestParams.Length < 5 || requestParams.Any(string.IsNullOrEmpty))
                 throw new StratumException(StratumError.MinusOne, "invalid request");
 
             // recognize activity
@@ -249,6 +249,8 @@ public class ZanoPool : PoolBase
                 Nonce = requestParams[2].StripHexPrefix(),
                 Hash = requestParams[4].StripHexPrefix()
             };
+
+            ValidateSubmitNonce(submitRequest.Nonce);
 
             // dupe check
             if(!job.Submissions.TryAdd(submitRequest.Nonce, true))
@@ -302,6 +304,12 @@ public class ZanoPool : PoolBase
 
             throw;
         }
+    }
+
+    private static void ValidateSubmitNonce(string nonce)
+    {
+        if(string.IsNullOrEmpty(nonce) || !ZanoConstants.RegexValidNonce.IsMatch(nonce))
+            throw new StratumException(StratumError.MinusOne, "malformed nonce");
     }
 
     #endregion // Protocol V2 handlers
@@ -610,6 +618,8 @@ public class ZanoPool : PoolBase
                 Nonce = requestParams[0].StripHexPrefix(),
                 Hash = requestParams[2].StripHexPrefix()
             };
+
+            ValidateSubmitNonce(submitRequest.Nonce);
 
             // dupe check
             if(!job.Submissions.TryAdd(submitRequest.Nonce, true))
