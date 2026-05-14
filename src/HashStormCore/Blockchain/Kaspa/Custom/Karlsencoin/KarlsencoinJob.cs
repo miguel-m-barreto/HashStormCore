@@ -43,7 +43,7 @@ namespace HashStormCore.Blockchain.Kaspa.Custom.Karlsencoin
         protected override Share ProcessShareInternal(StratumConnection worker, string nonce)
         {
             var context = worker.ContextAs<KaspaWorkerContext>();
-            BlockTemplate.Header.Nonce = Convert.ToUInt64(nonce, 16);
+            BlockTemplate.Header.Nonce = ParseNonceHex(nonce);
 
             // Build coinbase buffer (size depends on hasher type)
             Span<byte> coinbaseBuf = stackalloc byte[(shareHasher is not FishHashKarlsen) ? 32 : KarlsencoinConstants.CoinbaseSize];

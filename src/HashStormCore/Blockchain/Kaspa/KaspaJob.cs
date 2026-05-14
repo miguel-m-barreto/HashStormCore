@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Numerics;
@@ -53,6 +54,23 @@ namespace HashStormCore.Blockchain.Kaspa
             if (raw.Length > totalLen)
                 raw = raw[^totalLen..];
             return raw.PadLeft(totalLen, '0');
+        }
+
+        private static void ValidateSubmittedNonce(string nonce)
+        {
+            if(string.IsNullOrEmpty(nonce) ||
+               nonce.Length > KaspaConstants.NonceLength ||
+               !HexUtils.IsFixedLengthHex(nonce, nonce.Length))
+                throw new StratumException(StratumError.Other, "invalid nonce");
+        }
+
+        protected static ulong ParseNonceHex(string nonce)
+        {
+            if(!HexUtils.IsFixedLengthHex(nonce, KaspaConstants.NonceLength) ||
+               !ulong.TryParse(nonce, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nonceValue))
+                throw new StratumException(StratumError.Other, "invalid nonce");
+
+            return nonceValue;
         }
 
         #region Matrix/generator for altcoins
@@ -223,7 +241,7 @@ namespace HashStormCore.Blockchain.Kaspa
         {
             var context = worker.ContextAs<KaspaWorkerContext>();
 
-            BlockTemplate.Header.Nonce = Convert.ToUInt64(nonce, 16);
+            BlockTemplate.Header.Nonce = ParseNonceHex(nonce);
 
             Span<byte> coinbase32 = stackalloc byte[32];
             SerializeCoinbase(prePowHashBytes, BlockTemplate.Header.Timestamp, BlockTemplate.Header.Nonce, coinbase32);
@@ -279,17 +297,14 @@ namespace HashStormCore.Blockchain.Kaspa
         public virtual Share ProcessShare(StratumConnection worker, string nonce)
         {
             Contract.RequiresNonNull(worker);
-            Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
 
             var context = worker.ContextAs<KaspaWorkerContext>();
 
-            if (nonce.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-                nonce = nonce[2..];
+            ValidateSubmittedNonce(nonce);
 
             nonce = BuildFinalNonceHex(context.ExtraNonce1, nonce, KaspaConstants.NonceLength);
 
-            if(!HexUtils.IsFixedLengthHex(nonce, KaspaConstants.NonceLength))
-                throw new StratumException(StratumError.Other, "invalid nonce");
+            _ = ParseNonceHex(nonce);
 
             if (!RegisterSubmit($"{JobId}:{nonce}"))
                 throw new StratumException(StratumError.DuplicateShare, "duplicate share");

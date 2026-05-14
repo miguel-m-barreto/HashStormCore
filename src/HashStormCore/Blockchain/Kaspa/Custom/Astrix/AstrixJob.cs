@@ -23,7 +23,7 @@ public class AstrixJob : KaspaJob
     protected override Share ProcessShareInternal(StratumConnection worker, string nonce)
     {
         var context = worker.ContextAs<KaspaWorkerContext>();
-        BlockTemplate.Header.Nonce = Convert.ToUInt64(nonce, 16);
+        BlockTemplate.Header.Nonce = ParseNonceHex(nonce);
 
         Span<byte> coinbase32 = stackalloc byte[32];
         SerializeCoinbase(prePowHashBytes, BlockTemplate.Header.Timestamp, BlockTemplate.Header.Nonce, coinbase32);

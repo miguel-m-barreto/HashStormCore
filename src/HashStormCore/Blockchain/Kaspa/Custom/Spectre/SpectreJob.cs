@@ -36,7 +36,7 @@ public class SpectreJob : KaspaJob
     protected override Share ProcessShareInternal(StratumConnection worker, string nonce)
     {
         var context = worker.ContextAs<KaspaWorkerContext>();
-        BlockTemplate.Header.Nonce = Convert.ToUInt64(nonce, 16);
+        BlockTemplate.Header.Nonce = ParseNonceHex(nonce);
 
         Span<byte> coinbaseRaw = stackalloc byte[SpectreConstants.CoinbaseSize];
         SerializeCoinbase(prePowHashBytes, BlockTemplate.Header.Timestamp, BlockTemplate.Header.Nonce, coinbaseRaw);

@@ -28,7 +28,7 @@ namespace HashStormCore.Blockchain.Kaspa.Custom.KaspaHeavy
             var context = worker.ContextAs<KaspaWorkerContext>();
 
             // 1) Set nonce in header
-            BlockTemplate.Header.Nonce = Convert.ToUInt64(nonceHex, 16);
+            BlockTemplate.Header.Nonce = ParseNonceHex(nonceHex);
 
             // 2) Serialize the raw HEADER (without intermediate hash!)
             byte[] headerRaw = SerializeHeaderRaw(BlockTemplate.Header, includePowFields: true);

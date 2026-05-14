@@ -65,7 +65,7 @@ public class WagLaylaJob : KaspaJob
     {
         var context = worker.ContextAs<KaspaWorkerContext>();
 
-        BlockTemplate.Header.Nonce = Convert.ToUInt64(nonce, 16);
+        BlockTemplate.Header.Nonce = ParseNonceHex(nonce);
 
         Span<byte> coinbaseBytes = stackalloc byte[32];
         SerializeCoinbase(prePowHashBytes, BlockTemplate.Header.Timestamp, BlockTemplate.Header.Nonce, coinbaseBytes);
