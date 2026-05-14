@@ -269,6 +269,8 @@ public class ShareReceiver : BackgroundService
 
     private bool TryGetPoolContext(RelayShareMessage msg, out PoolContext poolContext)
     {
+        poolContext = null;
+
         if(string.IsNullOrEmpty(msg.Topic) || !pools.TryGetValue(msg.Topic, out poolContext))
         {
             logger.Warn(() => $"Received share for pool '{msg.Topic}' which is not known locally. Ignoring ...");
