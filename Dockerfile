@@ -13,4 +13,8 @@ RUN apt-get update && \
     apt-get clean
 EXPOSE  4000-4090
 COPY --from=BUILDER /app/build ./
+RUN mkdir -p /app/logs /app/data/event-outbox && \
+    touch /app/recovered-shares.txt && \
+    chown -R $APP_UID:$APP_UID /app/logs /app/data /app/recovered-shares.txt
+USER $APP_UID
 CMD ["./HashStormCore", "-c", "config.json" ]

@@ -47,9 +47,7 @@ jobs:
             build-essential \
             cmake \
             pkg-config \
-            libboost-dev \
-            libboost-system-dev \
-            libboost-date-time-dev \
+            libboost-all-dev \
             libsodium-dev
 
       - name: Restore
