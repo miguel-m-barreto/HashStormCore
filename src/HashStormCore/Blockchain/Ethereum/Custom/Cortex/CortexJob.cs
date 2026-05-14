@@ -56,6 +56,25 @@ public class CortexJob : EthereumJob
         return solutionUints;
     }
 
+    private static string ValidateSolution(string solution)
+    {
+        const int solutionHexLength = CortexConstants.CuckarooSolutionSize * 4 * 2;
+
+        if(string.IsNullOrEmpty(solution))
+            throw new StratumException(StratumError.MinusOne, "bad solution");
+
+        if(solution.StartsWith("0x", StringComparison.Ordinal))
+            solution = solution[2..];
+
+        if(solution.Length != solutionHexLength)
+            throw new StratumException(StratumError.MinusOne, "bad solution");
+
+        if(!HexUtils.IsFixedLengthHex(solution, solutionHexLength))
+            throw new StratumException(StratumError.MinusOne, "bad solution");
+
+        return solution;
+    }
+
     protected virtual byte[] SerializeCoinbase(uint[] solution)
     {
         // allocate a byte array of size 42 * 4
@@ -78,6 +97,9 @@ public class CortexJob : EthereumJob
     public override async Task<SubmitResult> ProcessShareAsync(StratumConnection worker,
         string workerName, string fullNonceHex, string solution, CancellationToken ct)
     {
+        var fullNonce = ParseFullNonce(fullNonceHex);
+        solution = ValidateSolution(solution);
+
         // dupe check
         lock(workerNoncesLock)
         {
@@ -85,9 +107,6 @@ public class CortexJob : EthereumJob
         }
 
         var context = worker.ContextAs<EthereumWorkerContext>();
-
-        if(!ulong.TryParse(fullNonceHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var fullNonce))
-            throw new StratumException(StratumError.MinusOne, "bad nonce " + fullNonceHex);
 
         var solutionBytes = SerializeSolution(solution);
 

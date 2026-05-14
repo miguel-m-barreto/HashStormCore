@@ -3,6 +3,7 @@ using System.Numerics;
 using HashStormCore.Crypto.Hashing.Ethash;
 using HashStormCore.Extensions;
 using HashStormCore.Stratum;
+using HashStormCore.Util;
 using NBitcoin;
 using NLog;
 
@@ -54,9 +55,23 @@ public class EthereumJob
         }
     }
 
+    protected static ulong ParseFullNonce(string fullNonceHex)
+    {
+        if(string.IsNullOrEmpty(fullNonceHex) || fullNonceHex.Length != 16)
+            throw new StratumException(StratumError.MinusOne, "bad nonce");
+
+        if(!HexUtils.IsFixedLengthHex(fullNonceHex, 16) ||
+           !ulong.TryParse(fullNonceHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var fullNonce))
+            throw new StratumException(StratumError.MinusOne, "bad nonce");
+
+        return fullNonce;
+    }
+
     public virtual async Task<SubmitResult> ProcessShareAsync(StratumConnection worker,
         string workerName, string fullNonceHex, string solution, CancellationToken ct)
     {
+        var fullNonce = ParseFullNonce(fullNonceHex);
+
         // dupe check
         lock(workerNoncesLock)
         {
@@ -64,9 +79,6 @@ public class EthereumJob
         }
 
         var context = worker.ContextAs<EthereumWorkerContext>();
-
-        if(!ulong.TryParse(fullNonceHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var fullNonce))
-            throw new StratumException(StratumError.MinusOne, "bad nonce " + fullNonceHex);
 
         // get dag/light cache for block
         var cache = await ethash.GetCacheAsync(logger, BlockTemplate.Height, ct);

@@ -35,28 +35,27 @@ public class ProgpowWorkerJob
     public (Share Share, string BlockHex) ProcessShare(ILogger logger, StratumConnection worker, string nonce, string headerHash, string mixHash)
     {
         Contract.RequiresNonNull(worker);
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
 
         var context = worker.ContextAs<ProgpowWorkerContext>();
 
         // Validate hex sizes (strict lengths to avoid garbage)
         if(mixHash is null || mixHash.Length != 64)
-            throw new StratumException(StratumError.Other, $"incorrect size of mixHash: {mixHash}");
+            throw new StratumException(StratumError.Other, "incorrect size of mixHash");
 
         if(!HexUtils.IsFixedLengthHex(mixHash, 64))
-            throw new StratumException(StratumError.Other, $"invalid mixHash: {mixHash}");
+            throw new StratumException(StratumError.Other, "invalid mixHash");
 
         if(headerHash is null || headerHash.Length != 64)
-            throw new StratumException(StratumError.Other, $"incorrect size of headerHash: {headerHash}");
+            throw new StratumException(StratumError.Other, "incorrect size of headerHash");
 
         if(!HexUtils.IsFixedLengthHex(headerHash, 64))
-            throw new StratumException(StratumError.Other, $"invalid headerHash: {headerHash}");
+            throw new StratumException(StratumError.Other, "invalid headerHash");
 
         if(nonce is null || nonce.Length != 16)
-            throw new StratumException(StratumError.Other, $"incorrect size of nonce: {nonce}");
+            throw new StratumException(StratumError.Other, "incorrect size of nonce");
 
         if(!HexUtils.IsFixedLengthHex(nonce, 16) || !ulong.TryParse(nonce, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var nonceLong))
-            throw new StratumException(StratumError.Other, $"invalid nonce: {nonce}");
+            throw new StratumException(StratumError.Other, "invalid nonce");
 
         // Do NOT enforce nonce prefix == ExtraNonce1[0..4]: not all KawPoW miners follow that.
         // Just ensure dedupe is case-insensitive.
