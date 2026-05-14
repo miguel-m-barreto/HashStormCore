@@ -188,8 +188,17 @@ public class BeamPool : PoolBase
 
         try
         {
-            if(request?.Id == null)
-                throw new StratumException(StratumError.MinusOne, "missing id");
+            if(string.IsNullOrEmpty(request?.Id))
+            {
+                var submitJobNotFoundResponse = new BeamSubmitResponse {
+                    Id = request?.Id,
+                    Code = BeamConstants.BeamRpcJobNotFound,
+                    Description = "job not found"
+                };
+
+                await connection.NotifyAsync(submitJobNotFoundResponse);
+                throw new StratumException(StratumError.Other, "job not found");
+            }
 
             // check age of submission (aged submissions are usually caused by high server load)
             var requestAge = clock.Now - tsRequest.Timestamp.UtcDateTime;
@@ -284,12 +293,12 @@ public class BeamPool : PoolBase
                     var submitShareBadNonceResponse = new BeamSubmitResponse {
                         Id = request?.Id,
                         Code = BeamConstants.BeamRpcShareBadNonce,
-                        Description = $"incorrect size of nonce ({request?.Nonce.Length}), expected: {BeamConstants.NonceSize}"
+                        Description = $"incorrect size of nonce, expected: {BeamConstants.NonceSize}"
                     };
 
                     // respond
                     await connection.NotifyAsync(submitShareBadNonceResponse);
-                    throw new StratumException(StratumError.Other, $"incorrect size of nonce ({request?.Nonce.Length}), expected: {BeamConstants.NonceSize}");
+                    throw new StratumException(StratumError.Other, $"incorrect size of nonce, expected: {BeamConstants.NonceSize}");
                 }
                 
                 else if (stratumError == BeamConstants.BeamRpcShareBadSolution)
@@ -298,12 +307,12 @@ public class BeamPool : PoolBase
                     var submitShareBadSolutionResponse = new BeamSubmitResponse {
                         Id = request?.Id,
                         Code = BeamConstants.BeamRpcShareBadSolution,
-                        Description = $"incorrect size of solution ({request?.Output.Length}), expected: {BeamConstants.SolutionSize}"
+                        Description = $"incorrect size of solution, expected: {BeamConstants.SolutionSize}"
                     };
 
                     // respond
                     await connection.NotifyAsync(submitShareBadSolutionResponse);
-                    throw new StratumException(StratumError.Other, $"incorrect size of solution ({request?.Output.Length}), expected: {BeamConstants.SolutionSize}");
+                    throw new StratumException(StratumError.Other, $"incorrect size of solution, expected: {BeamConstants.SolutionSize}");
                 }
                 
                 else if (stratumError == BeamConstants.BeamRpcDuplicateShare)

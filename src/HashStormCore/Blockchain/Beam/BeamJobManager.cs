@@ -553,13 +553,13 @@ public class BeamJobManager : JobManagerBase<BeamJob>
         string JobId, string nonce, string solution, CancellationToken ct)
     {
         Contract.RequiresNonNull(worker);
-        Contract.RequiresNonNull(JobId);
-        Contract.RequiresNonNull(nonce);
-        Contract.RequiresNonNull(solution);
 
         var context = worker.ContextAs<BeamWorkerContext>();
         
         BeamJob job;
+
+        if(string.IsNullOrEmpty(JobId))
+            return (new Share {}, BeamConstants.BeamRpcJobNotFound);
 
         lock(context)
         {
