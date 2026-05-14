@@ -274,19 +274,13 @@ public class ProgpowJobManager : BitcoinJobManagerBase<ProgpowJob>
         CancellationToken ct)
     {
         Contract.RequiresNonNull(worker);
-        Contract.RequiresNonNull(submission);
-
-        if(submission is not object[] submitParams)
-            throw new StratumException(StratumError.Other, "invalid params");
-
-        if(submitParams.Length < 5)
-            throw new StratumException(StratumError.Other, "invalid params");
+        var submitParams = GetSubmitParamsOrThrow(submission, 5);
 
         var context = worker.ContextAs<ProgpowWorkerContext>();
 
         // extract params
-        var workerValue = (submitParams[0] as string)?.Trim();
-        var jobId = submitParams[1] as string;
+        var workerValue = ReadSubmitString(submitParams, 0).Trim();
+        var jobId = ReadSubmitString(submitParams, 1);
         var nonce = GetSubmitHexParam(submitParams, 2, "nonce", 16);
         var headerHash = GetSubmitHexParam(submitParams, 3, "headerHash", 64);
         var mixHash = GetSubmitHexParam(submitParams, 4, "mixHash", 64);
@@ -347,6 +341,22 @@ public class ProgpowJobManager : BitcoinJobManagerBase<ProgpowJob>
         }
 
         return share;
+    }
+
+    private static object[] GetSubmitParamsOrThrow(object submission, int minLength)
+    {
+        if(submission is not object[] submitParams || submitParams.Length < minLength)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return submitParams;
+    }
+
+    private static string ReadSubmitString(object[] submitParams, int index)
+    {
+        if(submitParams[index] is not string value)
+            throw new StratumException(StratumError.Other, "invalid params");
+
+        return value;
     }
 
     #endregion // API-Surface

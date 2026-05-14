@@ -513,7 +513,9 @@ public class AlephiumJobManager : JobManagerBase<AlephiumJob>
     public async ValueTask<Share> SubmitShareAsync(StratumConnection worker, AlephiumWorkerSubmitParams submitParams, CancellationToken ct)
     {
         Contract.RequiresNonNull(worker);
-        Contract.RequiresNonNull(submitParams);
+
+        if(submitParams == null)
+            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
 
         var context = worker.ContextAs<AlephiumWorkerContext>();
         

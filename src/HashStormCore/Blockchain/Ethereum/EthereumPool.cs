@@ -220,7 +220,8 @@ public class EthereumPool : PoolBase
             // check request
             var submitRequest = request.ParamsAs<string[]>();
 
-            if(submitRequest.Length != 3 ||
+            if(submitRequest == null ||
+               submitRequest.Length != 3 ||
                submitRequest.Any(string.IsNullOrEmpty))
                 throw new StratumException(StratumError.MinusOne, "malformed PoW result");
 
