@@ -218,7 +218,7 @@ public class EthereumPool : PoolBase
                 throw new StratumException(StratumError.NotSubscribed, "not subscribed");
 
             // check request
-            var submitRequest = request.ParamsAs<string[]>();
+            var submitRequest = ParamsAsOrThrow<string[]>(request, StratumError.MinusOne, "malformed PoW result");
 
             if(submitRequest == null ||
                submitRequest.Length != 3 ||

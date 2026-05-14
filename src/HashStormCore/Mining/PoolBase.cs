@@ -78,6 +78,35 @@ public abstract class PoolBase : StratumServer,
     protected readonly CompositeDisposable disposables = new();
     protected BlockchainStats blockchainStats;
     protected static readonly TimeSpan maxShareAge = TimeSpan.FromSeconds(6);
+
+    protected static T ParamsAsOrThrow<T>(JsonRpcRequest request, StratumError code, string message) where T : class
+    {
+        if(request == null)
+            throw new StratumException(code, message);
+
+        try
+        {
+            var result = request.ParamsAs<T>();
+
+            if(result == null)
+                throw new StratumException(code, message);
+
+            return result;
+        }
+        catch(JsonException)
+        {
+            throw new StratumException(code, message);
+        }
+        catch(InvalidCastException)
+        {
+            throw new StratumException(code, message);
+        }
+        catch(ArgumentException)
+        {
+            throw new StratumException(code, message);
+        }
+    }
+
     protected static readonly TimeSpan loginFailureBanTimeout = TimeSpan.FromSeconds(10);
     protected static readonly Regex regexStaticDiff = new(@";?d=(\d*(\.\d+)?)", RegexOptions.Compiled);
     protected const string PasswordControlVarsSeparator = ";";

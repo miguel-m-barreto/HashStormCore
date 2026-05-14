@@ -225,7 +225,7 @@ public class ZanoPool : PoolBase
                 return;
             }
 
-            var requestParams = request.ParamsAs<string[]>();
+            var requestParams = ParamsAsOrThrow<string[]>(request, StratumError.MinusOne, "invalid request");
 
             if(requestParams == null || requestParams.Length < 5 || requestParams.Any(string.IsNullOrEmpty))
                 throw new StratumException(StratumError.MinusOne, "invalid request");
@@ -594,7 +594,7 @@ public class ZanoPool : PoolBase
                 return;
             }
 
-            var requestParams = request.ParamsAs<string[]>();
+            var requestParams = ParamsAsOrThrow<string[]>(request, StratumError.MinusOne, "invalid request");
 
             if(requestParams == null || requestParams.Length < 3 || requestParams.Any(string.IsNullOrEmpty))
                 throw new StratumException(StratumError.MinusOne, "invalid request");

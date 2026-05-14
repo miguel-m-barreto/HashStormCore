@@ -229,7 +229,7 @@ public class WarthogPool : PoolBase
             else if(!context.IsSubscribed)
                 throw new StratumException(StratumError.NotSubscribed, "not subscribed");
 
-            var requestParams = request.ParamsAs<string[]>();
+            var requestParams = ParamsAsOrThrow<string[]>(request, StratumError.Other, "invalid params");
 
             // submit
             var share = await manager.SubmitShareAsync(connection, requestParams, ct);
