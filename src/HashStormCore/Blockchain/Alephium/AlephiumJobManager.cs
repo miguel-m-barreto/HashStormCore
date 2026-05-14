@@ -308,79 +308,74 @@ public class AlephiumJobManager : JobManagerBase<AlephiumJob>
             .RefCount();
     }
 
-    private async Task<bool> UpdateJob(CancellationToken ct, string via = null, AlephiumBlockTemplate[] blockTemplates = null)
+    private Task<bool> UpdateJob(CancellationToken ct, string via = null, AlephiumBlockTemplate[] blockTemplates = null)
     {
-        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if(ct.IsCancellationRequested)
+            return Task.FromResult(false);
 
-        return await Task.Run(() =>
+        try
         {
-            using(cts)
+            if(blockTemplates == null)
+                return Task.FromResult(false);
+
+            Random randomJob = new Random();
+            var blockTemplate = blockTemplates[randomJob.Next(blockTemplates.Length)];
+
+            //var chainInfo = await rpc.GetBlockflowChainInfoAsync(blockTemplate.FromGroup, blockTemplate.ToGroup, ct);
+
+            var job = currentJob;
+
+            var isNew = job == null ||
+                !string.IsNullOrEmpty(blockTemplate.JobId) &&
+                    (job.BlockTemplate?.JobId != blockTemplate.JobId || job.BlockTemplate?.Height < blockTemplate.Height);
+
+            if(isNew)
+                messageBus.NotifyChainHeight(poolConfig.Id, blockTemplate.Height, poolConfig.Template);
+
+            if(isNew)
             {
-                try
+                job = new AlephiumJob();
+
+                job.Init(blockTemplate);
+
+                if(via != null)
+                    logger.Info(() => $"Detected new block {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}] [{via}]");
+                else
+                    logger.Info(() => $"Detected new block {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}]");
+
+                // update stats
+                if ((job.BlockTemplate.Height - 1) > BlockchainStats.BlockHeight)
                 {
-                    if(blockTemplates == null)
-                        return false;
-
-                    Random randomJob = new Random();
-                    var blockTemplate = blockTemplates[randomJob.Next(blockTemplates.Length)];
-
-                    //var chainInfo = await rpc.GetBlockflowChainInfoAsync(blockTemplate.FromGroup, blockTemplate.ToGroup, ct);
-
-                    var job = currentJob;
-
-                    var isNew = job == null ||
-                        !string.IsNullOrEmpty(blockTemplate.JobId) &&
-                            (job.BlockTemplate?.JobId != blockTemplate.JobId || job.BlockTemplate?.Height < blockTemplate.Height);
-
-                    if(isNew)
-                        messageBus.NotifyChainHeight(poolConfig.Id, blockTemplate.Height, poolConfig.Template);
-
-                    if(isNew)
-                    {
-                        job = new AlephiumJob();
-
-                        job.Init(blockTemplate);
-
-                        if(via != null)
-                            logger.Info(() => $"Detected new block {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}] [{via}]");
-                        else
-                            logger.Info(() => $"Detected new block {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}]");
-
-                        // update stats
-                        if ((job.BlockTemplate.Height - 1) > BlockchainStats.BlockHeight)
-                        {
-                            // update stats
-                            BlockchainStats.LastNetworkBlockTime = clock.Now;
-                            BlockchainStats.BlockHeight = job.BlockTemplate.Height - 1;
-                        }
-
-                        currentJob = job;
-                    }
-
-                    else
-                    {
-                        if(via != null)
-                            logger.Debug(() => $"Template update {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}] [{via}]");
-                        else
-                            logger.Debug(() => $"Template update {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}]");
-                    }
-
-                    return isNew;
+                    // update stats
+                    BlockchainStats.LastNetworkBlockTime = clock.Now;
+                    BlockchainStats.BlockHeight = job.BlockTemplate.Height - 1;
                 }
 
-                catch(OperationCanceledException)
-                {
-                    // ignored
-                }
-
-                catch(Exception ex)
-                {
-                    logger.Error(() => $"{ex.GetType().Name} '{ex.Message}' while updating new job");
-                }
-
-                return false;
+                currentJob = job;
             }
-        }, cts.Token);
+
+            else
+            {
+                if(via != null)
+                    logger.Debug(() => $"Template update {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}] [{via}]");
+                else
+                    logger.Debug(() => $"Template update {job.BlockTemplate.Height} on chain[{job.BlockTemplate.ChainIndex}]");
+            }
+
+            return Task.FromResult(isNew);
+        }
+
+        catch(OperationCanceledException)
+        {
+            // ignored
+        }
+
+        catch(Exception ex)
+        {
+            logger.Error(() => $"{ex.GetType().Name} '{ex.Message}' while updating new job");
+        }
+
+        return Task.FromResult(false);
     }
     
     private async Task UpdateNetworkStatsAsync(CancellationToken ct)
