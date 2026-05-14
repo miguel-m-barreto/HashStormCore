@@ -230,7 +230,7 @@ public class ConcealPool : PoolBase
             }
 
             // check request
-            var submitRequest = request.ParamsAs<ConcealSubmitShareRequest>();
+            var submitRequest = ParamsAsOrThrow<ConcealSubmitShareRequest>(request, StratumError.MinusOne, "invalid request");
 
             // validate worker
             if(connection.ConnectionId != submitRequest?.WorkerId)

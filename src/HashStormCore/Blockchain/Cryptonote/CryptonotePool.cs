@@ -248,7 +248,7 @@ public class CryptonotePool : PoolBase
             }
 
             // check request
-            var submitRequest = request.ParamsAs<CryptonoteSubmitShareRequest>();
+            var submitRequest = ParamsAsOrThrow<CryptonoteSubmitShareRequest>(request, StratumError.MinusOne, "invalid request");
 
             // validate worker
             if (connection.ConnectionId != submitRequest?.WorkerId)

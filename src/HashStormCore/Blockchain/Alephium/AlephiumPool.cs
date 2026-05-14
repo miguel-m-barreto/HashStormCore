@@ -265,7 +265,7 @@ public class AlephiumPool : PoolBase
             else if(!context.IsSubscribed)
                 throw new AlephiumStratumException(AlephiumStratumError.InvalidWorker, "not subscribed");
 
-            var requestParams = request.ParamsAs<AlephiumWorkerSubmitParams>();
+            var requestParams = ParamsAsAlephiumSubmitOrThrow(request);
 
             // submit
             var share = await manager.SubmitShareAsync(connection, requestParams, ct);
@@ -315,6 +315,34 @@ public class AlephiumPool : PoolBase
             ConsiderBan(connection, context, poolConfig.Banning);
 
             throw;
+        }
+    }
+
+    private static AlephiumWorkerSubmitParams ParamsAsAlephiumSubmitOrThrow(JsonRpcRequest request)
+    {
+        if(request == null)
+            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
+
+        try
+        {
+            var result = request.ParamsAs<AlephiumWorkerSubmitParams>();
+
+            if(result == null)
+                throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
+
+            return result;
+        }
+        catch(JsonException)
+        {
+            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
+        }
+        catch(InvalidCastException)
+        {
+            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
+        }
+        catch(ArgumentException)
+        {
+            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
         }
     }
 

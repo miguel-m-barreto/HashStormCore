@@ -185,11 +185,12 @@ public class BeamPool : PoolBase
     protected virtual async Task OnSubmitAsync(StratumConnection connection, Timestamped<JsonRpcRequest> tsRequest, CancellationToken ct)
     {
         // Beam stratum API: https://github.com/BeamMW/beam/wiki/Beam-mining-protocol-API-(Stratum)
-        var request = JsonConvert.DeserializeObject<BeamSubmitRequest>(JsonConvert.SerializeObject(tsRequest.Value));
         var context = connection.ContextAs<BeamWorkerContext>();
 
         try
         {
+            var request = await DeserializeSubmitRequestOrRejectAsync(connection, tsRequest.Value);
+
             if(string.IsNullOrEmpty(request?.Id))
             {
                 var submitJobNotFoundResponse = new BeamSubmitResponse {
@@ -390,6 +391,46 @@ public class BeamPool : PoolBase
 
             throw;
         }
+    }
+
+    private async Task<BeamSubmitRequest> DeserializeSubmitRequestOrRejectAsync(StratumConnection connection, JsonRpcRequest request)
+    {
+        if(request == null)
+            return await RejectMalformedSubmitRequestAsync(connection, null);
+
+        try
+        {
+            var submitRequest = JsonConvert.DeserializeObject<BeamSubmitRequest>(JsonConvert.SerializeObject(request));
+
+            if(submitRequest == null)
+                return await RejectMalformedSubmitRequestAsync(connection, request.Id?.ToString());
+
+            return submitRequest;
+        }
+        catch(JsonException)
+        {
+            return await RejectMalformedSubmitRequestAsync(connection, request.Id?.ToString());
+        }
+        catch(InvalidCastException)
+        {
+            return await RejectMalformedSubmitRequestAsync(connection, request.Id?.ToString());
+        }
+        catch(ArgumentException)
+        {
+            return await RejectMalformedSubmitRequestAsync(connection, request.Id?.ToString());
+        }
+    }
+
+    private static async Task<BeamSubmitRequest> RejectMalformedSubmitRequestAsync(StratumConnection connection, string requestId)
+    {
+        var submitJobNotFoundResponse = new BeamSubmitResponse {
+            Id = requestId,
+            Code = BeamConstants.BeamRpcJobNotFound,
+            Description = JobNotFoundMessage
+        };
+
+        await connection.NotifyAsync(submitJobNotFoundResponse);
+        throw new StratumException(StratumError.Other, JobNotFoundMessage);
     }
 
     protected async Task OnNewJobAsync(object[] jobParams)
