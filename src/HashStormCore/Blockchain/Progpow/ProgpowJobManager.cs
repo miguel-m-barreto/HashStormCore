@@ -16,6 +16,7 @@ using HashStormCore.Messaging;
 using HashStormCore.Rpc;
 using HashStormCore.Stratum;
 using HashStormCore.Time;
+using HashStormCore.Util;
 using Newtonsoft.Json;
 using NLog;
 
@@ -253,6 +254,22 @@ public class ProgpowJobManager : BitcoinJobManagerBase<ProgpowJob>
             job.PrepareWorkerJob(workerJob, out headerHash);
     }
 
+    private static string GetSubmitHexParam(object[] submitParams, int index, string name, int hexLength)
+    {
+        if(submitParams.Length <= index || submitParams[index] is not string value)
+            throw new StratumException(StratumError.Other, $"missing or invalid {name}");
+
+        if(value.Length != hexLength + 2 || !value.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            throw new StratumException(StratumError.Other, $"incorrect size of {name}");
+
+        var hex = value.Substring(2);
+
+        if(!HexUtils.IsFixedLengthHex(hex, hexLength))
+            throw new StratumException(StratumError.Other, $"invalid {name}");
+
+        return hex;
+    }
+
     public async ValueTask<Share> SubmitShareAsync(StratumConnection worker, object submission,
         CancellationToken ct)
     {
@@ -262,14 +279,17 @@ public class ProgpowJobManager : BitcoinJobManagerBase<ProgpowJob>
         if(submission is not object[] submitParams)
             throw new StratumException(StratumError.Other, "invalid params");
 
+        if(submitParams.Length < 5)
+            throw new StratumException(StratumError.Other, "invalid params");
+
         var context = worker.ContextAs<ProgpowWorkerContext>();
 
         // extract params
         var workerValue = (submitParams[0] as string)?.Trim();
         var jobId = submitParams[1] as string;
-        var nonce = (submitParams[2] as string)?.Substring(2);
-        var headerHash = (submitParams[3] as string)?.Substring(2);
-        var mixHash = (submitParams[4] as string)?.Substring(2);
+        var nonce = GetSubmitHexParam(submitParams, 2, "nonce", 16);
+        var headerHash = GetSubmitHexParam(submitParams, 3, "headerHash", 64);
+        var mixHash = GetSubmitHexParam(submitParams, 4, "mixHash", 64);
 
         if(string.IsNullOrEmpty(workerValue))
             throw new StratumException(StratumError.Other, "missing or invalid workername");

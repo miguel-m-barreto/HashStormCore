@@ -43,6 +43,15 @@ public class ProgpowWorkerJob
         if(mixHash is null || mixHash.Length != 64)
             throw new StratumException(StratumError.Other, $"incorrect size of mixHash: {mixHash}");
 
+        if(!HexUtils.IsFixedLengthHex(mixHash, 64))
+            throw new StratumException(StratumError.Other, $"invalid mixHash: {mixHash}");
+
+        if(headerHash is null || headerHash.Length != 64)
+            throw new StratumException(StratumError.Other, $"incorrect size of headerHash: {headerHash}");
+
+        if(!HexUtils.IsFixedLengthHex(headerHash, 64))
+            throw new StratumException(StratumError.Other, $"invalid headerHash: {headerHash}");
+
         if(nonce is null || nonce.Length != 16)
             throw new StratumException(StratumError.Other, $"incorrect size of nonce: {nonce}");
 
