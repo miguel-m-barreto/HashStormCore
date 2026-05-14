@@ -244,13 +244,14 @@ public class XelisJob
     public virtual Share ProcessShare(StratumConnection worker,
         string nonce)
     {
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
-
         var context = worker.ContextAs<XelisWorkerContext>();
 
-        // validate nonce
-        if(nonce.Length != XelisConstants.NonceLength)
+        // validate nonce before duplicate registration
+        if(string.IsNullOrEmpty(nonce) || nonce.Length != XelisConstants.NonceLength)
             throw new StratumException(StratumError.Other, "incorrect size of nonce");
+
+        if(!HexUtils.IsFixedLengthHex(nonce, XelisConstants.NonceLength))
+            throw new StratumException(StratumError.Other, "invalid nonce");
 
         // dupe check
         if(!RegisterSubmit(context.ExtraNonce1, nonce))

@@ -167,9 +167,15 @@ public class AlephiumJob
     public virtual Share ProcessShare(StratumConnection worker, string nonce)
     {
         Contract.RequiresNonNull(worker);
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
 
         var context = worker.ContextAs<AlephiumWorkerContext>();
+
+        // validate nonce before duplicate registration
+        if(string.IsNullOrEmpty(nonce) || nonce.Length != AlephiumConstants.NonceLength * 2)
+            throw new AlephiumStratumException(AlephiumStratumError.InvalidNonce, "incorrect size of nonce");
+
+        if(!HexUtils.IsFixedLengthHex(nonce, AlephiumConstants.NonceLength * 2))
+            throw new AlephiumStratumException(AlephiumStratumError.InvalidNonce, "invalid nonce");
         
         // dupe check
         if(!RegisterSubmit(nonce))
