@@ -27,6 +27,8 @@ namespace HashStormCore.Blockchain.Alephium;
 [CoinFamily(CoinFamily.Alephium)]
 public class AlephiumPool : PoolBase
 {
+    private const string InvalidParamsMessage = "invalid params";
+
     public AlephiumPool(IComponentContext ctx,
         JsonSerializerSettings serializerSettings,
         IConnectionFactory cf,
@@ -321,28 +323,28 @@ public class AlephiumPool : PoolBase
     private static AlephiumWorkerSubmitParams ParamsAsAlephiumSubmitOrThrow(JsonRpcRequest request)
     {
         if(request == null)
-            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
+            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, InvalidParamsMessage);
 
         try
         {
             var result = request.ParamsAs<AlephiumWorkerSubmitParams>();
 
             if(result == null)
-                throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
+                throw new AlephiumStratumException(AlephiumStratumError.MinusOne, InvalidParamsMessage);
 
             return result;
         }
         catch(JsonException)
         {
-            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
+            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, InvalidParamsMessage);
         }
         catch(InvalidCastException)
         {
-            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
+            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, InvalidParamsMessage);
         }
         catch(ArgumentException)
         {
-            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, "invalid params");
+            throw new AlephiumStratumException(AlephiumStratumError.MinusOne, InvalidParamsMessage);
         }
     }
 

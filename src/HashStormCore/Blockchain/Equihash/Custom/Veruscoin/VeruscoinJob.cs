@@ -451,7 +451,7 @@ public class VeruscoinJob : EquihashJob
         return nTimeInt;
     }
 
-    private string BuildAndValidateNonce(EquihashWorkerContext context, string extraNonce2)
+    private static string BuildAndValidateNonce(EquihashWorkerContext context, string extraNonce2)
     {
         var nonce = context.ExtraNonce1 + extraNonce2;
 

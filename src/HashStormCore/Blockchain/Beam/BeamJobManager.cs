@@ -432,7 +432,7 @@ public class BeamJobManager : JobManagerBase<BeamJob>
     private void NotifyBlockSubmissionFailed(Share share, string error, Exception ex = null)
     {
         if(ex != null)
-            logger.Warn(ex, $"Block {share.BlockHeight} submission failed with: {error}");
+            logger.Warn(ex, "Block {BlockHeight} submission failed with: {Error}", share.BlockHeight, error);
         else
             logger.Warn(() => $"Block {share.BlockHeight} submission failed with: {error}");
 
@@ -467,7 +467,7 @@ public class BeamJobManager : JobManagerBase<BeamJob>
 
         catch(JsonException ex)
         {
-            logger.Warn(ex, $"Unable to parse block submission response for block {share.BlockHeight}: {ex.Message}");
+            logger.Warn(ex, "Unable to parse block submission response for block {BlockHeight}: {Error}", share.BlockHeight, ex.Message);
         }
 
         return false;

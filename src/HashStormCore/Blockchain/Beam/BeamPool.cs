@@ -393,7 +393,7 @@ public class BeamPool : PoolBase
         }
     }
 
-    private async Task<BeamSubmitRequest> DeserializeSubmitRequestOrRejectAsync(StratumConnection connection, JsonRpcRequest request)
+    private static async Task<BeamSubmitRequest> DeserializeSubmitRequestOrRejectAsync(StratumConnection connection, JsonRpcRequest request)
     {
         if(request == null)
             return await RejectMalformedSubmitRequestAsync(connection, null);
