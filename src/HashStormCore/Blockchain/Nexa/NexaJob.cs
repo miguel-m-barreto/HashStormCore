@@ -162,12 +162,15 @@ public class NexaJob
 
     public (Share Share, object param) ProcessShare(StratumConnection worker, string nonce, string extraNonce1)
     {
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(extraNonce1));
+        if(string.IsNullOrEmpty(extraNonce1))
+            throw new StratumException(StratumError.Other, "invalid extranonce");
 
         // validate nonce. must be 8 bytes (16 hex chars without prefix)
-        if(nonce.Length != 16)
+        if(string.IsNullOrEmpty(nonce) || nonce.Length != 16)
             throw new StratumException(StratumError.Other, "incorrect size of nonce");
+
+        if(!HexUtils.IsFixedLengthHex(nonce, 16))
+            throw new StratumException(StratumError.Other, "invalid nonce");
 
         // dupe check
         if(!RegisterSubmit(this.MiningCandidate.HeaderCommitment, extraNonce1, nonce))

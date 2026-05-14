@@ -133,17 +133,21 @@ public class BeamJob
     public (Share Share, string BlockHex, short stratumError) ProcessShare(StratumConnection worker, string nonce, string solution)
     {
         Contract.RequiresNonNull(worker);
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(solution));
 
         var context = worker.ContextAs<BeamWorkerContext>();
 
         // validate nonce
-        if(nonce.Length != BeamConstants.NonceSize)
+        if(string.IsNullOrEmpty(nonce) || nonce.Length != BeamConstants.NonceSize)
+            return (new Share {}, null, BeamConstants.BeamRpcShareBadNonce);
+
+        if(!HexUtils.IsFixedLengthHex(nonce, BeamConstants.NonceSize))
             return (new Share {}, null, BeamConstants.BeamRpcShareBadNonce);
 
         // validate solution
-        if(solution.Length != BeamConstants.SolutionSize)
+        if(string.IsNullOrEmpty(solution) || solution.Length != BeamConstants.SolutionSize)
+            return (new Share {}, null, BeamConstants.BeamRpcShareBadSolution);
+
+        if(!HexUtils.IsFixedLengthHex(solution, BeamConstants.SolutionSize))
             return (new Share {}, null, BeamConstants.BeamRpcShareBadSolution);
 
         // dupe check

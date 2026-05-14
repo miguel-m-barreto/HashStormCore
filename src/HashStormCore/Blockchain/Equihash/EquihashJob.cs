@@ -557,14 +557,11 @@ public class EquihashJob
     public virtual (Share Share, string BlockHex) ProcessShare(StratumConnection worker, string extraNonce2, string nTime, string solution)
     {
         Contract.RequiresNonNull(worker);
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(extraNonce2));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nTime));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(solution));
 
         var context = worker.ContextAs<EquihashWorkerContext>();
 
         // validate nTime
-        if(nTime.Length != 8)
+        if(string.IsNullOrEmpty(nTime) || nTime.Length != 8)
             throw new StratumException(StratumError.Other, "incorrect size of ntime");
 
         if(!HexUtils.IsFixedLengthHex(nTime, 8))
@@ -579,12 +576,18 @@ public class EquihashJob
         var nonce = context.ExtraNonce1 + extraNonce2;
 
         // validate nonce
-        if(nonce.Length != 64)
+        if(string.IsNullOrEmpty(extraNonce2) || nonce.Length != 64)
             throw new StratumException(StratumError.Other, "incorrect size of extraNonce2");
 
+        if(!HexUtils.IsFixedLengthHex(nonce, 64))
+            throw new StratumException(StratumError.Other, "invalid extraNonce2");
+
         // validate solution
-        if(solution.Length != (networkParams.SolutionSize + networkParams.SolutionPreambleSize) * 2)
+        if(string.IsNullOrEmpty(solution) || solution.Length != (networkParams.SolutionSize + networkParams.SolutionPreambleSize) * 2)
             throw new StratumException(StratumError.Other, "incorrect size of solution");
+
+        if(!HexUtils.IsFixedLengthHex(solution, (networkParams.SolutionSize + networkParams.SolutionPreambleSize) * 2))
+            throw new StratumException(StratumError.Other, "invalid solution");
 
         // dupe check
         if(!RegisterSubmit(nonce, solution))

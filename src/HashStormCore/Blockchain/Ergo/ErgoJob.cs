@@ -5,6 +5,7 @@ using HashStormCore.Crypto;
 using HashStormCore.Crypto.Hashing.Algorithms;
 using HashStormCore.Extensions;
 using HashStormCore.Stratum;
+using HashStormCore.Util;
 using System.Numerics;
 using NBitcoin;
 
@@ -187,18 +188,18 @@ public class ErgoJob
     public virtual Share ProcessShare(StratumConnection worker, string extraNonce2, string nTime, string nonce)
     {
         Contract.RequiresNonNull(worker);
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(extraNonce2));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nTime));
-        Contract.Requires<ArgumentException>(!string.IsNullOrEmpty(nonce));
 
         var context = worker.ContextAs<ErgoWorkerContext>();
 
         // validate nonce
-        if(nonce.Length != context.ExtraNonce1.Length + extraNonceSize * 2)
+        if(string.IsNullOrEmpty(nonce) || nonce.Length != context.ExtraNonce1.Length + extraNonceSize * 2)
             throw new StratumException(StratumError.Other, "incorrect size of nonce");
 
         if(!nonce.StartsWith(context.ExtraNonce1))
-            throw new StratumException(StratumError.Other, $"incorrect extraNonce2 in nonce (expected {context.ExtraNonce1}, got {nonce.Substring(0, Math.Min(nonce.Length, context.ExtraNonce1.Length))})");
+            throw new StratumException(StratumError.Other, "incorrect extraNonce2 in nonce");
+
+        if(!HexUtils.IsFixedLengthHex(nonce, context.ExtraNonce1.Length + extraNonceSize * 2))
+            throw new StratumException(StratumError.Other, "invalid nonce");
 
         // currently unused
         if(nTime == "undefined")
