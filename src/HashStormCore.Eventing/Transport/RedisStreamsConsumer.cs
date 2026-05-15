@@ -30,6 +30,8 @@ public class RedisStreamsConsumer : IAsyncDisposable
         }
         catch(RedisServerException ex) when(ex.Message.Contains("BUSYGROUP", StringComparison.OrdinalIgnoreCase))
         {
+            // Redis returns BUSYGROUP when the consumer group already exists; EnsureGroupAsync is idempotent.
+            return;
         }
     }
 

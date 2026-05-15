@@ -41,30 +41,16 @@ public class ShareEventOutboxWriter : BackgroundService
                 try
                 {
                     var first = await queue.DequeueAsync(stoppingToken);
-                    Add(first);
+                    bytes = AddToBatch(batch, bytes, first);
                     LogHandoffPressureIfNeeded();
 
                     using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-                    timerCts.CancelAfter(TimeSpan.FromMilliseconds(queue.IsAboveSoftThreshold ? 1 : Math.Max(1, options.WriterFlushMs)));
-                    var drainMultiplier = queue.IsAboveCriticalThreshold ? 8 : queue.IsAboveSoftThreshold ? 4 : 1;
+                    timerCts.CancelAfter(GetBatchFillTimeout());
+                    var drainMultiplier = GetDrainMultiplier();
                     var maxEvents = Math.Max(1, options.WriterFlushEvents * drainMultiplier);
                     var maxBytes = Math.Max(4096, options.WriterFlushBytes * drainMultiplier);
 
-                    while(batch.Count < maxEvents && bytes < maxBytes)
-                    {
-                        try
-                        {
-                            Add(await queue.DequeueAsync(timerCts.Token));
-                        }
-                        catch(OperationCanceledException) when(!stoppingToken.IsCancellationRequested)
-                        {
-                            break;
-                        }
-                        catch(OperationCanceledException) when(stoppingToken.IsCancellationRequested)
-                        {
-                            break;
-                        }
-                    }
+                    await FillBatchUntilLimitsAsync(batch, bytes, maxEvents, maxBytes, timerCts.Token, stoppingToken);
 
                     flushToDisk = ShouldFlushToDisk();
                     await FlushBatchWithShutdownRecoveryAsync(batch, flushToDisk, stoppingToken);
@@ -77,12 +63,6 @@ public class ShareEventOutboxWriter : BackgroundService
                 catch(OperationCanceledException) when(stoppingToken.IsCancellationRequested)
                 {
                     break;
-                }
-
-                void Add(ShareEvent shareEvent)
-                {
-                    batch.Add(shareEvent);
-                    bytes += Math.Max(128, JsonConvert.SerializeObject(shareEvent).Length);
                 }
             }
         }
@@ -97,6 +77,47 @@ public class ShareEventOutboxWriter : BackgroundService
     {
         await base.StopAsync(cancellationToken);
         await DrainRemainingQueueDuringShutdownOnceAsync();
+    }
+
+    private async Task FillBatchUntilLimitsAsync(List<ShareEvent> batch, int bytes, int maxEvents, int maxBytes, CancellationToken fillToken, CancellationToken stoppingToken)
+    {
+        while(batch.Count < maxEvents && bytes < maxBytes)
+        {
+            try
+            {
+                bytes = AddToBatch(batch, bytes, await queue.DequeueAsync(fillToken));
+            }
+            catch(OperationCanceledException) when(!stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch(OperationCanceledException) when(stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
+
+    private int GetDrainMultiplier()
+    {
+        if(queue.IsAboveCriticalThreshold)
+            return 8;
+
+        if(queue.IsAboveSoftThreshold)
+            return 4;
+
+        return 1;
+    }
+
+    private TimeSpan GetBatchFillTimeout()
+    {
+        return TimeSpan.FromMilliseconds(queue.IsAboveSoftThreshold ? 1 : Math.Max(1, options.WriterFlushMs));
+    }
+
+    private static int AddToBatch(ICollection<ShareEvent> batch, int bytes, ShareEvent shareEvent)
+    {
+        batch.Add(shareEvent);
+        return bytes + Math.Max(128, JsonConvert.SerializeObject(shareEvent).Length);
     }
 
     private bool ShouldFlushToDisk()

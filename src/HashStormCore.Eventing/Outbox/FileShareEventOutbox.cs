@@ -38,7 +38,7 @@ public class FileShareEventOutbox : IShareEventOutbox, IAsyncDisposable
                 var recordLength = 4 + 2 + 4 + payload.Length + 4;
 
                 if(currentStream.Length > 0 && currentStream.Length + recordLength > options.SegmentMaxBytes)
-                    await RotateAsync(ct);
+                    await RotateAsync();
 
                 var headerBytes = new byte[10];
                 var header = headerBytes.AsSpan();
@@ -159,7 +159,7 @@ public class FileShareEventOutbox : IShareEventOutbox, IAsyncDisposable
         currentStream.Seek(0, SeekOrigin.End);
     }
 
-    private async Task RotateAsync(CancellationToken ct)
+    private async Task RotateAsync()
     {
         currentStream.Flush(true);
         await currentStream.DisposeAsync();

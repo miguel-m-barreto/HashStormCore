@@ -18,45 +18,15 @@ public static class ShareEventOutboxReader
         var readLimit = Math.Min(endOffset ?? stream.Length, stream.Length);
 
         var header = new byte[10];
+        var checksumBytes = new byte[4];
+        var segmentName = Path.GetFileName(path);
+
         while(stream.Position < readLimit)
         {
-            var offset = stream.Position;
-            if(!ReadExact(stream, header))
+            if(!TryReadRecord(stream, readLimit, segmentName, header, checksumBytes, out var record))
                 yield break;
 
-            var magic = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan()[..4]);
-            var version = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan()[4..6]);
-            var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan()[6..10]);
-
-            if(magic != FileShareEventOutbox.Magic || version != FileShareEventOutbox.Version || payloadLength <= 0)
-                yield break;
-
-            if(readLimit - stream.Position < payloadLength + 4)
-                yield break;
-
-            var payload = new byte[payloadLength];
-            if(stream.Read(payload, 0, payload.Length) != payload.Length)
-                yield break;
-
-            var checksumBytes = new byte[4];
-            if(!ReadExact(stream, checksumBytes))
-                yield break;
-
-            var checksum = BinaryPrimitives.ReadUInt32LittleEndian(checksumBytes);
-            if(checksum != FileShareEventOutbox.Checksum(payload))
-                yield break;
-
-            var shareEvent = JsonConvert.DeserializeObject<ShareEvent>(System.Text.Encoding.UTF8.GetString(payload));
-            if(shareEvent == null)
-                yield break;
-
-            yield return new ShareEventOutboxRecord
-            {
-                SegmentName = Path.GetFileName(path),
-                Offset = offset,
-                NextOffset = stream.Position,
-                Event = shareEvent
-            };
+            yield return record;
         }
     }
 
@@ -68,71 +38,67 @@ public static class ShareEventOutboxReader
         var validLength = stream.Position;
         var stoppedCleanly = true;
 
-        Span<byte> header = stackalloc byte[10];
+        var header = new byte[10];
+        var checksumBytes = new byte[4];
+        var segmentName = Path.GetFileName(path);
+
         while(stream.Position < stream.Length)
         {
-            var offset = stream.Position;
-            if(!ReadExact(stream, header))
-            {
-                stoppedCleanly = false;
-                break;
-            }
-
-            var magic = BinaryPrimitives.ReadUInt32LittleEndian(header[..4]);
-            var version = BinaryPrimitives.ReadUInt16LittleEndian(header[4..6]);
-            var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header[6..10]);
-
-            if(magic != FileShareEventOutbox.Magic || version != FileShareEventOutbox.Version || payloadLength <= 0)
-            {
-                stoppedCleanly = false;
-                break;
-            }
-
-            if(stream.Length - stream.Position < payloadLength + 4)
-            {
-                stoppedCleanly = false;
-                break;
-            }
-
-            var payload = new byte[payloadLength];
-            if(stream.Read(payload, 0, payload.Length) != payload.Length)
-            {
-                stoppedCleanly = false;
-                break;
-            }
-
-            var checksumBytes = new byte[4];
-            if(!ReadExact(stream, checksumBytes))
-            {
-                stoppedCleanly = false;
-                break;
-            }
-
-            var checksum = BinaryPrimitives.ReadUInt32LittleEndian(checksumBytes);
-            if(checksum != FileShareEventOutbox.Checksum(payload))
-            {
-                stoppedCleanly = false;
-                break;
-            }
-
-            var shareEvent = JsonConvert.DeserializeObject<ShareEvent>(System.Text.Encoding.UTF8.GetString(payload));
-            if(shareEvent == null)
+            if(!TryReadRecord(stream, stream.Length, segmentName, header, checksumBytes, out var record))
             {
                 stoppedCleanly = false;
                 break;
             }
 
             validLength = stream.Position;
-            records.Add(new ShareEventOutboxRecord
-            {
-                SegmentName = Path.GetFileName(path),
-                Offset = offset,
-                NextOffset = stream.Position,
-                Event = shareEvent
-            });
+            records.Add(record);
         }
 
         return new ShareEventOutboxReadResult(records, validLength, stoppedCleanly && validLength == stream.Length);
+    }
+
+    private static bool TryReadRecord(Stream stream, long readLimit, string segmentName, byte[] header, byte[] checksumBytes, out ShareEventOutboxRecord record)
+    {
+        record = null!;
+        var offset = stream.Position;
+
+        if(!ReadExact(stream, header))
+            return false;
+
+        var magic = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan()[..4]);
+        var version = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan()[4..6]);
+        var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan()[6..10]);
+
+        if(magic != FileShareEventOutbox.Magic || version != FileShareEventOutbox.Version || payloadLength <= 0)
+            return false;
+
+        if(readLimit - stream.Position < payloadLength + 4)
+            return false;
+
+        var payload = new byte[payloadLength];
+        if(stream.Read(payload, 0, payload.Length) != payload.Length)
+            return false;
+
+        if(!ReadExact(stream, checksumBytes))
+            return false;
+
+        var checksum = BinaryPrimitives.ReadUInt32LittleEndian(checksumBytes);
+        if(checksum != FileShareEventOutbox.Checksum(payload))
+            return false;
+
+        var shareEvent = JsonConvert.DeserializeObject<ShareEvent>(System.Text.Encoding.UTF8.GetString(payload));
+        if(shareEvent == null)
+            return false;
+
+        record = new ShareEventOutboxRecord
+        {
+            SegmentName = segmentName,
+            Offset = offset,
+            NextOffset = stream.Position,
+            Event = shareEvent
+        };
+
+        return true;
     }
 
     private static bool ReadExact(Stream stream, Span<byte> buffer)
