@@ -77,6 +77,35 @@ PGPASSWORD='the-application-password' bash scripts/db/apply-indexes.sh
 
 The first ApiProvider historical-read index migration is `010_index_api_provider_historical_reads.ntx.sql`. It is non-destructive, uses `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, and is applied through `apply-indexes.sh` or the full migration runner. The `share_events` ApiProvider indexes include `event_id` where useful for stable pagination.
 
+## Development Reset
+
+`scripts/db/dev-reset.sh` is destructive and intended only for local development databases. It performs a schema-level reset:
+
+```sql
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public AUTHORIZATION <HASHSTORM_DB_USER>;
+```
+
+The reset script refuses to run unless this explicit confirmation is present:
+
+```bash
+HASHSTORM_DEV_RESET=I_UNDERSTAND_THIS_DELETES_DATA bash scripts/db/dev-reset.sh
+```
+
+It refuses dangerous database names such as `postgres`, `template0`, `template1`, `production`, `prod`, `main`, and `default`. It also refuses remote-looking `PGHOST` or `PGHOSTADDR` values unless `HASHSTORM_DEV_RESET_ALLOW_REMOTE=YES_I_UNDERSTAND` is set. If `PGSERVICE` is set, the script also requires that override because the service file can hide the actual host. Do not use this for production.
+
+The reset does not apply schema automatically, does not reset Redis, does not reset filesystem outbox/WAL data, does not touch Docker, and does not recreate the database or role.
+
+After a development reset, run the normal setup sequence:
+
+```bash
+bash scripts/db/apply-schema.sh
+bash scripts/db/apply-migrations.sh
+bash scripts/db/apply-indexes.sh
+bash scripts/db/add-share-partition.sh <poolId>
+bash scripts/db/check-missing-share-partitions.sh <config.json>
+```
+
 ## Read-Only Checks
 
 Status:
