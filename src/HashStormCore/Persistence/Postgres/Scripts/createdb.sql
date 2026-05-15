@@ -1,4 +1,4 @@
-SET ROLE HashStormCore;
+-- Schema ownership is controlled by the connected database user.
 
 CREATE TABLE shares
 (
