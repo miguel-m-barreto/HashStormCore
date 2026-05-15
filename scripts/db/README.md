@@ -90,7 +90,37 @@ Share partition listing:
 psql -v ON_ERROR_STOP=1 -U hashstorm -d hashstorm -f scripts/db/list-share-partitions.sql
 ```
 
-The partition listing handles the current non-partitioned `shares` table gracefully. Share partition creation tooling is intentionally deferred to a later batch.
+The partition listing handles the current non-partitioned `shares` table gracefully.
+
+## Share Partitions
+
+`scripts/db/add-share-partition.sh` and `scripts/db/check-missing-share-partitions.sh` manage pool partitions for installs where `public.shares` is already partitioned by `LIST (poolid)`.
+
+These tools do not convert an existing non-partitioned `shares` table and do not migrate existing share data. Migrating an existing non-partitioned database is a separate future task.
+
+Safe new-pool workflow:
+
+1. Add the pool to config while it is disabled, or before starting Pool Core/DbWriter for that pool.
+2. Ensure the database and schema already exist.
+3. Add the partition:
+
+```bash
+PGPASSWORD='the-application-password' bash scripts/db/add-share-partition.sh btcz_solo
+```
+
+4. Check configured pools against database partitions:
+
+```bash
+PGPASSWORD='the-application-password' bash scripts/db/check-missing-share-partitions.sh configs/config.json
+```
+
+5. Start or enable DbWriter and Pool Core for the pool.
+
+Pool IDs must match `[A-Za-z0-9][A-Za-z0-9_.-]{0,62}`. The partition stores the exact pool ID value in `FOR VALUES IN (...)`. The generated table name is deterministic: `shares_p_<slug>_<hash8>`, where the slug is lowercased and sanitized, and `hash8` is derived from the exact pool ID. The tooling expects one pool value per shares partition.
+
+There is intentionally no default or catch-all `shares` partition. Missing pool partitions should fail writes clearly instead of silently routing shares into an ambiguous table.
+
+The add-partition script does not create partition-local indexes manually. PostgreSQL creates matching child indexes when a new partition is added to a partitioned table that already has partitioned parent indexes.
 
 ## Legacy Scripts
 
