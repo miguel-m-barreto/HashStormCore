@@ -66,7 +66,9 @@ Apply only index-category migrations through the operator entrypoint:
 PGPASSWORD='the-application-password' bash scripts/db/apply-indexes.sh
 ```
 
-`apply-indexes.sh` is a thin wrapper over `apply-migrations.sh` restricted to `category=index`. No ApiProvider historical endpoint index migrations are included yet; those are planned for the next DB batch.
+`apply-indexes.sh` is a thin wrapper over `apply-migrations.sh` restricted to `category=index`.
+
+The first ApiProvider historical-read index migration is `010_index_api_provider_historical_reads.ntx.sql`. It is non-destructive, uses `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, and is applied through `apply-indexes.sh` or the full migration runner. The `share_events` ApiProvider indexes include `event_id` where useful for stable pagination.
 
 ## Read-Only Checks
 

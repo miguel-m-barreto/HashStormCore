@@ -16,3 +16,5 @@ Non-transactional migrations are recorded only after successful SQL execution, s
 Migration files are immutable once applied. The runner stores a SHA-256 checksum in `public.hashstorm_schema_migrations` and fails if an already-applied migration changes.
 
 The runner holds a fixed HashStormCore PostgreSQL advisory lock for the whole migration run, so only one runner should apply or record migrations at a time. Transactional migrations are still wrapped in `BEGIN`/`COMMIT`; non-transactional migrations remain outside an explicit transaction.
+
+`010_index_api_provider_historical_reads.ntx.sql` adds the first non-destructive ApiProvider historical-read indexes. It intentionally avoids high-write `shares` indexes and redundant DESC-only variants where existing indexes already cover the planned read path. ApiProvider `share_events` indexes include `event_id` as a stable pagination tie-breaker.
