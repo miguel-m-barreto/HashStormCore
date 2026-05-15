@@ -93,3 +93,14 @@ ORDER BY partition_schema, partition_name;
 SELECT
     to_regclass('public.share_events') IS NOT NULL AS share_events_exists,
     to_regclass('public.event_pipeline_processed_events') IS NOT NULL AS event_pipeline_processed_events_exists;
+
+SELECT
+    to_regclass('public.hashstorm_schema_migrations') IS NOT NULL AS migration_ledger_exists;
+
+SELECT
+    'SELECT migration_id, migration_type, filename, checksum_sha256, applied_at, applied_by, execution_seconds
+     FROM public.hashstorm_schema_migrations
+     ORDER BY applied_at DESC, migration_id DESC
+     LIMIT 10;' AS last_applied_migrations_query
+WHERE to_regclass('public.hashstorm_schema_migrations') IS NOT NULL
+\gexec

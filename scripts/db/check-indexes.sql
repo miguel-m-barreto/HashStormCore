@@ -1,5 +1,7 @@
 \pset null '(null)'
 
+SELECT 'Current schema indexes only; future ApiProvider endpoint indexes are not part of this batch.' AS note;
+
 WITH expected_indexes(expected_index) AS (
     VALUES
         ('IDX_SHARES_POOL_MINER'),
