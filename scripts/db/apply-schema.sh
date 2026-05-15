@@ -98,5 +98,10 @@ psql_app -f "$EVENT_PIPELINE_SQL"
 
 echo
 echo "Schema application complete."
+echo "Fresh installs create public.shares as a LIST-partitioned parent with no default partition."
+echo "Before starting DbWriter or Pool Core writes, add one shares partition per configured pool:"
+echo "  HASHSTORM_DB_NAME=$DB_NAME HASHSTORM_DB_USER=$DB_USER PGPORT=$PGPORT bash scripts/db/add-share-partition.sh <poolId>"
+echo "Then check configured pools against shares partitions:"
+echo "  HASHSTORM_DB_NAME=$DB_NAME HASHSTORM_DB_USER=$DB_USER PGPORT=$PGPORT bash scripts/db/check-missing-share-partitions.sh <config.json>"
 echo "Read-only status check:"
 echo "  HASHSTORM_DB_NAME=$DB_NAME HASHSTORM_DB_USER=$DB_USER PGPORT=$PGPORT psql -v ON_ERROR_STOP=1 -U $DB_USER -d $DB_NAME -f scripts/db/status.sql"

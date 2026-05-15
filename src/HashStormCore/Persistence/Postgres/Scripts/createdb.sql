@@ -12,7 +12,7 @@ CREATE TABLE shares
 	ipaddress TEXT NOT NULL,
     source TEXT NULL,
 	created TIMESTAMPTZ NOT NULL
-);
+) PARTITION BY LIST (poolid);
 
 CREATE INDEX IDX_SHARES_POOL_MINER on shares(poolid, miner);
 CREATE INDEX IDX_SHARES_POOL_CREATED ON shares(poolid, created);

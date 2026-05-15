@@ -29,7 +29,14 @@ PGPASSWORD='the-application-password' bash scripts/db/apply-schema.sh
 - `src/HashStormCore/Persistence/Postgres/Scripts/createdb.sql`
 - `src/HashStormCore/Persistence/Postgres/Scripts/event_pipeline.sql`
 
-`createdb.sql` is currently DB-empty-only. `apply-schema.sh` refuses to run when core HashStormCore tables already exist unless `HASHSTORM_APPLY_SCHEMA_ALLOW_EXISTING=1` is set.
+`createdb.sql` is DB-empty-only. Fresh installs create `public.shares` as a `LIST (poolid)` partitioned parent with no default partition. `apply-schema.sh` refuses to run when core HashStormCore tables already exist unless `HASHSTORM_APPLY_SCHEMA_ALLOW_EXISTING=1` is set.
+
+After applying schema, create one shares partition for each configured pool before starting DbWriter or Pool Core writes:
+
+```bash
+PGPASSWORD='the-application-password' bash scripts/db/add-share-partition.sh btcz_solo
+PGPASSWORD='the-application-password' bash scripts/db/check-missing-share-partitions.sh configs/config.json
+```
 
 Apply schema migrations after the base schema:
 
@@ -94,7 +101,7 @@ The partition listing handles the current non-partitioned `shares` table gracefu
 
 ## Share Partitions
 
-`scripts/db/add-share-partition.sh` and `scripts/db/check-missing-share-partitions.sh` manage pool partitions for installs where `public.shares` is already partitioned by `LIST (poolid)`.
+`scripts/db/add-share-partition.sh` and `scripts/db/check-missing-share-partitions.sh` manage pool partitions for installs where `public.shares` is already partitioned by `LIST (poolid)`. Fresh installs created through `apply-schema.sh` use this shape.
 
 These tools do not convert an existing non-partitioned `shares` table and do not migrate existing share data. Migrating an existing non-partitioned database is a separate future task.
 

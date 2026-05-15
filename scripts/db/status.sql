@@ -73,6 +73,33 @@ SELECT
     ) AS partition_count;
 
 WITH shares_table AS (
+    SELECT c.oid, c.relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'shares'
+      AND c.relkind IN ('r', 'p')
+),
+shares_status AS (
+    SELECT
+        EXISTS (SELECT 1 FROM shares_table) AS shares_exists,
+        EXISTS (SELECT 1 FROM shares_table WHERE relkind = 'p') AS shares_is_partitioned,
+        (
+            SELECT count(*)
+            FROM shares_table parent
+            JOIN pg_inherits i ON i.inhparent = parent.oid
+            WHERE parent.relkind = 'p'
+        ) AS partition_count
+)
+SELECT CASE
+    WHEN NOT shares_exists THEN 'shares_missing'
+    WHEN NOT shares_is_partitioned THEN 'shares_not_partitioned'
+    WHEN partition_count = 0 THEN 'shares_partitioned_no_child_partitions'
+    ELSE 'shares_partitioned_with_child_partitions'
+END AS shares_partition_health
+FROM shares_status;
+
+WITH shares_table AS (
     SELECT c.oid
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
