@@ -8,13 +8,16 @@ namespace HashStormCore.ApiProvider.Controllers;
 [Route("historical")]
 public class HistoricalApiController : ControllerBase
 {
-    public HistoricalApiController(PostgresHistoricalReadService historicalReadService, ILogger<HistoricalApiController> logger)
+    public HistoricalApiController(PostgresHistoricalReadService historicalReadService, SanitizedPoolConfigService poolConfigService,
+        ILogger<HistoricalApiController> logger)
     {
         this.historicalReadService = historicalReadService;
+        this.poolConfigService = poolConfigService;
         this.logger = logger;
     }
 
     private readonly PostgresHistoricalReadService historicalReadService;
+    private readonly SanitizedPoolConfigService poolConfigService;
     private readonly ILogger<HistoricalApiController> logger;
 
     [HttpGet("pools/{poolId}/stats/latest")]
@@ -63,6 +66,33 @@ public class HistoricalApiController : ControllerBase
         CancellationToken ct = default) =>
         ExecutePagedReadAsync("pool stats", offset, () => historicalReadService.GetPoolStatsAsync(poolId, from, to, limit, offset, ct));
 
+    [HttpGet("pools/{poolId}/miners/{miner}/stats")]
+    public Task<IActionResult> GetMinerStats(string poolId, string miner, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+        [FromQuery] int limit = PostgresHistoricalReadService.DefaultPageLimit, [FromQuery] int offset = 0,
+        CancellationToken ct = default) =>
+        ExecutePagedReadAsync("miner stats", offset, () => historicalReadService.GetMinerStatsAsync(poolId, miner, from, to, limit, offset, ct));
+
+    [HttpGet("pools/{poolId}/miners/{miner}/worker-stats")]
+    public Task<IActionResult> GetWorkerStats(string poolId, string miner, [FromQuery] string worker,
+        [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+        [FromQuery] int limit = PostgresHistoricalReadService.DefaultPageLimit, [FromQuery] int offset = 0,
+        CancellationToken ct = default)
+    {
+        if(string.IsNullOrWhiteSpace(worker))
+            return Task.FromResult<IActionResult>(BadRequest(new { error = "worker is required" }));
+
+        return ExecutePagedReadAsync("worker stats", offset,
+            () => historicalReadService.GetWorkerStatsAsync(poolId, miner, worker, from, to, limit, offset, ct));
+    }
+
+    [HttpGet("pools")]
+    public IActionResult GetPools(CancellationToken ct) =>
+        ExecuteRead("sanitized pool list", ct, () => poolConfigService.GetPools());
+
+    [HttpGet("pools/{poolId}/info")]
+    public IActionResult GetPoolInfo(string poolId, CancellationToken ct) =>
+        ExecuteNullableRead("sanitized pool info", ct, () => poolConfigService.GetPool(poolId));
+
     private async Task<IActionResult> ExecutePagedReadAsync<T>(string operation, int offset, Func<Task<IReadOnlyList<T>>> read)
     {
         if(offset < 0)
@@ -88,6 +118,43 @@ public class HistoricalApiController : ControllerBase
         try
         {
             var result = await read();
+            return result == null ? NotFound() : Ok(result);
+        }
+        catch(OperationCanceledException)
+        {
+            throw;
+        }
+        catch(Exception ex)
+        {
+            logger.LogError(ex, "Historical {Operation} read failed", operation);
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Historical data is unavailable" });
+        }
+    }
+
+    private IActionResult ExecuteRead<T>(string operation, CancellationToken ct, Func<T> read)
+    {
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            return Ok(read());
+        }
+        catch(OperationCanceledException)
+        {
+            throw;
+        }
+        catch(Exception ex)
+        {
+            logger.LogError(ex, "Historical {Operation} read failed", operation);
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Historical data is unavailable" });
+        }
+    }
+
+    private IActionResult ExecuteNullableRead<T>(string operation, CancellationToken ct, Func<T> read) where T : class
+    {
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            var result = read();
             return result == null ? NotFound() : Ok(result);
         }
         catch(OperationCanceledException)

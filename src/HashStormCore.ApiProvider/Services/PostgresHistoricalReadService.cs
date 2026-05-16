@@ -172,7 +172,8 @@ public class PostgresHistoricalReadService
 
         await using var con = new NpgsqlConnection(connectionString);
         var query = $@"
-            SELECT *
+            SELECT Id, PoolId, ConnectedMiners, PoolHashrate, SharesPerSecond, NetworkHashrate,
+                NetworkDifficulty, LastNetworkBlockTime, BlockHeight, ConnectedPeers, Created
             FROM (
                 SELECT id AS Id, poolid AS PoolId, connectedminers AS ConnectedMiners, poolhashrate AS PoolHashrate,
                     sharespersecond AS SharesPerSecond, networkhashrate AS NetworkHashrate, networkdifficulty AS NetworkDifficulty,
@@ -186,6 +187,59 @@ public class PostgresHistoricalReadService
             ORDER BY Created ASC, Id ASC";
 
         var rows = await con.QueryAsync<HistoricalPoolStatsDto>(new CommandDefinition(query, parameters, cancellationToken: ct));
+
+        return rows.ToArray();
+    }
+
+    public async Task<IReadOnlyList<HistoricalMinerStatsDto>> GetMinerStatsAsync(string poolId, string miner,
+        DateTime? from, DateTime? to, int limit, int offset, CancellationToken ct)
+    {
+        if(string.IsNullOrWhiteSpace(connectionString))
+            return Array.Empty<HistoricalMinerStatsDto>();
+
+        var parameters = CreatePagedParameters(poolId, limit, offset);
+        parameters.Add("miner", miner);
+
+        var filters = CreateBaseFilters(parameters, from, to);
+        filters.Add("miner = @miner");
+
+        return await QueryMinerStatsAsync(filters, parameters, ct);
+    }
+
+    public async Task<IReadOnlyList<HistoricalMinerStatsDto>> GetWorkerStatsAsync(string poolId, string miner, string worker,
+        DateTime? from, DateTime? to, int limit, int offset, CancellationToken ct)
+    {
+        if(string.IsNullOrWhiteSpace(connectionString))
+            return Array.Empty<HistoricalMinerStatsDto>();
+
+        var parameters = CreatePagedParameters(poolId, limit, offset);
+        parameters.Add("miner", miner);
+        parameters.Add("worker", worker);
+
+        var filters = CreateBaseFilters(parameters, from, to);
+        filters.Add("miner = @miner");
+        filters.Add("worker = @worker");
+
+        return await QueryMinerStatsAsync(filters, parameters, ct);
+    }
+
+    private async Task<IReadOnlyList<HistoricalMinerStatsDto>> QueryMinerStatsAsync(IReadOnlyList<string> filters,
+        DynamicParameters parameters, CancellationToken ct)
+    {
+        await using var con = new NpgsqlConnection(connectionString);
+        var query = $@"
+            SELECT Id, PoolId, Miner, Worker, Hashrate, SharesPerSecond, Created
+            FROM (
+                SELECT id AS Id, poolid AS PoolId, miner AS Miner, worker AS Worker,
+                    hashrate AS Hashrate, sharespersecond AS SharesPerSecond, created AS Created
+                FROM minerstats
+                {BuildWhereClause(filters)}
+                ORDER BY created DESC, id DESC
+                LIMIT @limit OFFSET @offset
+            ) recent_minerstats
+            ORDER BY Created ASC, Id ASC";
+
+        var rows = await con.QueryAsync<HistoricalMinerStatsDto>(new CommandDefinition(query, parameters, cancellationToken: ct));
 
         return rows.ToArray();
     }
@@ -305,5 +359,16 @@ public class HistoricalPoolStatsDto
     public DateTime? LastNetworkBlockTime { get; set; }
     public long BlockHeight { get; set; }
     public int ConnectedPeers { get; set; }
+    public DateTime Created { get; set; }
+}
+
+public class HistoricalMinerStatsDto
+{
+    public long Id { get; set; }
+    public string PoolId { get; set; }
+    public string Miner { get; set; }
+    public string Worker { get; set; }
+    public double Hashrate { get; set; }
+    public double SharesPerSecond { get; set; }
     public DateTime Created { get; set; }
 }

@@ -18,6 +18,7 @@ builder.WebHost.UseUrls(config.ListenUrl);
 builder.Services.AddSingleton(config);
 builder.Services.AddSingleton(_ => new RedisLiveReadService(config.RedisConnectionString));
 builder.Services.AddSingleton(_ => new PostgresHistoricalReadService(config.PostgresConnectionString));
+builder.Services.AddSingleton<SanitizedPoolConfigService>();
 builder.Services.AddControllers();
 
 var app = builder.Build();
