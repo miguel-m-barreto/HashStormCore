@@ -1,9 +1,13 @@
 using System.Collections.Concurrent;
+using System.Data;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using Autofac;
 using Autofac.Features.Metadata;
+using Dapper;
 using Microsoft.Extensions.Hosting;
 using HashStormCore.Configuration;
 using HashStormCore.Extensions;
@@ -84,11 +88,25 @@ public class PayoutManager : BackgroundService
         foreach(var pool in pools.Values.ToArray().Where(x => x.Config.Enabled && x.Config.PaymentProcessing.Enabled))
         {
             var poolConfig = pool.Config;
+            PoolPayoutLock payoutLock = null;
 
             logger.Info(() => $"Processing payments for pool {poolConfig.Id}");
 
             try
             {
+                payoutLock = await TryAcquirePoolPayoutLockAsync(poolConfig.Id, ct);
+                if(payoutLock == null)
+                {
+                    logger.Info(() => $"[{poolConfig.Id}] Skipping payment processing because another processor holds the pool payout lock");
+                    continue;
+                }
+
+                if(!IsPaymentProcessingEnabled(pool))
+                {
+                    logger.Info(() => $"[{poolConfig.Id}] Skipping payment processing because it was disabled before the locked cycle started");
+                    continue;
+                }
+
                 var family = HandleFamilyOverride(poolConfig.Template.Family, poolConfig);
 
                 // resolve payout handler
@@ -102,6 +120,13 @@ public class PayoutManager : BackgroundService
                 var scheme = ctx.ResolveKeyed<IPayoutScheme>(poolConfig.PaymentProcessing.PayoutScheme);
 
                 await UpdatePoolBalancesAsync(pool, poolConfig, handler, scheme, ct);
+
+                if(!IsPaymentProcessingEnabled(pool))
+                {
+                    logger.Info(() => $"[{poolConfig.Id}] Skipping balance payouts because payment processing was disabled during block accounting");
+                    continue;
+                }
+
                 await PayoutPoolBalancesAsync(pool, poolConfig, handler, ct);
             }
 
@@ -128,6 +153,102 @@ public class PayoutManager : BackgroundService
             {
                 logger.Error(ex, () => $"[{poolConfig.Id}] Payment processing failed");
             }
+
+            finally
+            {
+                if(payoutLock != null)
+                    await ReleasePoolPayoutLockAsync(payoutLock);
+            }
+        }
+    }
+
+    private static bool IsPaymentProcessingEnabled(IMiningPool pool)
+    {
+        return pool.Config.Enabled && pool.Config.PaymentProcessing?.Enabled == true;
+    }
+
+    private async Task<PoolPayoutLock> TryAcquirePoolPayoutLockAsync(string poolId, CancellationToken ct)
+    {
+        var lockKey = GetPoolPayoutLockKey(poolId);
+        var con = await cf.OpenConnectionAsync();
+
+        try
+        {
+            var acquired = await con.ExecuteScalarAsync<bool>(new CommandDefinition(
+                "SELECT pg_try_advisory_lock(@lockKey)",
+                new { lockKey },
+                cancellationToken: ct));
+
+            if(!acquired)
+            {
+                con.Dispose();
+                return null;
+            }
+
+            logger.Debug(() => $"[{poolId}] Acquired payout advisory lock {lockKey}");
+            return new PoolPayoutLock(poolId, lockKey, con);
+        }
+
+        catch
+        {
+            con.Dispose();
+            throw;
+        }
+    }
+
+    private async Task ReleasePoolPayoutLockAsync(PoolPayoutLock payoutLock)
+    {
+        try
+        {
+            var released = await payoutLock.Connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+                "SELECT pg_advisory_unlock(@lockKey)",
+                new { lockKey = payoutLock.LockKey }));
+
+            if(!released)
+                logger.Warn(() => $"[{payoutLock.PoolId}] Payout advisory lock {payoutLock.LockKey} was not held during release");
+            else
+                logger.Debug(() => $"[{payoutLock.PoolId}] Released payout advisory lock {payoutLock.LockKey}");
+        }
+
+        catch(Exception ex)
+        {
+            logger.Warn(ex, () => $"[{payoutLock.PoolId}] Failed to explicitly release payout advisory lock {payoutLock.LockKey}; closing the connection will release any session lock");
+        }
+
+        finally
+        {
+            payoutLock.Dispose();
+        }
+    }
+
+    private static long GetPoolPayoutLockKey(string poolId)
+    {
+        var input = Encoding.UTF8.GetBytes($"HashStormCore:payout:{poolId}");
+        var hash = SHA256.HashData(input);
+        var value = 0UL;
+
+        for(var i = 0; i < sizeof(ulong); i++)
+            value = (value << 8) | hash[i];
+
+        return unchecked((long) value);
+    }
+
+    private sealed class PoolPayoutLock : IDisposable
+    {
+        public PoolPayoutLock(string poolId, long lockKey, IDbConnection connection)
+        {
+            PoolId = poolId;
+            LockKey = lockKey;
+            Connection = connection;
+        }
+
+        public string PoolId { get; }
+        public long LockKey { get; }
+        public IDbConnection Connection { get; }
+
+        public void Dispose()
+        {
+            Connection.Dispose();
         }
     }
 
