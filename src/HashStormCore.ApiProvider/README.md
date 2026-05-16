@@ -2,6 +2,8 @@
 
 Provides website-facing reads outside the Pool Core process. Live endpoints read Redis only; historical endpoints read PostgreSQL only.
 
+ApiProvider is the modern frontend read surface. Pool Core `/api/pools`, `/api/v2/pools`, and `/api/live` routes are legacy compatibility routes and should not be used for new frontend work. Pool Core `/metrics` and health endpoints remain operational surfaces, and Pool Core `/api/admin` endpoints still require a separate authenticated admin redesign.
+
 ## Historical Endpoints
 
 New historical list endpoints are paginated with `limit` and `offset`. The default limit is `50`, the maximum limit is `500`, and negative offsets are rejected. Date windows on the new endpoints use `created >= from` and `created < to`. The share-events endpoint keeps its original inclusive `to` behavior and allows up to `1000` rows per page for compatibility.

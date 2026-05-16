@@ -120,7 +120,7 @@ HashStormCore currently includes:
 ## Documentation
 
 - `docs/event-pipeline.md` - event-driven pipeline, config, durability, Redis, DbWriter, LiveAggregator, ApiProvider.
-- `live-api.md` - Pool Core embedded live API reference, where applicable.
+- `live-api.md` - legacy Pool Core embedded live API compatibility reference, where applicable.
 - `configs/*.example.json` - sidecar and event-pipeline config examples.
 - `configs/config.example.json` - full Pool Core config example.
 - `ROADMAP.md` - planned improvements.
@@ -196,8 +196,8 @@ Important Pool Core config sections:
 - `paymentProcessing` - payment processor settings.
 - `shareRecoveryFile` - top-level share recovery fallback file.
 - `eventPipeline` - event-driven handoff/WAL/Redis publisher settings.
-- `poolCore.publicApiEnabled` - enables/disables the Pool Core embedded API, metrics, and WebSocket host.
-- `poolCore.liveStateEnabled` - controls legacy/direct in-process live-state handling.
+- `poolCore.publicApiEnabled` - enables/disables the Pool Core embedded legacy API, metrics, and WebSocket host.
+- `poolCore.liveStateEnabled` - controls legacy/direct in-process live-state handling. Prefer the event pipeline with LiveAggregator and ApiProvider for new frontend reads.
 
 `configs/event-pipeline.example.json` is a focused event-pipeline example/snippet. It is not a complete mining pool config by itself.
 
@@ -341,23 +341,48 @@ For production, run each process under a real supervisor such as systemd, Docker
 
 This repository no longer ships or serves a bundled legacy static pool website. HashStormCore exposes API endpoints only.
 
-Pool Core embedded host, when `poolCore.publicApiEnabled=true`, keeps the existing operational API surface:
+New frontend work should use `HashStormCore.ApiProvider`. Pool Core's embedded HTTP host remains available for compatibility and operations, but it is no longer the preferred frontend read surface.
+
+Pool Core embedded host, when `poolCore.publicApiEnabled=true`, keeps these existing surfaces:
 
 - `/api/...` controllers
 - `/metrics`
 - `/notifications` WebSocket endpoint
 
-ApiProvider serves frontend-facing routes without an `/api` prefix:
+Treat Pool Core `/api/pools`, `/api/v2/pools`, and `/api/live` routes as legacy/deprecated compatibility routes. They are still present and are not removed by this release, but removal or disabling will be staged after frontend migration. Pool Core `/metrics` and health endpoints are operational surfaces and should not be treated as frontend APIs. Pool Core `/api/admin` endpoints have not been redesigned yet and should remain restricted to trusted operators.
+
+ApiProvider serves frontend-facing reads without an `/api` prefix:
 
 - `GET /live/pools/{poolId}/summary`
 - `GET /live/pools/{poolId}/top-miners`
 - `GET /live/pools/{poolId}/miners/{miner}`
 - `GET /live/pools/{poolId}/miners/{miner}/workers`
 - `GET /live/pools/{poolId}/status`
+- `GET /historical/pools`
+- `GET /historical/pools/{poolId}/info`
+- `GET /historical/pools/{poolId}/blocks`
+- `GET /historical/pools/{poolId}/payments`
+- `GET /historical/pools/{poolId}/miners/{miner}/payments`
+- `GET /historical/pools/{poolId}/miners/{miner}/balance`
+- `GET /historical/pools/{poolId}/miners/{miner}/balance-changes`
+- `GET /historical/pools/{poolId}/stats`
 - `GET /historical/pools/{poolId}/stats/latest`
+- `GET /historical/pools/{poolId}/miners/{miner}/stats`
+- `GET /historical/pools/{poolId}/miners/{miner}/worker-stats`
 - `GET /historical/pools/{poolId}/share-events`
 
-A future Next.js frontend should be built separately and consume ApiProvider plus selected Pool Core endpoints where needed.
+Redis Streams are internal broker transport between Pool Core and sidecars. They are not a public frontend API.
+
+Legacy route migration status:
+
+| Legacy Pool Core route group | Replacement / status | Notes |
+| --- | --- | --- |
+| `/api/pools` and `/api/v2/pools` historical reads | ApiProvider `/historical/...` | Blocks, payments, balances, balance changes, pool stats, miner stats, worker stats, and share-events now have ApiProvider reads. Some legacy aggregate/count shapes are not full parity yet. |
+| `/api/live` lite/top-miners/workers/static routes | ApiProvider `/live/...` and `/historical/pools` | Modern live reads come from Redis live models through ApiProvider. Some all-pool, round, search, and SSE shapes still need replacement if frontend requires them. |
+| `/api/live` snapshots, round, search, feed | Pending LiveAggregator/ApiProvider replacement | Keep only as compatibility until equivalent live read models or frontend changes exist. |
+| `/api/admin` | Admin redesign required | These are operator/admin controls, not frontend reads. They need an authenticated admin design before removal or replacement. |
+| `/notifications` | Pending ApiProvider push or polling replacement | Do not expose Redis Streams directly to browsers. |
+| `/metrics`, `/api/health-check`, `/api/live/health`, `/api/live/version` | Operational, keep for now | These remain useful for process operations until a separate health/metrics plan replaces them. |
 
 ## Production Notes
 

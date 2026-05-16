@@ -587,11 +587,11 @@
       "properties": {
         "publicApiEnabled": {
           "type": "boolean",
-          "description": "Controls Pool Core's embedded API, Prometheus metrics, and WebSocket host."
+          "description": "Controls Pool Core's embedded legacy/deprecated frontend API, Prometheus metrics, and WebSocket host. New frontend reads should use ApiProvider; Pool Core frontend/read routes are kept for compatibility until staged migration/removal."
         },
         "liveStateEnabled": {
           "type": "boolean",
-          "description": "Controls legacy/direct in-process live state handling. Mostly redundant when eventPipeline.enabled=true and live state is rebuilt by the LiveAggregator sidecar."
+          "description": "Controls legacy/direct in-process live state handling. Prefer eventPipeline with LiveAggregator and ApiProvider for new frontend live reads."
         }
       }
     },

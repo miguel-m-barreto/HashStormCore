@@ -1,15 +1,17 @@
 # HashStormCore Live API
 
-HashStormCore exposes two API layers:
+This document is a compatibility and migration reference for Pool Core's embedded `/api/live` routes. These routes still exist when the Pool Core embedded API is enabled, but they are legacy/deprecated frontend-read routes.
 
-1. **Classic Stats API** (inherited from Miningcore)  
-2. **HashStormCore Live API** (new, in-memory, low-latency)
+New frontend work should use `HashStormCore.ApiProvider`:
 
-This page documents the **HashStormCore Live API**, mounted at:
+- modern live reads: `/live/...`
+- historical/accounting reads: `/historical/...`
 
-/api/live/...
+Some Pool Core `/api/live` snapshot, round, search, and feed shapes do not yet have full ApiProvider parity. They remain documented here for migration/reference only; do not build new frontend dependencies on them.
 
-The Live API uses in-memory structures (`LiveHashrateState`, `LiveRoundState`) to:
+Redis Streams are internal transport between Pool Core, DbWriter, and LiveAggregator. They must not be exposed directly to browser clients.
+
+Pool Core `/api/live` uses in-process structures (`LiveHashrateState`, `LiveRoundState`) to:
 
 - avoid unnecessary database queries  
 - allow aggressive polling (1-10 s)  
@@ -17,9 +19,9 @@ The Live API uses in-memory structures (`LiveHashrateState`, `LiveRoundState`) t
 
 ---
 
-## 1. Classic Stats API (Miningcore-compatible)
+## 1. Classic Stats API (Miningcore-Compatible)
 
-The classic API (usually on port `4000`) remains available for:
+The classic Pool Core API (usually on port `4000`) remains available for compatibility:
 
 - pool list  
 - basic pool stats  
@@ -30,11 +32,24 @@ The classic API (usually on port `4000`) remains available for:
 Original documentation:  
 https://github.com/oliverw/miningcore/wiki/API
 
-HashStormCore **does not remove** these endpoints to maintain compatibility.
+HashStormCore has not removed these endpoints, but new frontend work should use ApiProvider where replacements exist.
+
+Legacy route migration status:
+
+| Pool Core route group | Replacement / status | Notes |
+| --- | --- | --- |
+| `/api/live/pools/{poolId}/top-miners-lite` | ApiProvider `GET /live/pools/{poolId}/top-miners` | Modern read comes from Redis live models. |
+| `/api/live/pools/{poolId}/miners/{address}/workers-lite` | ApiProvider `GET /live/pools/{poolId}/miners/{miner}/workers` | Modern read comes from Redis live models. |
+| `/api/live/pools/static-lite` | ApiProvider `GET /historical/pools` | ApiProvider returns a sanitized config projection, not raw Pool Core config. |
+| `/api/live/pools/{poolId}/snapshot-lite` and related snapshot routes | Partial ApiProvider `/live` coverage | Exact snapshot/round/network shapes are pending LiveAggregator/ApiProvider replacement if still needed. |
+| `/api/live/pools/{poolId}/round`, `/round-lite` | Pending replacement | Round/luck fields remain Pool Core-local in this legacy API. |
+| `/api/live/miners/search-lite` | Pending replacement | Requires a Redis-backed search/read-model decision. |
+| `/api/live/pools/{poolId}/feed` | Pending push or polling replacement | Do not expose Redis Streams directly as a replacement. |
+| `/api/live/health`, `/api/live/version` | Operational, keep for now | These are process/ops surfaces, not frontend data APIs. |
 
 ---
 
-## 2. Live API - Overview
+## 2. Pool Core Live API Overview
 
 Endpoint categories:
 
@@ -296,10 +311,12 @@ Ideal for real-time charts.
 
 ---
 
-## 7. Best Practices
+## 7. Migration Guidance
 
-- Use **LITE** for dashboards -> faster, zero DB  
-- Use **HEAVY** only when `pendingShares` or network stats are needed  
-- For charts -> always use **SSE**, never polling  
+- Use ApiProvider `/live/...` for new dashboard reads.
+- Use ApiProvider `/historical/...` for historical/accounting reads.
+- Treat **LITE**, **HEAVY**, and **SSE** routes in this document as legacy compatibility surfaces.
+- Keep using Pool Core `/api/live` routes only where a current frontend still needs an exact snapshot, round, search, or feed shape that has not been migrated yet.
+- Do not expose Redis Streams directly to browsers as a replacement for `/api/live` or SSE.
 
 ---
