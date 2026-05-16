@@ -26,8 +26,11 @@ public class HistoricalApiController : ControllerBase
 
     [HttpGet("pools/{poolId}/share-events")]
     public Task<IActionResult> GetShareEvents(string poolId, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
-        [FromQuery] int limit, CancellationToken ct) =>
-        ExecutePagedReadAsync("share events", 0, () => historicalReadService.GetShareEventsAsync(poolId, from, to, limit <= 0 ? 100 : limit, ct));
+        [FromQuery] string eventType, [FromQuery] string miner, [FromQuery] string worker,
+        [FromQuery] int limit = PostgresHistoricalReadService.DefaultPageLimit, [FromQuery] int offset = 0,
+        CancellationToken ct = default) =>
+        ExecutePagedReadAsync("share events", offset,
+            () => historicalReadService.GetShareEventsAsync(poolId, eventType, miner, worker, from, to, limit, offset, ct));
 
     [HttpGet("pools/{poolId}/blocks")]
     public Task<IActionResult> GetBlocks(string poolId, [FromQuery] string status, [FromQuery] string type,

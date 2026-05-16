@@ -8,6 +8,7 @@ public class PostgresHistoricalReadService
 {
     public const int DefaultPageLimit = 50;
     public const int MaxPageLimit = 500;
+    public const int MaxShareEventsPageLimit = 1000;
 
     public PostgresHistoricalReadService(string connectionString)
     {
@@ -36,26 +37,32 @@ public class PostgresHistoricalReadService
             new CommandDefinition(query, new { poolId }, cancellationToken: ct));
     }
 
-    public async Task<IReadOnlyList<object>> GetShareEventsAsync(string poolId, DateTime? from, DateTime? to, int limit, CancellationToken ct)
+    public async Task<IReadOnlyList<HistoricalShareEventDto>> GetShareEventsAsync(string poolId, string eventType, string miner,
+        string worker, DateTime? from, DateTime? to, int limit, int offset, CancellationToken ct)
     {
         if(string.IsNullOrWhiteSpace(connectionString))
-            return Array.Empty<object>();
+            return Array.Empty<HistoricalShareEventDto>();
+
+        var parameters = CreatePagedParameters(poolId, limit, offset, MaxShareEventsPageLimit);
+        var filters = CreateShareEventFilters(parameters, from, to);
+        AddOptionalFilter(filters, parameters, "event_type = @eventType", "eventType", eventType);
+        AddOptionalFilter(filters, parameters, "miner = @miner", "miner", miner);
+        AddOptionalFilter(filters, parameters, "worker = @worker", "worker", worker);
 
         await using var con = new NpgsqlConnection(connectionString);
-        const string query = @"SELECT * FROM share_events
-            WHERE pool_id = @poolId
-              AND (@from IS NULL OR created >= @from)
-              AND (@to IS NULL OR created <= @to)
-            ORDER BY created DESC
-            LIMIT @limit";
+        var query = $@"
+            SELECT event_id AS EventId, event_type AS EventType, pool_id AS PoolId,
+                coin_symbol AS CoinSymbol, coin_family AS CoinFamily, miner AS Miner, worker AS Worker,
+                source AS Source, created AS Created, block_height AS BlockHeight, difficulty AS Difficulty,
+                network_difficulty AS NetworkDifficulty, share_multiplier AS ShareMultiplier,
+                is_block_candidate AS IsBlockCandidate, block_hash AS BlockHash, reject_reason AS RejectReason,
+                error_code AS ErrorCode, block_reward AS BlockReward, block_type AS BlockType
+            FROM share_events
+            {BuildWhereClause(filters)}
+            ORDER BY created DESC, event_id DESC
+            LIMIT @limit OFFSET @offset";
 
-        var rows = await con.QueryAsync<object>(new CommandDefinition(query, new
-        {
-            poolId,
-            from,
-            to,
-            limit = Math.Clamp(limit, 1, 1000)
-        }, cancellationToken: ct));
+        var rows = await con.QueryAsync<HistoricalShareEventDto>(new CommandDefinition(query, parameters, cancellationToken: ct));
 
         return rows.ToArray();
     }
@@ -244,11 +251,11 @@ public class PostgresHistoricalReadService
         return rows.ToArray();
     }
 
-    private static DynamicParameters CreatePagedParameters(string poolId, int limit, int offset)
+    private static DynamicParameters CreatePagedParameters(string poolId, int limit, int offset, int maxLimit = MaxPageLimit)
     {
         var parameters = new DynamicParameters();
         parameters.Add("poolId", poolId);
-        parameters.Add("limit", NormalizeLimit(limit));
+        parameters.Add("limit", NormalizeLimit(limit, maxLimit));
         parameters.Add("offset", offset);
 
         return parameters;
@@ -273,6 +280,25 @@ public class PostgresHistoricalReadService
         return filters;
     }
 
+    private static List<string> CreateShareEventFilters(DynamicParameters parameters, DateTime? from, DateTime? to)
+    {
+        var filters = new List<string> { "pool_id = @poolId" };
+
+        if(from.HasValue)
+        {
+            filters.Add("created >= @from");
+            parameters.Add("from", from);
+        }
+
+        if(to.HasValue)
+        {
+            filters.Add("created <= @to");
+            parameters.Add("to", to);
+        }
+
+        return filters;
+    }
+
     private static void AddOptionalFilter(List<string> filters, DynamicParameters parameters, string sqlFragment, string parameterName, string value)
     {
         var normalizedValue = NormalizeFilter(value);
@@ -290,8 +316,8 @@ public class PostgresHistoricalReadService
         return builder.ToString();
     }
 
-    public static int NormalizeLimit(int limit) =>
-        Math.Clamp(limit <= 0 ? DefaultPageLimit : limit, 1, MaxPageLimit);
+    public static int NormalizeLimit(int limit, int maxLimit = MaxPageLimit) =>
+        Math.Clamp(limit <= 0 ? DefaultPageLimit : limit, 1, maxLimit);
 
     private static string NormalizeFilter(string value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
@@ -314,6 +340,29 @@ public class HistoricalBlockDto
     public string Source { get; set; }
     public string Hash { get; set; }
     public DateTime Created { get; set; }
+}
+
+public class HistoricalShareEventDto
+{
+    public string EventId { get; set; }
+    public string EventType { get; set; }
+    public string PoolId { get; set; }
+    public string CoinSymbol { get; set; }
+    public string CoinFamily { get; set; }
+    public string Miner { get; set; }
+    public string Worker { get; set; }
+    public string Source { get; set; }
+    public DateTime Created { get; set; }
+    public long? BlockHeight { get; set; }
+    public double Difficulty { get; set; }
+    public double NetworkDifficulty { get; set; }
+    public double ShareMultiplier { get; set; }
+    public bool IsBlockCandidate { get; set; }
+    public string BlockHash { get; set; }
+    public string RejectReason { get; set; }
+    public string ErrorCode { get; set; }
+    public decimal? BlockReward { get; set; }
+    public string BlockType { get; set; }
 }
 
 public class HistoricalPaymentDto
