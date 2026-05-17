@@ -1,0 +1,29 @@
+using System.Data;
+using HashStormCore.Persistence.Model;
+using HashStormCore.Persistence.Model.Projections;
+
+namespace HashStormCore.Persistence.Repositories;
+
+public interface IPayoutIntentRepository
+{
+    Task<PayoutBatch> CreateReservedBatchAsync(IDbConnection con, IDbTransaction tx, CreatePayoutBatchRequest batch,
+        IReadOnlyCollection<CreatePayoutIntentRequest> intents, CancellationToken ct);
+
+    Task<PayoutSendAttempt> CreateSendAttemptAsync(IDbConnection con, IDbTransaction tx, CreatePayoutSendAttemptRequest attempt,
+        IReadOnlyCollection<long> intentIds, CancellationToken ct);
+
+    Task<PayoutExternalConfirmation> InsertExternalConfirmationAsync(IDbConnection con, IDbTransaction tx,
+        PayoutExternalConfirmation confirmation, CancellationToken ct);
+
+    Task<bool> MarkAttemptSendingAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, DateTime updated, CancellationToken ct);
+    Task<bool> MarkAttemptAcceptedAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, PayoutAttemptEvidence evidence, DateTime updated, CancellationToken ct);
+    Task<bool> MarkAttemptAmbiguousAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct);
+    Task<bool> MarkAttemptFailedPreAcceptAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct);
+    Task<bool> MarkAttemptFailedNoAcceptAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct);
+    Task<bool> MarkBatchCancelledAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct);
+
+    Task<PayoutBatch> GetActiveBatchForPoolAsync(IDbConnection con, string poolId, CancellationToken ct);
+    Task<PayoutBatch[]> GetRecoverableBatchesAsync(IDbConnection con, string poolId, CancellationToken ct);
+    Task<PayoutSendAttempt[]> GetStaleSendingAttemptsAsync(IDbConnection con, DateTime before, int limit, CancellationToken ct);
+    Task<PayoutBalanceProjection[]> GetBalanceProjectionsAsync(IDbConnection con, string poolId, CancellationToken ct);
+}
