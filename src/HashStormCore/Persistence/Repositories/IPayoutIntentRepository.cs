@@ -24,6 +24,9 @@ public interface IPayoutIntentRepository
 
     Task<PayoutBatch> GetActiveBatchForPoolAsync(IDbConnection con, string poolId, CancellationToken ct);
     Task<PayoutBatch> GetActiveBatchForPoolAsync(IDbConnection con, IDbTransaction tx, string poolId, CancellationToken ct);
+    Task<PayoutBatch> GetBatchForUpdateAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string coin, CancellationToken ct);
+    Task<PayoutIntent[]> GetReservedIntentsForBatchAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string coin, CancellationToken ct);
+    Task<long> GetSendAttemptCountForBatchAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string coin, CancellationToken ct);
     Task<PayoutBatch[]> GetRecoverableBatchesAsync(IDbConnection con, string poolId, CancellationToken ct);
     Task<PayoutSendAttempt[]> GetStaleSendingAttemptsAsync(IDbConnection con, DateTime before, int limit, CancellationToken ct);
     Task<PayoutBalanceProjection[]> GetBalanceProjectionsAsync(IDbConnection con, string poolId, CancellationToken ct);

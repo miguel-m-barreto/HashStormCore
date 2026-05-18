@@ -738,6 +738,65 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         return MapBatch(batch, intents.Select(MapIntent).ToArray());
     }
 
+    public async Task<PayoutBatch> GetBatchForUpdateAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId,
+        string coin, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+
+        const string query = @"SELECT * FROM payout_batches
+            WHERE id = @batchid AND poolid = @poolid AND coin = @coin
+            FOR UPDATE";
+
+        var batch = await con.QuerySingleOrDefaultAsync<Entities.PayoutBatch>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            poolid = poolId,
+            coin
+        }, tx, cancellationToken: ct));
+
+        return batch == null ? null : MapBatch(batch);
+    }
+
+    public async Task<PayoutIntent[]> GetReservedIntentsForBatchAsync(IDbConnection con, IDbTransaction tx, long batchId,
+        string poolId, string coin, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+
+        const string query = @"SELECT * FROM payout_intents
+            WHERE batchid = @batchid AND poolid = @poolid AND coin = @coin AND state = @reserved
+            ORDER BY address, id
+            FOR UPDATE";
+
+        return (await con.QueryAsync<Entities.PayoutIntent>(new CommandDefinition(query, new
+            {
+                batchid = batchId,
+                poolid = poolId,
+                coin,
+                reserved = PayoutIntentStates.Reserved
+            }, tx, cancellationToken: ct)))
+            .Select(MapIntent)
+            .ToArray();
+    }
+
+    public async Task<long> GetSendAttemptCountForBatchAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId,
+        string coin, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+
+        const string query = @"SELECT COUNT(*) FROM payout_send_attempts
+            WHERE batchid = @batchid AND poolid = @poolid AND coin = @coin";
+
+        return await con.QuerySingleAsync<long>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            poolid = poolId,
+            coin
+        }, tx, cancellationToken: ct));
+    }
+
     public async Task<PayoutBatch[]> GetRecoverableBatchesAsync(IDbConnection con, string poolId, CancellationToken ct)
     {
         con = RequireConnection(con);
