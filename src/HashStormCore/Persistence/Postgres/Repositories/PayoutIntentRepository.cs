@@ -714,6 +714,30 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         return MapBatch(batch, intents.Select(MapIntent).ToArray());
     }
 
+    public async Task<PayoutBatch> GetActiveBatchForPoolAsync(IDbConnection con, IDbTransaction tx, string poolId, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+
+        const string query = @"SELECT * FROM payout_batches
+            WHERE poolid = @poolid AND state = ANY(@states)
+            ORDER BY created DESC
+            LIMIT 1
+            FOR UPDATE";
+
+        var batch = await con.QuerySingleOrDefaultAsync<Entities.PayoutBatch>(new CommandDefinition(query, new
+        {
+            poolid = poolId,
+            states = ActiveBatchStates
+        }, tx, cancellationToken: ct));
+
+        if(batch == null)
+            return null;
+
+        var intents = await LoadIntentsForBatchAsync(con, tx, batch.Id, ct);
+        return MapBatch(batch, intents.Select(MapIntent).ToArray());
+    }
+
     public async Task<PayoutBatch[]> GetRecoverableBatchesAsync(IDbConnection con, string poolId, CancellationToken ct)
     {
         con = RequireConnection(con);
