@@ -797,6 +797,126 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         }, tx, cancellationToken: ct));
     }
 
+    public async Task<PayoutSendAttempt[]> GetPreparedAttemptsForExecutionAsync(IDbConnection con, IDbTransaction tx,
+        string poolId, int limit, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+
+        if(limit <= 0)
+            throw new ArgumentOutOfRangeException(nameof(limit), "Prepared payout attempt query limit must be greater than zero");
+
+        const string query = @"SELECT psa.*
+            FROM payout_send_attempts psa
+            JOIN payout_batches b ON b.id = psa.batchid
+                AND b.poolid = psa.poolid
+                AND b.coin = psa.coin
+            WHERE psa.poolid = @poolid
+              AND psa.state = @prepared
+              AND b.state = ANY(@batchstates)
+            ORDER BY psa.created, psa.id
+            LIMIT @limit
+            FOR UPDATE OF psa SKIP LOCKED";
+
+        return (await con.QueryAsync<Entities.PayoutSendAttempt>(new CommandDefinition(query, new
+            {
+                poolid = poolId,
+                prepared = PayoutSendAttemptStates.Prepared,
+                batchstates = new[] { PayoutBatchStates.Reserved, PayoutBatchStates.Sending },
+                limit
+            }, tx, cancellationToken: ct)))
+            .Select(x => MapAttempt(x))
+            .ToArray();
+    }
+
+#nullable enable annotations
+    public async Task<PayoutSendAttempt?> GetSendAttemptForExecutionAsync(IDbConnection con, IDbTransaction tx, long attemptId,
+        string poolId, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+
+        if(attemptId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(attemptId), "Payout send attempt id must be greater than zero");
+
+        const string query = @"SELECT * FROM payout_send_attempts
+            WHERE id = @attemptid AND poolid = @poolid
+            FOR UPDATE";
+
+        var attempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(query, new
+        {
+            attemptid = attemptId,
+            poolid = poolId
+        }, tx, cancellationToken: ct));
+
+        return attempt == null ? null : MapAttempt(attempt);
+    }
+
+    public async Task<PayoutSendExecutionContext?> GetAttemptExecutionContextAsync(IDbConnection con, IDbTransaction tx,
+        long attemptId, string poolId, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+
+        var attempt = await GetSendAttemptForExecutionAsync(con, tx, attemptId, poolId, ct);
+        if(attempt == null)
+            return null;
+
+        const string batchQuery = @"SELECT * FROM payout_batches
+            WHERE id = @batchid AND poolid = @poolid AND coin = @coin
+            FOR UPDATE";
+
+        var batchEntity = await con.QuerySingleOrDefaultAsync<Entities.PayoutBatch>(new CommandDefinition(batchQuery, new
+        {
+            batchid = attempt.BatchId,
+            poolid = attempt.PoolId,
+            coin = attempt.Coin
+        }, tx, cancellationToken: ct));
+
+        if(batchEntity == null)
+            throw new InvalidOperationException("Payout send attempt parent batch does not exist for the requested attempt/pool");
+
+        const string intentsQuery = @"SELECT
+                pai.intentid AS IntentId,
+                pai.attemptid AS AttemptId,
+                pai.poolid AS PoolId,
+                pai.coin AS Coin,
+                pi.address AS Address,
+                pai.amount AS Amount,
+                pi.state AS IntentState,
+                pai.state AS AttemptIntentState
+            FROM payout_attempt_intents pai
+            JOIN payout_intents pi ON pi.id = pai.intentid
+                AND pi.batchid = pai.batchid
+                AND pi.poolid = pai.poolid
+                AND pi.coin = pai.coin
+            WHERE pai.attemptid = @attemptid
+              AND pai.batchid = @batchid
+              AND pai.poolid = @poolid
+              AND pai.coin = @coin
+            ORDER BY pi.address, pi.id
+            FOR UPDATE OF pai, pi";
+
+        var intents = (await con.QueryAsync<PayoutSendExecutionIntent>(new CommandDefinition(intentsQuery, new
+            {
+                attemptid = attempt.Id,
+                batchid = attempt.BatchId,
+                poolid = attempt.PoolId,
+                coin = attempt.Coin
+            }, tx, cancellationToken: ct)))
+            .ToArray();
+
+        return new PayoutSendExecutionContext
+        {
+            Batch = MapBatch(batchEntity),
+            Attempt = attempt,
+            Intents = intents
+        };
+    }
+#nullable restore
+
     public async Task<PayoutBatch[]> GetRecoverableBatchesAsync(IDbConnection con, string poolId, CancellationToken ct)
     {
         con = RequireConnection(con);
@@ -1087,6 +1207,12 @@ public class PayoutIntentRepository : IPayoutIntentRepository
     private static IDbTransaction RequireTransaction(IDbTransaction tx)
     {
         return tx ?? throw new ArgumentNullException(nameof(tx));
+    }
+
+    private static void RequireText(string value, string name)
+    {
+        if(string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} is required", name);
     }
 
     private static void EnsureRowCount(long actualRows, long expectedRows, string target)
