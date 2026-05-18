@@ -917,6 +917,185 @@ public class PayoutIntentRepository : IPayoutIntentRepository
     }
 #nullable restore
 
+    public async Task<PayoutReconciliationAttemptSummary[]> GetStaleSendingAttemptsForUpdateAsync(IDbConnection con,
+        IDbTransaction tx, string poolId, DateTime olderThan, int limit, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+        RequirePositiveLimit(limit, nameof(limit), "Stale payout attempt query limit must be greater than zero");
+
+        const string query = @"SELECT
+                psa.batchid AS BatchId,
+                psa.id AS AttemptId,
+                psa.poolid AS PoolId,
+                psa.coin AS Coin,
+                psa.state AS AttemptState,
+                b.state AS BatchState,
+                psa.method AS Method,
+                psa.externaloperationid AS ExternalOperationId,
+                psa.transactionconfirmationdata AS TransactionConfirmationData,
+                psa.created AS Created,
+                psa.updated AS Updated
+            FROM payout_send_attempts psa
+            JOIN payout_batches b ON b.id = psa.batchid
+                AND b.poolid = psa.poolid
+                AND b.coin = psa.coin
+            WHERE psa.poolid = @poolid
+              AND psa.state = @sending
+              AND b.state = @sending
+              AND psa.updated < @olderthan
+            ORDER BY psa.updated, psa.id
+            LIMIT @limit
+            FOR UPDATE OF psa SKIP LOCKED";
+
+        return (await con.QueryAsync<PayoutReconciliationAttemptSummary>(new CommandDefinition(query, new
+        {
+            poolid = poolId,
+            sending = PayoutSendAttemptStates.Sending,
+            olderthan = olderThan,
+            limit
+        }, tx, cancellationToken: ct))).ToArray();
+    }
+
+    public async Task<PayoutReconciliationAttemptSummary[]> GetAmbiguousAttemptsAsync(IDbConnection con, IDbTransaction tx,
+        string poolId, int limit, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+        RequirePositiveLimit(limit, nameof(limit), "Ambiguous payout attempt query limit must be greater than zero");
+
+        const string query = @"SELECT
+                psa.batchid AS BatchId,
+                psa.id AS AttemptId,
+                psa.poolid AS PoolId,
+                psa.coin AS Coin,
+                psa.state AS AttemptState,
+                b.state AS BatchState,
+                psa.method AS Method,
+                psa.externaloperationid AS ExternalOperationId,
+                psa.transactionconfirmationdata AS TransactionConfirmationData,
+                psa.created AS Created,
+                psa.updated AS Updated
+            FROM payout_send_attempts psa
+            JOIN payout_batches b ON b.id = psa.batchid
+                AND b.poolid = psa.poolid
+                AND b.coin = psa.coin
+            WHERE psa.poolid = @poolid
+              AND psa.state = @ambiguous
+              AND b.state = @ambiguous
+            ORDER BY psa.updated, psa.id
+            LIMIT @limit
+            FOR UPDATE OF psa SKIP LOCKED";
+
+        return (await con.QueryAsync<PayoutReconciliationAttemptSummary>(new CommandDefinition(query, new
+        {
+            poolid = poolId,
+            ambiguous = PayoutSendAttemptStates.AmbiguousRequiresReview,
+            limit
+        }, tx, cancellationToken: ct))).ToArray();
+    }
+
+    public async Task<PayoutReconciliationAttemptSummary[]> GetAttemptsWithOperationIdAsync(IDbConnection con,
+        IDbTransaction tx, string poolId, int limit, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+        RequirePositiveLimit(limit, nameof(limit), "Operation id payout attempt query limit must be greater than zero");
+
+        const string query = @"SELECT
+                psa.batchid AS BatchId,
+                psa.id AS AttemptId,
+                psa.poolid AS PoolId,
+                psa.coin AS Coin,
+                psa.state AS AttemptState,
+                b.state AS BatchState,
+                psa.method AS Method,
+                psa.externaloperationid AS ExternalOperationId,
+                psa.transactionconfirmationdata AS TransactionConfirmationData,
+                psa.created AS Created,
+                psa.updated AS Updated
+            FROM payout_send_attempts psa
+            JOIN payout_batches b ON b.id = psa.batchid
+                AND b.poolid = psa.poolid
+                AND b.coin = psa.coin
+            WHERE psa.poolid = @poolid
+              AND psa.state = ANY(@attemptstates)
+              AND b.state = ANY(@batchstates)
+              AND (
+                  psa.externaloperationid IS NOT NULL
+                  OR EXISTS (
+                      SELECT 1
+                      FROM payout_external_confirmations pec
+                      WHERE pec.batchid = psa.batchid
+                        AND pec.attemptid = psa.id
+                        AND pec.poolid = psa.poolid
+                        AND pec.coin = psa.coin
+                        AND pec.kind = @operationid
+                  )
+              )
+            ORDER BY psa.updated, psa.id
+            LIMIT @limit
+            FOR UPDATE OF psa SKIP LOCKED";
+
+        return (await con.QueryAsync<PayoutReconciliationAttemptSummary>(new CommandDefinition(query, new
+        {
+            poolid = poolId,
+            attemptstates = new[]
+            {
+                PayoutSendAttemptStates.Accepted,
+                PayoutSendAttemptStates.AmbiguousRequiresReview
+            },
+            batchstates = new[]
+            {
+                PayoutBatchStates.Sending,
+                PayoutBatchStates.Submitted,
+                PayoutBatchStates.AmbiguousRequiresReview
+            },
+            operationid = PayoutExternalConfirmationKinds.OperationId,
+            limit
+        }, tx, cancellationToken: ct))).ToArray();
+    }
+
+    public async Task<PayoutAttemptConfirmationSummary[]> GetAttemptConfirmationsAsync(IDbConnection con, IDbTransaction tx,
+        long batchId, long attemptId, string poolId, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+
+        if(batchId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(batchId), "Payout batch id must be greater than zero");
+
+        if(attemptId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(attemptId), "Payout send attempt id must be greater than zero");
+
+        const string query = @"SELECT
+                id AS Id,
+                batchid AS BatchId,
+                attemptid AS AttemptId,
+                intentid AS IntentId,
+                poolid AS PoolId,
+                coin AS Coin,
+                kind AS Kind,
+                value AS Value,
+                created AS Created
+            FROM payout_external_confirmations
+            WHERE batchid = @batchid
+              AND attemptid = @attemptid
+              AND poolid = @poolid
+            ORDER BY created, id";
+
+        return (await con.QueryAsync<PayoutAttemptConfirmationSummary>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            attemptid = attemptId,
+            poolid = poolId
+        }, tx, cancellationToken: ct))).ToArray();
+    }
+
     public async Task<PayoutBatch[]> GetRecoverableBatchesAsync(IDbConnection con, string poolId, CancellationToken ct)
     {
         con = RequireConnection(con);
@@ -1213,6 +1392,12 @@ public class PayoutIntentRepository : IPayoutIntentRepository
     {
         if(string.IsNullOrWhiteSpace(value))
             throw new ArgumentException($"{name} is required", name);
+    }
+
+    private static void RequirePositiveLimit(int limit, string name, string message)
+    {
+        if(limit <= 0)
+            throw new ArgumentOutOfRangeException(name, message);
     }
 
     private static void EnsureRowCount(long actualRows, long expectedRows, string target)
