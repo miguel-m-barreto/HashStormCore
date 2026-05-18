@@ -18,6 +18,8 @@ public interface IPayoutIntentRepository
     Task<bool> MarkAttemptSendingAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, DateTime updated, CancellationToken ct);
     Task<bool> MarkAttemptAcceptedAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, PayoutAttemptEvidence evidence, DateTime updated, CancellationToken ct);
     Task<bool> MarkAttemptAmbiguousAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct);
+    Task<bool> MarkStaleBatchAmbiguousAsync(IDbConnection con, IDbTransaction tx, long batchId, long staleAttemptId,
+        string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct);
     Task<bool> MarkAttemptFailedPreAcceptAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct);
     Task<bool> MarkAttemptFailedNoAcceptAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct);
     Task<bool> MarkBatchCancelledAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct);

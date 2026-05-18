@@ -497,6 +497,202 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         return MarkSendingAttemptAmbiguousAsync(con, tx, attemptId, poolId, errorCode, errorMessage, updated, ct);
     }
 
+    public async Task<bool> MarkStaleBatchAmbiguousAsync(IDbConnection con, IDbTransaction tx, long batchId,
+        long staleAttemptId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+        ValidateError(errorCode, errorMessage);
+
+        if(batchId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(batchId), "Payout batch id must be greater than zero");
+
+        if(staleAttemptId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(staleAttemptId), "Stale payout send attempt id must be greater than zero");
+
+        const string loadBatchQuery = @"SELECT * FROM payout_batches
+            WHERE id = @batchid AND poolid = @poolid
+            FOR UPDATE";
+
+        var batch = await con.QuerySingleOrDefaultAsync<Entities.PayoutBatch>(new CommandDefinition(loadBatchQuery, new
+        {
+            batchid = batchId,
+            poolid = poolId
+        }, tx, cancellationToken: ct));
+
+        if(batch == null)
+            return false;
+
+        if(batch.State != PayoutBatchStates.Sending)
+            return false;
+
+        const string loadStaleAttemptQuery = @"SELECT * FROM payout_send_attempts
+            WHERE id = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin
+            FOR UPDATE";
+
+        var staleAttempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(loadStaleAttemptQuery, new
+        {
+            attemptid = staleAttemptId,
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin
+        }, tx, cancellationToken: ct));
+
+        if(staleAttempt == null)
+            return false;
+
+        if(staleAttempt.State != PayoutSendAttemptStates.Sending)
+            return false;
+
+        await LockBatchAttemptsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchAttemptMappingsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchIntentsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+
+        var affectedAttemptCount = await CountBatchAttemptsInStatesAsync(con, tx, batch.Id, new[]
+        {
+            PayoutSendAttemptStates.Prepared,
+            PayoutSendAttemptStates.Sending
+        }, ct);
+
+        if(affectedAttemptCount == 0)
+            throw new InvalidOperationException("Sending payout batch has no prepared or sending attempts to quarantine");
+
+        var activeMappingCount = await CountBatchActiveMappingsForAttemptStatesAsync(con, tx, batch.Id, new[]
+        {
+            PayoutSendAttemptStates.Prepared,
+            PayoutSendAttemptStates.Sending
+        }, ct);
+
+        if(activeMappingCount == 0)
+            throw new InvalidOperationException("Prepared/sending payout attempts have no active intent mappings to quarantine");
+
+        var expectedIntentCount = await CountBatchActiveMappingsWithIntentStatesAsync(con, tx, batch.Id, new[]
+        {
+            PayoutSendAttemptStates.Prepared,
+            PayoutSendAttemptStates.Sending
+        }, new[]
+        {
+            PayoutIntentStates.Reserved,
+            PayoutIntentStates.Sending
+        }, ct);
+
+        EnsureRowCount(expectedIntentCount, activeMappingCount, "reserved/sending payout intents for stale batch quarantine");
+
+        const string intentsQuery = @"UPDATE payout_intents pi
+            SET state = @ambiguous, errorcode = @errorcode, errormessage = @errormessage, updated = @updated
+            FROM payout_attempt_intents pai
+            JOIN payout_send_attempts psa ON psa.id = pai.attemptid
+                AND psa.batchid = pai.batchid
+                AND psa.poolid = pai.poolid
+                AND psa.coin = pai.coin
+            WHERE pai.intentid = pi.id
+              AND pai.batchid = @batchid
+              AND pai.poolid = @poolid
+              AND pai.coin = @coin
+              AND pai.state = @active
+              AND psa.state = ANY(@attemptstates)
+              AND pi.state = ANY(@intentstates)";
+
+        var updatedIntentRows = await con.ExecuteAsync(new CommandDefinition(intentsQuery, new
+        {
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin,
+            active = PayoutAttemptIntentStates.Active,
+            ambiguous = PayoutIntentStates.AmbiguousRequiresReview,
+            attemptstates = new[]
+            {
+                PayoutSendAttemptStates.Prepared,
+                PayoutSendAttemptStates.Sending
+            },
+            intentstates = new[]
+            {
+                PayoutIntentStates.Reserved,
+                PayoutIntentStates.Sending
+            },
+            errorcode = errorCode,
+            errormessage = errorMessage,
+            updated
+        }, tx, cancellationToken: ct));
+
+        EnsureRowCount(updatedIntentRows, activeMappingCount, "reserved/sending payout intents for stale batch quarantine");
+
+        const string mappingsQuery = @"UPDATE payout_attempt_intents
+            SET state = @ambiguous, updated = @updated
+            WHERE batchid = @batchid AND poolid = @poolid AND coin = @coin AND state = @active
+              AND EXISTS (
+                  SELECT 1
+                  FROM payout_send_attempts psa
+                  WHERE psa.id = payout_attempt_intents.attemptid
+                    AND psa.batchid = payout_attempt_intents.batchid
+                    AND psa.poolid = payout_attempt_intents.poolid
+                    AND psa.coin = payout_attempt_intents.coin
+                    AND psa.state = ANY(@attemptstates)
+              )";
+
+        var updatedMappingRows = await con.ExecuteAsync(new CommandDefinition(mappingsQuery, new
+        {
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin,
+            active = PayoutAttemptIntentStates.Active,
+            ambiguous = PayoutAttemptIntentStates.AmbiguousRequiresReview,
+            attemptstates = new[]
+            {
+                PayoutSendAttemptStates.Prepared,
+                PayoutSendAttemptStates.Sending
+            },
+            updated
+        }, tx, cancellationToken: ct));
+
+        EnsureRowCount(updatedMappingRows, activeMappingCount, "active payout attempt-intent mappings for stale batch quarantine");
+
+        const string attemptsQuery = @"UPDATE payout_send_attempts
+            SET state = @ambiguous, errorcode = @errorcode, errormessage = @errormessage,
+                updated = @updated, completed = @updated
+            WHERE batchid = @batchid AND poolid = @poolid AND coin = @coin
+              AND state = ANY(@attemptstates)";
+
+        var updatedAttemptRows = await con.ExecuteAsync(new CommandDefinition(attemptsQuery, new
+        {
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin,
+            attemptstates = new[]
+            {
+                PayoutSendAttemptStates.Prepared,
+                PayoutSendAttemptStates.Sending
+            },
+            ambiguous = PayoutSendAttemptStates.AmbiguousRequiresReview,
+            errorcode = errorCode,
+            errormessage = errorMessage,
+            updated
+        }, tx, cancellationToken: ct));
+
+        EnsureRowCount(updatedAttemptRows, affectedAttemptCount, "prepared/sending payout attempts for stale batch quarantine");
+
+        const string batchQuery = @"UPDATE payout_batches
+            SET state = @ambiguous, errorcode = @errorcode, errormessage = @errormessage, updated = @updated
+            WHERE id = @batchid AND poolid = @poolid AND coin = @coin AND state = @sending";
+
+        var updatedBatchRows = await con.ExecuteAsync(new CommandDefinition(batchQuery, new
+        {
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin,
+            sending = PayoutBatchStates.Sending,
+            ambiguous = PayoutBatchStates.AmbiguousRequiresReview,
+            errorcode = errorCode,
+            errormessage = errorMessage,
+            updated
+        }, tx, cancellationToken: ct));
+
+        EnsureRowCount(updatedBatchRows, 1, "sending payout batch for stale batch quarantine");
+
+        return true;
+    }
+
     public async Task<bool> MarkAttemptFailedPreAcceptAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId,
         string errorCode, string errorMessage, DateTime updated, CancellationToken ct)
     {
@@ -1375,6 +1571,115 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         {
             batchid = batchId,
             mappingstate = mappingState
+        }, tx, cancellationToken: ct));
+    }
+
+    private static Task LockBatchAttemptsAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string coin,
+        CancellationToken ct)
+    {
+        const string query = @"SELECT id FROM payout_send_attempts
+            WHERE batchid = @batchid AND poolid = @poolid AND coin = @coin
+            ORDER BY id
+            FOR UPDATE";
+
+        return con.QueryAsync<long>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            poolid = poolId,
+            coin
+        }, tx, cancellationToken: ct));
+    }
+
+    private static Task LockBatchAttemptMappingsAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId,
+        string coin, CancellationToken ct)
+    {
+        const string query = @"SELECT 1 FROM payout_attempt_intents
+            WHERE batchid = @batchid AND poolid = @poolid AND coin = @coin
+            ORDER BY attemptid, intentid
+            FOR UPDATE";
+
+        return con.QueryAsync<int>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            poolid = poolId,
+            coin
+        }, tx, cancellationToken: ct));
+    }
+
+    private static Task LockBatchIntentsAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string coin,
+        CancellationToken ct)
+    {
+        const string query = @"SELECT id FROM payout_intents
+            WHERE batchid = @batchid AND poolid = @poolid AND coin = @coin
+            ORDER BY id
+            FOR UPDATE";
+
+        return con.QueryAsync<long>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            poolid = poolId,
+            coin
+        }, tx, cancellationToken: ct));
+    }
+
+    private static async Task<long> CountBatchAttemptsInStatesAsync(IDbConnection con, IDbTransaction tx, long batchId,
+        string[] attemptStates, CancellationToken ct)
+    {
+        const string query = @"SELECT COUNT(*) FROM payout_send_attempts
+            WHERE batchid = @batchid AND state = ANY(@attemptstates)";
+
+        return await con.QuerySingleAsync<long>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            attemptstates = attemptStates
+        }, tx, cancellationToken: ct));
+    }
+
+    private static async Task<long> CountBatchActiveMappingsForAttemptStatesAsync(IDbConnection con, IDbTransaction tx,
+        long batchId, string[] attemptStates, CancellationToken ct)
+    {
+        const string query = @"SELECT COUNT(*)
+            FROM payout_attempt_intents pai
+            JOIN payout_send_attempts psa ON psa.id = pai.attemptid
+                AND psa.batchid = pai.batchid
+                AND psa.poolid = pai.poolid
+                AND psa.coin = pai.coin
+            WHERE pai.batchid = @batchid
+              AND pai.state = @active
+              AND psa.state = ANY(@attemptstates)";
+
+        return await con.QuerySingleAsync<long>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            active = PayoutAttemptIntentStates.Active,
+            attemptstates = attemptStates
+        }, tx, cancellationToken: ct));
+    }
+
+    private static async Task<long> CountBatchActiveMappingsWithIntentStatesAsync(IDbConnection con, IDbTransaction tx,
+        long batchId, string[] attemptStates, string[] intentStates, CancellationToken ct)
+    {
+        const string query = @"SELECT COUNT(*)
+            FROM payout_attempt_intents pai
+            JOIN payout_send_attempts psa ON psa.id = pai.attemptid
+                AND psa.batchid = pai.batchid
+                AND psa.poolid = pai.poolid
+                AND psa.coin = pai.coin
+            JOIN payout_intents pi ON pi.id = pai.intentid
+                AND pi.batchid = pai.batchid
+                AND pi.poolid = pai.poolid
+                AND pi.coin = pai.coin
+            WHERE pai.batchid = @batchid
+              AND pai.state = @active
+              AND psa.state = ANY(@attemptstates)
+              AND pi.state = ANY(@intentstates)";
+
+        return await con.QuerySingleAsync<long>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            active = PayoutAttemptIntentStates.Active,
+            attemptstates = attemptStates,
+            intentstates = intentStates
         }, tx, cancellationToken: ct));
     }
 
