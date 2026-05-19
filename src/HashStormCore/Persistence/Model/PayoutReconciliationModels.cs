@@ -57,3 +57,74 @@ public record PayoutStaleSendReconciliationResult
     public IReadOnlyCollection<long> MarkedBatchIds { get; init; } = Array.Empty<long>();
     public IReadOnlyCollection<long> SkippedBatchIds { get; init; } = Array.Empty<long>();
 }
+
+public record PayoutOperationIdReconciliationRequest
+{
+    public string PoolId { get; init; }
+    public int Limit { get; init; }
+    public DateTime CheckedAt { get; init; }
+}
+
+public record PayoutOperationIdReconciliationResult
+{
+    public int CandidateCount { get; init; }
+    public int ProviderPendingCount { get; init; }
+    public int EvidenceAttachedCount { get; init; }
+    public int AlreadyAttachedCount { get; init; }
+    public int NeedsReviewCount { get; init; }
+    public int ProviderErrorCount { get; init; }
+    public IReadOnlyCollection<long> EvidenceAttachedAttemptIds { get; init; } = Array.Empty<long>();
+}
+
+public enum PayoutOperationStatus
+{
+    Pending,
+    ResolvedTxId,
+    ProvenNoAccept,
+    Unknown
+}
+
+#nullable enable annotations
+public record PayoutOperationStatusResult
+{
+    public PayoutOperationStatus Status { get; init; }
+    public string? TxId { get; init; }
+    public string? ReasonCode { get; init; }
+
+    public static PayoutOperationStatusResult Pending(string? reasonCode = null)
+    {
+        return new PayoutOperationStatusResult
+        {
+            Status = PayoutOperationStatus.Pending,
+            ReasonCode = reasonCode
+        };
+    }
+
+    public static PayoutOperationStatusResult ResolvedTxId(string txId)
+    {
+        return new PayoutOperationStatusResult
+        {
+            Status = PayoutOperationStatus.ResolvedTxId,
+            TxId = txId
+        };
+    }
+
+    public static PayoutOperationStatusResult ProvenNoAccept(string? reasonCode = null)
+    {
+        return new PayoutOperationStatusResult
+        {
+            Status = PayoutOperationStatus.ProvenNoAccept,
+            ReasonCode = reasonCode
+        };
+    }
+
+    public static PayoutOperationStatusResult Unknown(string? reasonCode = null)
+    {
+        return new PayoutOperationStatusResult
+        {
+            Status = PayoutOperationStatus.Unknown,
+            ReasonCode = reasonCode
+        };
+    }
+}
+#nullable restore
