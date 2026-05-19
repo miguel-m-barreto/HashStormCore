@@ -124,7 +124,7 @@ public class PayoutIntentRepositoryTests : PostgresIntegrationTestBase
     }
 
     [PostgresIntegrationFact]
-    public Task MarkAttemptSendingAsync_SupportsMultiplePreparedAttemptsInSameBatch()
+    public Task MarkAttemptSendingAsync_SerializesMultiplePreparedAttemptsInSameBatch()
     {
         return WithRollbackAsync(async (con, tx) =>
         {
@@ -136,6 +136,14 @@ public class PayoutIntentRepositoryTests : PostgresIntegrationTestBase
             Assert.Equal(PayoutBatchStates.Sending, await GetBatchStateAsync(con, tx, batch.Id));
             Assert.Equal(PayoutSendAttemptStates.Sending, await GetAttemptStateAsync(con, tx, first.Id));
             Assert.Equal(PayoutIntentStates.Sending, await GetIntentStateAsync(con, tx, batch.Intents[0].Id));
+
+            Assert.False(await repo.MarkAttemptSendingAsync(con, tx, second.Id, batch.PoolId, UtcNow(), Ct));
+            Assert.Equal(PayoutBatchStates.Sending, await GetBatchStateAsync(con, tx, batch.Id));
+            Assert.Equal(PayoutSendAttemptStates.Prepared, await GetAttemptStateAsync(con, tx, second.Id));
+            Assert.Equal(PayoutIntentStates.Reserved, await GetIntentStateAsync(con, tx, batch.Intents[1].Id));
+
+            Assert.True(await repo.MarkAttemptAcceptedAsync(con, tx, first.Id, batch.PoolId,
+                NewEvidence(PayoutExternalConfirmationKinds.TxId, "txid-multi-send-1"), UtcNow(), Ct));
 
             Assert.True(await repo.MarkAttemptSendingAsync(con, tx, second.Id, batch.PoolId, UtcNow(), Ct));
             Assert.Equal(PayoutBatchStates.Sending, await GetBatchStateAsync(con, tx, batch.Id));
@@ -149,15 +157,27 @@ public class PayoutIntentRepositoryTests : PostgresIntegrationTestBase
     {
         return WithRollbackAsync(async (con, tx) =>
         {
-            var batch = await CreateBatchAsync(con, tx, NewPoolId("send_ineligible"), ("addr1", 1m));
-            var attempt = await CreateAttemptAsync(con, tx, batch, 1, "send-ineligible", batch.Intents[0].Id);
+            var ineligibleStates = new[]
+            {
+                PayoutBatchStates.Submitted,
+                PayoutBatchStates.AmbiguousRequiresReview,
+                PayoutBatchStates.Cancelled,
+                PayoutBatchStates.Settled,
+                PayoutBatchStates.Failed
+            };
 
-            await con.ExecuteAsync("UPDATE payout_batches SET state = @state WHERE id = @batchid",
-                new { state = PayoutBatchStates.Submitted, batchid = batch.Id }, tx);
+            foreach(var state in ineligibleStates)
+            {
+                var batch = await CreateBatchAsync(con, tx, NewPoolId($"send_ineligible_{state}"), ("addr1", 1m));
+                var attempt = await CreateAttemptAsync(con, tx, batch, 1, $"send-ineligible-{state}", batch.Intents[0].Id);
 
-            Assert.False(await repo.MarkAttemptSendingAsync(con, tx, attempt.Id, batch.PoolId, UtcNow(), Ct));
-            Assert.Equal(PayoutSendAttemptStates.Prepared, await GetAttemptStateAsync(con, tx, attempt.Id));
-            Assert.Equal(PayoutIntentStates.Reserved, await GetIntentStateAsync(con, tx, batch.Intents[0].Id));
+                await con.ExecuteAsync("UPDATE payout_batches SET state = @state WHERE id = @batchid",
+                    new { state, batchid = batch.Id }, tx);
+
+                Assert.False(await repo.MarkAttemptSendingAsync(con, tx, attempt.Id, batch.PoolId, UtcNow(), Ct));
+                Assert.Equal(PayoutSendAttemptStates.Prepared, await GetAttemptStateAsync(con, tx, attempt.Id));
+                Assert.Equal(PayoutIntentStates.Reserved, await GetIntentStateAsync(con, tx, batch.Intents[0].Id));
+            }
         });
     }
 
@@ -234,6 +254,41 @@ public class PayoutIntentRepositoryTests : PostgresIntegrationTestBase
     }
 
     [PostgresIntegrationFact]
+    public Task MarkAttemptAmbiguousAsync_PreservesPreparedSiblings()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("ambiguous_sibling");
+            var batch = await CreateBatchAsync(con, tx, poolId, ("addr1", 1m), ("addr2", 2m));
+            var target = await CreateAttemptAsync(con, tx, batch, 1, "ambiguous-sibling-target", batch.Intents[0].Id);
+            var sibling = await CreateAttemptAsync(con, tx, batch, 2, "ambiguous-sibling-prepared", batch.Intents[1].Id);
+
+            await repo.MarkAttemptSendingAsync(con, tx, target.Id, poolId, UtcNow(), Ct);
+
+            var paymentCount = await CountPoolRowsAsync(con, tx, "payments", poolId);
+            var balanceChangeCount = await CountPoolRowsAsync(con, tx, "balance_changes", poolId);
+            var balanceCount = await CountPoolRowsAsync(con, tx, "balances", poolId);
+
+            Assert.True(await repo.MarkAttemptAmbiguousAsync(con, tx, target.Id, poolId, "timeout", null, UtcNow(), Ct));
+
+            Assert.Equal(PayoutBatchStates.AmbiguousRequiresReview, await GetBatchStateAsync(con, tx, batch.Id));
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview, await GetAttemptStateAsync(con, tx, target.Id));
+            Assert.Equal(PayoutAttemptIntentStates.AmbiguousRequiresReview,
+                await GetAttemptIntentStateAsync(con, tx, target.Id, batch.Intents[0].Id));
+            Assert.Equal(PayoutIntentStates.AmbiguousRequiresReview, await GetIntentStateAsync(con, tx, batch.Intents[0].Id));
+
+            Assert.Equal(PayoutSendAttemptStates.Prepared, await GetAttemptStateAsync(con, tx, sibling.Id));
+            Assert.Equal(PayoutAttemptIntentStates.Active,
+                await GetAttemptIntentStateAsync(con, tx, sibling.Id, batch.Intents[1].Id));
+            Assert.Equal(PayoutIntentStates.Reserved, await GetIntentStateAsync(con, tx, batch.Intents[1].Id));
+
+            Assert.Equal(paymentCount, await CountPoolRowsAsync(con, tx, "payments", poolId));
+            Assert.Equal(balanceChangeCount, await CountPoolRowsAsync(con, tx, "balance_changes", poolId));
+            Assert.Equal(balanceCount, await CountPoolRowsAsync(con, tx, "balances", poolId));
+        });
+    }
+
+    [PostgresIntegrationFact]
     public Task MarkStaleBatchAmbiguousAsync_QuarantinesSingleSendingAttemptBatch()
     {
         return WithRollbackAsync(async (con, tx) =>
@@ -265,7 +320,8 @@ public class PayoutIntentRepositoryTests : PostgresIntegrationTestBase
             var preparedSibling = await CreateAttemptAsync(con, tx, batch, 3, "stale-multi-c", batch.Intents[2].Id);
 
             await repo.MarkAttemptSendingAsync(con, tx, stale.Id, batch.PoolId, UtcNow(), Ct);
-            await repo.MarkAttemptSendingAsync(con, tx, sendingSibling.Id, batch.PoolId, UtcNow(), Ct);
+            await SetAttemptStateAsync(con, tx, sendingSibling.Id, PayoutSendAttemptStates.Sending);
+            await SetIntentStateAsync(con, tx, batch.Intents[1].Id, PayoutIntentStates.Sending);
 
             Assert.True(await repo.MarkStaleBatchAmbiguousAsync(con, tx, batch.Id, stale.Id, batch.PoolId,
                 "stale_sending_requires_review", null, UtcNow(), Ct));
@@ -673,6 +729,12 @@ public class PayoutIntentRepositoryTests : PostgresIntegrationTestBase
     {
         return con.ExecuteAsync("UPDATE payout_intents SET state = @state WHERE id = @intentid",
             new { state, intentid = intentId }, tx);
+    }
+
+    private static Task SetAttemptStateAsync(NpgsqlConnection con, NpgsqlTransaction tx, long attemptId, string state)
+    {
+        return con.ExecuteAsync("UPDATE payout_send_attempts SET state = @state WHERE id = @attemptid",
+            new { state, attemptid = attemptId }, tx);
     }
 
     private static async Task SetFailedNoAcceptStateAsync(NpgsqlConnection con, NpgsqlTransaction tx, long attemptId, long intentId)

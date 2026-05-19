@@ -259,35 +259,47 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         con = RequireConnection(con);
         tx = RequireTransaction(tx);
 
-        const string loadAttemptQuery = @"SELECT * FROM payout_send_attempts
-            WHERE id = @attemptid AND poolid = @poolid AND state = @prepared
-            FOR UPDATE";
-
-        var attempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(loadAttemptQuery, new
-        {
-            attemptid = attemptId,
-            poolid = poolId,
-            prepared = PayoutSendAttemptStates.Prepared
-        }, tx, cancellationToken: ct));
-
-        if(attempt == null)
-            return false;
-
-        const string loadBatchQuery = @"SELECT * FROM payout_batches
-            WHERE id = @batchid AND poolid = @poolid AND coin = @coin
-            FOR UPDATE";
+        const string loadBatchQuery = @"SELECT b.*
+            FROM payout_batches b
+            JOIN payout_send_attempts psa ON psa.batchid = b.id
+                AND psa.poolid = b.poolid
+                AND psa.coin = b.coin
+            WHERE psa.id = @attemptid AND psa.poolid = @poolid
+            FOR UPDATE OF b";
 
         var batch = await con.QuerySingleOrDefaultAsync<Entities.PayoutBatch>(new CommandDefinition(loadBatchQuery, new
         {
-            batchid = attempt.BatchId,
-            poolid = attempt.PoolId,
-            coin = attempt.Coin
+            attemptid = attemptId,
+            poolid = poolId
         }, tx, cancellationToken: ct));
 
         if(batch == null)
             return false;
 
         if(batch.State != PayoutBatchStates.Reserved && batch.State != PayoutBatchStates.Sending)
+            return false;
+
+        await LockBatchAttemptsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchAttemptMappingsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchIntentsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+
+        const string loadAttemptQuery = @"SELECT * FROM payout_send_attempts
+            WHERE id = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin";
+
+        var attempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(loadAttemptQuery, new
+        {
+            attemptid = attemptId,
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin
+        }, tx, cancellationToken: ct));
+
+        if(attempt == null || attempt.State != PayoutSendAttemptStates.Prepared)
+            return false;
+
+        var siblingSendingCount = await CountSiblingAttemptsInStateAsync(con, tx, attempt.Id, batch.Id, batch.PoolId,
+            batch.Coin, PayoutSendAttemptStates.Sending, ct);
+        if(siblingSendingCount > 0)
             return false;
 
         var activeMappingCount = await CountAttemptMappingsAsync(con, tx, attempt.Id, PayoutAttemptIntentStates.Active, ct);
@@ -356,33 +368,30 @@ public class PayoutIntentRepository : IPayoutIntentRepository
 
         ValidateEvidence(evidence);
 
+        var batch = await LoadBatchForAttemptForUpdateAsync(con, tx, attemptId, poolId, ct);
+
+        if(batch == null)
+            return false;
+
+        if(batch.State != PayoutBatchStates.Sending)
+            return false;
+
+        await LockBatchAttemptsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchAttemptMappingsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchIntentsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+
         const string loadAttemptQuery = @"SELECT * FROM payout_send_attempts
-            WHERE id = @attemptid AND poolid = @poolid AND state = @sending
-            FOR UPDATE";
+            WHERE id = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin";
 
         var attempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(loadAttemptQuery, new
         {
             attemptid = attemptId,
-            poolid = poolId,
-            sending = PayoutSendAttemptStates.Sending
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin
         }, tx, cancellationToken: ct));
 
-        if(attempt == null)
-            return false;
-
-        const string loadBatchQuery = @"SELECT * FROM payout_batches
-            WHERE id = @batchid AND poolid = @poolid AND coin = @coin AND state = @sending
-            FOR UPDATE";
-
-        var batch = await con.QuerySingleOrDefaultAsync<Entities.PayoutBatch>(new CommandDefinition(loadBatchQuery, new
-        {
-            batchid = attempt.BatchId,
-            poolid = attempt.PoolId,
-            coin = attempt.Coin,
-            sending = PayoutBatchStates.Sending
-        }, tx, cancellationToken: ct));
-
-        if(batch == null)
+        if(attempt == null || attempt.State != PayoutSendAttemptStates.Sending)
             return false;
 
         var activeMappingCount = await CountAttemptMappingsAsync(con, tx, attempt.Id, PayoutAttemptIntentStates.Active, ct);
@@ -700,14 +709,25 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         tx = RequireTransaction(tx);
         ValidateError(errorCode, errorMessage);
 
+        var batch = await LoadBatchForAttemptForUpdateAsync(con, tx, attemptId, poolId, ct);
+
+        if(batch == null)
+            return false;
+
+        await LockBatchAttemptsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchAttemptMappingsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchIntentsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+
         const string loadAttemptQuery = @"SELECT * FROM payout_send_attempts
-            WHERE id = @attemptid AND poolid = @poolid AND state = ANY(@expectedstates)
-            FOR UPDATE";
+            WHERE id = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin
+              AND state = ANY(@expectedstates)";
 
         var attempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(loadAttemptQuery, new
         {
             attemptid = attemptId,
-            poolid = poolId,
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin,
             expectedstates = new[] { PayoutSendAttemptStates.Prepared, PayoutSendAttemptStates.Sending }
         }, tx, cancellationToken: ct));
 
@@ -748,7 +768,7 @@ public class PayoutIntentRepository : IPayoutIntentRepository
             PayoutAttemptIntentStates.FailedPreAccept, expectedIntentState, PayoutIntentStates.Reserved,
             errorCode, errorMessage, activeMappingCount, updated, ct);
 
-        await MarkBatchReservedIfNoBlockingAttemptsAsync(con, tx, attempt.BatchId, updated, ct);
+        await MarkBatchReservedIfNoBlockingAttemptsAsync(con, tx, batch.Id, updated, ct);
         return true;
     }
 
@@ -759,14 +779,25 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         tx = RequireTransaction(tx);
         ValidateError(errorCode, errorMessage);
 
+        var batch = await LoadBatchForAttemptForUpdateAsync(con, tx, attemptId, poolId, ct);
+
+        if(batch == null)
+            return false;
+
+        await LockBatchAttemptsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchAttemptMappingsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchIntentsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+
         const string loadAttemptQuery = @"SELECT * FROM payout_send_attempts
-            WHERE id = @attemptid AND poolid = @poolid AND state = @ambiguous
-            FOR UPDATE";
+            WHERE id = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin
+              AND state = @ambiguous";
 
         var attempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(loadAttemptQuery, new
         {
             attemptid = attemptId,
-            poolid = poolId,
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin,
             ambiguous = PayoutSendAttemptStates.AmbiguousRequiresReview
         }, tx, cancellationToken: ct));
 
@@ -807,7 +838,7 @@ public class PayoutIntentRepository : IPayoutIntentRepository
             PayoutIntentStates.AmbiguousRequiresReview, PayoutIntentStates.Reserved, errorCode, errorMessage,
             ambiguousMappingCount, updated, ct);
 
-        await MarkBatchReservedIfNoBlockingAttemptsAsync(con, tx, attempt.BatchId, updated, ct);
+        await MarkBatchReservedIfNoBlockingAttemptsAsync(con, tx, batch.Id, updated, ct);
         return true;
     }
 
@@ -1011,6 +1042,14 @@ public class PayoutIntentRepository : IPayoutIntentRepository
             WHERE psa.poolid = @poolid
               AND psa.state = @prepared
               AND b.state = ANY(@batchstates)
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM payout_send_attempts sibling
+                  WHERE sibling.batchid = psa.batchid
+                    AND sibling.poolid = psa.poolid
+                    AND sibling.coin = psa.coin
+                    AND sibling.state = @sending
+              )
             ORDER BY psa.created, psa.id
             LIMIT @limit
             FOR UPDATE OF psa SKIP LOCKED";
@@ -1019,6 +1058,7 @@ public class PayoutIntentRepository : IPayoutIntentRepository
             {
                 poolid = poolId,
                 prepared = PayoutSendAttemptStates.Prepared,
+                sending = PayoutSendAttemptStates.Sending,
                 batchstates = new[] { PayoutBatchStates.Reserved, PayoutBatchStates.Sending },
                 limit
             }, tx, cancellationToken: ct)))
@@ -1037,14 +1077,22 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         if(attemptId <= 0)
             throw new ArgumentOutOfRangeException(nameof(attemptId), "Payout send attempt id must be greater than zero");
 
+        var batch = await LoadBatchForAttemptForUpdateAsync(con, tx, attemptId, poolId, ct);
+
+        if(batch == null)
+            return null;
+
+        await LockBatchAttemptsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+
         const string query = @"SELECT * FROM payout_send_attempts
-            WHERE id = @attemptid AND poolid = @poolid
-            FOR UPDATE";
+            WHERE id = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin";
 
         var attempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(query, new
         {
             attemptid = attemptId,
-            poolid = poolId
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin
         }, tx, cancellationToken: ct));
 
         return attempt == null ? null : MapAttempt(attempt);
@@ -1363,18 +1411,30 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         con = RequireConnection(con);
         tx = RequireTransaction(tx);
 
+        var batch = await LoadBatchForAttemptForUpdateAsync(con, tx, attemptId, poolId, ct);
+
+        if(batch == null)
+            return false;
+
+        if(batch.State != PayoutBatchStates.Sending)
+            return false;
+
+        await LockBatchAttemptsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchAttemptMappingsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchIntentsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+
         const string loadAttemptQuery = @"SELECT * FROM payout_send_attempts
-            WHERE id = @attemptid AND poolid = @poolid AND state = @sending
-            FOR UPDATE";
+            WHERE id = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin";
 
         var attempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(loadAttemptQuery, new
         {
             attemptid = attemptId,
-            poolid = poolId,
-            sending = PayoutSendAttemptStates.Sending
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin
         }, tx, cancellationToken: ct));
 
-        if(attempt == null)
+        if(attempt == null || attempt.State != PayoutSendAttemptStates.Sending)
             return false;
 
         var activeMappingCount = await CountAttemptMappingsAsync(con, tx, attempt.Id, PayoutAttemptIntentStates.Active, ct);
@@ -1413,7 +1473,7 @@ public class PayoutIntentRepository : IPayoutIntentRepository
 
         var updatedBatchRows = await con.ExecuteAsync(new CommandDefinition(batchQuery, new
         {
-            batchid = attempt.BatchId,
+            batchid = batch.Id,
             sending = PayoutBatchStates.Sending,
             ambiguous = PayoutBatchStates.AmbiguousRequiresReview,
             errorcode = errorCode,
@@ -1495,6 +1555,24 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         }, tx, cancellationToken: ct));
     }
 
+    private static async Task<Entities.PayoutBatch?> LoadBatchForAttemptForUpdateAsync(IDbConnection con, IDbTransaction tx,
+        long attemptId, string poolId, CancellationToken ct)
+    {
+        const string query = @"SELECT b.*
+            FROM payout_batches b
+            JOIN payout_send_attempts psa ON psa.batchid = b.id
+                AND psa.poolid = b.poolid
+                AND psa.coin = b.coin
+            WHERE psa.id = @attemptid AND psa.poolid = @poolid
+            FOR UPDATE OF b";
+
+        return await con.QuerySingleOrDefaultAsync<Entities.PayoutBatch>(new CommandDefinition(query, new
+        {
+            attemptid = attemptId,
+            poolid = poolId
+        }, tx, cancellationToken: ct));
+    }
+
     private static async Task<long> CountAttemptMappingsAsync(IDbConnection con, IDbTransaction tx, long attemptId,
         string mappingState, CancellationToken ct)
     {
@@ -1558,6 +1636,26 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         return await con.QuerySingleAsync<long>(new CommandDefinition(query, new
         {
             batchid = batchId
+        }, tx, cancellationToken: ct));
+    }
+
+    private static async Task<long> CountSiblingAttemptsInStateAsync(IDbConnection con, IDbTransaction tx, long attemptId,
+        long batchId, string poolId, string coin, string attemptState, CancellationToken ct)
+    {
+        const string query = @"SELECT COUNT(*) FROM payout_send_attempts
+            WHERE batchid = @batchid
+              AND poolid = @poolid
+              AND coin = @coin
+              AND id <> @attemptid
+              AND state = @attemptstate";
+
+        return await con.QuerySingleAsync<long>(new CommandDefinition(query, new
+        {
+            attemptid = attemptId,
+            batchid = batchId,
+            poolid = poolId,
+            coin,
+            attemptstate = attemptState
         }, tx, cancellationToken: ct));
     }
 

@@ -50,6 +50,11 @@ public class PayoutSendExecutionRepositoryTests : PostgresIntegrationTestBase
             var otherBatch = await CreateBatchAsync(con, tx, otherPoolId, now, ("addr-a", 1m));
             await CreateAttemptAsync(con, tx, otherBatch, 1, "execution-other-pool", now, otherBatch.Intents[0].Id);
 
+            var blockedBySendingSibling = await repo.GetPreparedAttemptsForExecutionAsync(con, tx, poolId, 10, Ct);
+            Assert.Empty(blockedBySendingSibling);
+
+            await SetAttemptStateAsync(con, tx, ignoredSending.Id, PayoutSendAttemptStates.Accepted);
+
             var limited = await repo.GetPreparedAttemptsForExecutionAsync(con, tx, poolId, 1, Ct);
             Assert.Equal(new[] { preparedFirst.Id }, limited.Select(x => x.Id).ToArray());
 
@@ -65,6 +70,30 @@ public class PayoutSendExecutionRepositoryTests : PostgresIntegrationTestBase
 
             var fromSendingBatch = await repo.GetPreparedAttemptsForExecutionAsync(con, tx, poolId, 10, Ct);
             Assert.Equal(new[] { preparedFirst.Id, preparedSecond.Id }, fromSendingBatch.Select(x => x.Id).ToArray());
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task GetPreparedAttemptsForExecutionAsync_HidesPreparedAttemptsOnlyWhileSiblingIsSending()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("execution_serial");
+            var now = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            var batch = await CreateBatchAsync(con, tx, poolId, now, ("addr-a", 1m), ("addr-b", 2m));
+            var sending = await CreateAttemptAsync(con, tx, batch, 1, "execution-serial-sending", now, batch.Intents[0].Id);
+            var prepared = await CreateAttemptAsync(con, tx, batch, 2, "execution-serial-prepared", now.AddSeconds(1), batch.Intents[1].Id);
+
+            await SetBatchStateAsync(con, tx, batch.Id, PayoutBatchStates.Sending);
+            await SetAttemptStateAsync(con, tx, sending.Id, PayoutSendAttemptStates.Sending);
+
+            var blocked = await repo.GetPreparedAttemptsForExecutionAsync(con, tx, poolId, 10, Ct);
+            Assert.Empty(blocked);
+
+            await SetAttemptStateAsync(con, tx, sending.Id, PayoutSendAttemptStates.Accepted);
+
+            var unblocked = await repo.GetPreparedAttemptsForExecutionAsync(con, tx, poolId, 10, Ct);
+            Assert.Equal(new[] { prepared.Id }, unblocked.Select(x => x.Id).ToArray());
         });
     }
 
