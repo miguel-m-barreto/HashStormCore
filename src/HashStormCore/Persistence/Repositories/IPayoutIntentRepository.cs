@@ -36,6 +36,8 @@ public interface IPayoutIntentRepository
 #nullable restore
     Task<PayoutReconciliationAttemptSummary[]> GetStaleSendingAttemptsForUpdateAsync(IDbConnection con, IDbTransaction tx,
         string poolId, DateTime olderThan, int limit, CancellationToken ct);
+    Task<PayoutStaleSendingBatchCandidate[]> GetStaleSendingBatchesForUpdateAsync(IDbConnection con, IDbTransaction tx,
+        string poolId, DateTime olderThan, int limit, CancellationToken ct);
     Task<PayoutReconciliationAttemptSummary[]> GetAmbiguousAttemptsAsync(IDbConnection con, IDbTransaction tx,
         string poolId, int limit, CancellationToken ct);
     Task<PayoutReconciliationAttemptSummary[]> GetAttemptsWithOperationIdAsync(IDbConnection con, IDbTransaction tx,

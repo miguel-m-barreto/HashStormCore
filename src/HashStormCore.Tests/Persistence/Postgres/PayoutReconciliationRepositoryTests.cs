@@ -38,7 +38,8 @@ public class PayoutReconciliationRepositoryTests : PostgresIntegrationTestBase
             var preparedAttempt = await CreateAttemptAsync(con, tx, batch, 3, "stale-prepared", old.AddSeconds(2), batch.Intents[2].Id);
 
             await repo.MarkAttemptSendingAsync(con, tx, stale.Id, poolId, old, Ct);
-            await repo.MarkAttemptSendingAsync(con, tx, freshAttempt.Id, poolId, fresh, Ct);
+            await SetAttemptStateAsync(con, tx, freshAttempt.Id, PayoutSendAttemptStates.Sending);
+            await SetIntentStateAsync(con, tx, batch.Intents[1].Id, PayoutIntentStates.Sending);
             await SetAttemptUpdatedAsync(con, tx, stale.Id, old);
             await SetAttemptUpdatedAsync(con, tx, freshAttempt.Id, fresh);
 
@@ -74,8 +75,10 @@ public class PayoutReconciliationRepositoryTests : PostgresIntegrationTestBase
             var third = await CreateAttemptAsync(con, tx, batch, 3, "stale-order-third", start, batch.Intents[2].Id);
 
             await repo.MarkAttemptSendingAsync(con, tx, second.Id, poolId, start.AddMinutes(2), Ct);
-            await repo.MarkAttemptSendingAsync(con, tx, first.Id, poolId, start.AddMinutes(1), Ct);
-            await repo.MarkAttemptSendingAsync(con, tx, third.Id, poolId, start.AddMinutes(3), Ct);
+            await SetAttemptStateAsync(con, tx, first.Id, PayoutSendAttemptStates.Sending);
+            await SetIntentStateAsync(con, tx, batch.Intents[1].Id, PayoutIntentStates.Sending);
+            await SetAttemptStateAsync(con, tx, third.Id, PayoutSendAttemptStates.Sending);
+            await SetIntentStateAsync(con, tx, batch.Intents[2].Id, PayoutIntentStates.Sending);
             await SetAttemptUpdatedAsync(con, tx, second.Id, start.AddMinutes(2));
             await SetAttemptUpdatedAsync(con, tx, first.Id, start.AddMinutes(1));
             await SetAttemptUpdatedAsync(con, tx, third.Id, start.AddMinutes(3));
@@ -83,6 +86,43 @@ public class PayoutReconciliationRepositoryTests : PostgresIntegrationTestBase
             var results = await repo.GetStaleSendingAttemptsForUpdateAsync(con, tx, poolId, start.AddHours(1), 2, Ct);
 
             Assert.Equal(new[] { first.Id, second.Id }, results.Select(x => x.AttemptId).ToArray());
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task GetStaleSendingBatchesForUpdateAsync_ReturnsOldestStaleAttemptPerSendingBatch()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("reconcile_stale_batches");
+            var start = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            var cutoff = start.AddMinutes(10);
+            var batch = await CreateBatchAsync(con, tx, poolId, start, ("addr-a", 1m), ("addr-b", 2m), ("addr-c", 3m));
+            var firstStale = await CreateAttemptAsync(con, tx, batch, 1, "stale-batch-first", start, batch.Intents[0].Id);
+            var oldestStale = await CreateAttemptAsync(con, tx, batch, 2, "stale-batch-oldest", start.AddSeconds(1), batch.Intents[1].Id);
+            var preparedSibling = await CreateAttemptAsync(con, tx, batch, 3, "stale-batch-prepared", start.AddSeconds(2), batch.Intents[2].Id);
+
+            await repo.MarkAttemptSendingAsync(con, tx, firstStale.Id, poolId, start.AddMinutes(2), Ct);
+            await SetAttemptUpdatedAsync(con, tx, firstStale.Id, start.AddMinutes(2));
+            await SetAttemptStateAsync(con, tx, oldestStale.Id, PayoutSendAttemptStates.Sending);
+            await SetIntentStateAsync(con, tx, batch.Intents[1].Id, PayoutIntentStates.Sending);
+            await SetAttemptUpdatedAsync(con, tx, oldestStale.Id, start.AddMinutes(1));
+
+            var candidates = await repo.GetStaleSendingBatchesForUpdateAsync(con, tx, poolId, cutoff, 10, Ct);
+
+            var candidate = Assert.Single(candidates);
+            Assert.Equal(batch.Id, candidate.BatchId);
+            Assert.Equal(oldestStale.Id, candidate.StaleAttemptId);
+            Assert.All(candidates, item =>
+            {
+                Assert.Equal(poolId, item.PoolId);
+                Assert.Equal(PayoutBatchStates.Sending, item.BatchState);
+                Assert.Equal(PayoutSendAttemptStates.Sending, item.AttemptState);
+            });
+            Assert.Equal(PayoutSendAttemptStates.Prepared, await GetAttemptStateAsync(con, tx, preparedSibling.Id));
+
+            var limited = await repo.GetStaleSendingBatchesForUpdateAsync(con, tx, poolId, cutoff, 1, Ct);
+            Assert.Equal(new[] { batch.Id }, limited.Select(x => x.BatchId).ToArray());
         });
     }
 
@@ -199,6 +239,18 @@ public class PayoutReconciliationRepositoryTests : PostgresIntegrationTestBase
 
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
                 repo.GetStaleSendingAttemptsForUpdateAsync(con, tx, "pool", UtcNow(), 0, Ct));
+
+            await Assert.ThrowsAsync<ArgumentNullException>(() =>
+                repo.GetStaleSendingBatchesForUpdateAsync(null, tx, "pool", UtcNow(), 1, Ct));
+
+            await Assert.ThrowsAsync<ArgumentNullException>(() =>
+                repo.GetStaleSendingBatchesForUpdateAsync(con, null, "pool", UtcNow(), 1, Ct));
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                repo.GetStaleSendingBatchesForUpdateAsync(con, tx, " ", UtcNow(), 1, Ct));
+
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+                repo.GetStaleSendingBatchesForUpdateAsync(con, tx, "pool", UtcNow(), 0, Ct));
 
             await Assert.ThrowsAsync<ArgumentNullException>(() =>
                 repo.GetAmbiguousAttemptsAsync(con, null, "pool", 1, Ct));
@@ -332,6 +384,18 @@ public class PayoutReconciliationRepositoryTests : PostgresIntegrationTestBase
     {
         return con.ExecuteAsync("UPDATE payout_send_attempts SET updated = @updated WHERE id = @attemptid",
             new { attemptid = attemptId, updated }, tx);
+    }
+
+    private static Task SetAttemptStateAsync(NpgsqlConnection con, NpgsqlTransaction tx, long attemptId, string state)
+    {
+        return con.ExecuteAsync("UPDATE payout_send_attempts SET state = @state WHERE id = @attemptid",
+            new { attemptid = attemptId, state }, tx);
+    }
+
+    private static Task SetIntentStateAsync(NpgsqlConnection con, NpgsqlTransaction tx, long intentId, string state)
+    {
+        return con.ExecuteAsync("UPDATE payout_intents SET state = @state WHERE id = @intentid",
+            new { intentid = intentId, state }, tx);
     }
 
     private static Task SetBatchStateAsync(NpgsqlConnection con, NpgsqlTransaction tx, long batchId, string state)

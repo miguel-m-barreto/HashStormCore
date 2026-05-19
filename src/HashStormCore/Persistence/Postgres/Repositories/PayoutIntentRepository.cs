@@ -1202,6 +1202,51 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         }, tx, cancellationToken: ct))).ToArray();
     }
 
+    public async Task<PayoutStaleSendingBatchCandidate[]> GetStaleSendingBatchesForUpdateAsync(IDbConnection con,
+        IDbTransaction tx, string poolId, DateTime olderThan, int limit, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+        RequirePositiveLimit(limit, nameof(limit), "Stale payout batch query limit must be greater than zero");
+
+        const string query = @"SELECT
+                b.id AS BatchId,
+                stale.id AS StaleAttemptId,
+                b.poolid AS PoolId,
+                b.coin AS Coin,
+                b.state AS BatchState,
+                stale.state AS AttemptState,
+                stale.updated AS AttemptUpdated,
+                stale.created AS AttemptCreated
+            FROM payout_batches b
+            JOIN LATERAL (
+                SELECT psa.id, psa.state, psa.updated, psa.created
+                FROM payout_send_attempts psa
+                WHERE psa.batchid = b.id
+                  AND psa.poolid = b.poolid
+                  AND psa.coin = b.coin
+                  AND psa.state = @attemptsending
+                  AND psa.updated < @olderthan
+                ORDER BY psa.updated, psa.id
+                LIMIT 1
+            ) stale ON true
+            WHERE b.poolid = @poolid
+              AND b.state = @batchsending
+            ORDER BY stale.updated, stale.id
+            LIMIT @limit
+            FOR UPDATE OF b SKIP LOCKED";
+
+        return (await con.QueryAsync<PayoutStaleSendingBatchCandidate>(new CommandDefinition(query, new
+        {
+            poolid = poolId,
+            attemptsending = PayoutSendAttemptStates.Sending,
+            batchsending = PayoutBatchStates.Sending,
+            olderthan = olderThan,
+            limit
+        }, tx, cancellationToken: ct))).ToArray();
+    }
+
     public async Task<PayoutReconciliationAttemptSummary[]> GetAmbiguousAttemptsAsync(IDbConnection con, IDbTransaction tx,
         string poolId, int limit, CancellationToken ct)
     {
