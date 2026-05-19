@@ -506,6 +506,185 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         return MarkSendingAttemptAmbiguousAsync(con, tx, attemptId, poolId, errorCode, errorMessage, updated, ct);
     }
 
+    public async Task<bool> MarkAmbiguousAttemptAcceptedAfterReviewAsync(IDbConnection con, IDbTransaction tx,
+        long batchId, long attemptId, string poolId, PayoutAttemptEvidence evidence, DateTime updated, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+        ValidateEvidence(evidence);
+
+        if(batchId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(batchId), "Payout batch id must be greater than zero");
+
+        if(attemptId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(attemptId), "Payout send attempt id must be greater than zero");
+
+        const string loadBatchQuery = @"SELECT * FROM payout_batches
+            WHERE id = @batchid AND poolid = @poolid
+            FOR UPDATE";
+
+        var batch = await con.QuerySingleOrDefaultAsync<Entities.PayoutBatch>(new CommandDefinition(loadBatchQuery, new
+        {
+            batchid = batchId,
+            poolid = poolId
+        }, tx, cancellationToken: ct));
+
+        if(batch == null)
+            return false;
+
+        if(batch.State != PayoutBatchStates.AmbiguousRequiresReview)
+            return false;
+
+        await LockBatchAttemptsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchAttemptMappingsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+        await LockBatchIntentsAsync(con, tx, batch.Id, batch.PoolId, batch.Coin, ct);
+
+        const string loadAttemptQuery = @"SELECT * FROM payout_send_attempts
+            WHERE id = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin";
+
+        var attempt = await con.QuerySingleOrDefaultAsync<Entities.PayoutSendAttempt>(new CommandDefinition(loadAttemptQuery, new
+        {
+            attemptid = attemptId,
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin
+        }, tx, cancellationToken: ct));
+
+        if(attempt == null || attempt.State != PayoutSendAttemptStates.AmbiguousRequiresReview)
+            return false;
+
+        var ambiguousMappingCount = await CountAttemptMappingsAsync(con, tx, attempt.Id,
+            PayoutAttemptIntentStates.AmbiguousRequiresReview, ct);
+        if(ambiguousMappingCount == 0)
+            throw new InvalidOperationException("Ambiguous payout attempt has no ambiguous intent mappings");
+
+        var ambiguousIntentCount = await CountAttemptMappingsWithIntentStateAsync(con, tx, attempt.Id,
+            PayoutAttemptIntentStates.AmbiguousRequiresReview, PayoutIntentStates.AmbiguousRequiresReview, ct);
+        EnsureRowCount(ambiguousIntentCount, ambiguousMappingCount, "ambiguous payout intents for reviewed accepted transition");
+
+        if(!await HasAttemptConfirmationAsync(con, tx, attempt.BatchId, attempt.Id, attempt.PoolId, evidence.Kind,
+               evidence.Value, ct))
+        {
+            await InsertExternalConfirmationAsync(con, tx, new PayoutExternalConfirmation
+            {
+                PoolId = attempt.PoolId,
+                Coin = attempt.Coin,
+                BatchId = attempt.BatchId,
+                AttemptId = attempt.Id,
+                Kind = evidence.Kind,
+                Value = evidence.Value,
+                Created = updated
+            }, ct);
+        }
+
+        var isOperationId = evidence.Kind == PayoutExternalConfirmationKinds.OperationId;
+        var transactionConfirmationData = isOperationId ? null : evidence.Value;
+        var externalOperationId = isOperationId ? evidence.Value : null;
+
+        const string attemptQuery = @"UPDATE payout_send_attempts
+            SET state = @accepted, transactionconfirmationdata = COALESCE(@transactionconfirmationdata, transactionconfirmationdata),
+                externaloperationid = COALESCE(@externaloperationid, externaloperationid), updated = @updated, completed = @updated
+            WHERE id = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin AND state = @ambiguous";
+
+        var updatedAttemptRows = await con.ExecuteAsync(new CommandDefinition(attemptQuery, new
+        {
+            attemptid = attempt.Id,
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin,
+            ambiguous = PayoutSendAttemptStates.AmbiguousRequiresReview,
+            accepted = PayoutSendAttemptStates.Accepted,
+            transactionconfirmationdata = transactionConfirmationData,
+            externaloperationid = externalOperationId,
+            updated
+        }, tx, cancellationToken: ct));
+
+        EnsureRowCount(updatedAttemptRows, 1, "ambiguous payout attempt for reviewed accepted transition");
+
+        const string intentsQuery = @"UPDATE payout_intents pi
+            SET state = @submitted, transactionconfirmationdata = COALESCE(@transactionconfirmationdata, pi.transactionconfirmationdata),
+                updated = @updated
+            FROM payout_attempt_intents pai
+            WHERE pai.intentid = pi.id AND pai.attemptid = @attemptid
+              AND pai.batchid = @batchid AND pai.poolid = @poolid AND pai.coin = @coin
+              AND pai.state = @ambiguousmapping AND pi.state = @ambiguousintent";
+
+        var updatedIntentRows = await con.ExecuteAsync(new CommandDefinition(intentsQuery, new
+        {
+            attemptid = attempt.Id,
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin,
+            ambiguousmapping = PayoutAttemptIntentStates.AmbiguousRequiresReview,
+            ambiguousintent = PayoutIntentStates.AmbiguousRequiresReview,
+            submitted = PayoutIntentStates.Submitted,
+            transactionconfirmationdata = transactionConfirmationData,
+            updated
+        }, tx, cancellationToken: ct));
+
+        EnsureRowCount(updatedIntentRows, ambiguousMappingCount, "ambiguous payout intents for reviewed accepted transition");
+
+        const string mappingsQuery = @"UPDATE payout_attempt_intents
+            SET state = @accepted, transactionconfirmationdata = COALESCE(@transactionconfirmationdata, transactionconfirmationdata),
+                updated = @updated
+            WHERE attemptid = @attemptid AND batchid = @batchid AND poolid = @poolid AND coin = @coin
+              AND state = @ambiguous";
+
+        var updatedMappingRows = await con.ExecuteAsync(new CommandDefinition(mappingsQuery, new
+        {
+            attemptid = attempt.Id,
+            batchid = batch.Id,
+            poolid = batch.PoolId,
+            coin = batch.Coin,
+            ambiguous = PayoutAttemptIntentStates.AmbiguousRequiresReview,
+            accepted = PayoutAttemptIntentStates.Accepted,
+            transactionconfirmationdata = transactionConfirmationData,
+            updated
+        }, tx, cancellationToken: ct));
+
+        EnsureRowCount(updatedMappingRows, ambiguousMappingCount, "ambiguous payout attempt-intent mappings for reviewed accepted transition");
+
+        var blockingAttemptCount = await CountBatchAttemptsInStatesAsync(con, tx, batch.Id, new[]
+        {
+            PayoutSendAttemptStates.Prepared,
+            PayoutSendAttemptStates.Sending,
+            PayoutSendAttemptStates.AmbiguousRequiresReview
+        }, ct);
+
+        var blockingIntentCount = await CountBatchIntentsInStatesAsync(con, tx, batch.Id, new[]
+        {
+            PayoutIntentStates.Reserved,
+            PayoutIntentStates.Sending,
+            PayoutIntentStates.AmbiguousRequiresReview
+        }, ct);
+
+        if(blockingAttemptCount == 0 && blockingIntentCount == 0)
+        {
+            const string batchQuery = @"UPDATE payout_batches
+                SET state = @submitted, transactionconfirmationdata = COALESCE(@transactionconfirmationdata, transactionconfirmationdata),
+                    externaloperationid = COALESCE(@externaloperationid, externaloperationid),
+                    submitted = @updated, reviewed = @updated, updated = @updated
+                WHERE id = @batchid AND poolid = @poolid AND coin = @coin AND state = @ambiguous";
+
+            var updatedBatchRows = await con.ExecuteAsync(new CommandDefinition(batchQuery, new
+            {
+                batchid = batch.Id,
+                poolid = batch.PoolId,
+                coin = batch.Coin,
+                ambiguous = PayoutBatchStates.AmbiguousRequiresReview,
+                submitted = PayoutBatchStates.Submitted,
+                transactionconfirmationdata = transactionConfirmationData,
+                externaloperationid = externalOperationId,
+                updated
+            }, tx, cancellationToken: ct));
+
+            EnsureRowCount(updatedBatchRows, 1, "ambiguous payout batch for reviewed accepted transition");
+        }
+
+        return true;
+    }
+
     public async Task<bool> MarkStaleBatchAmbiguousAsync(IDbConnection con, IDbTransaction tx, long batchId,
         long staleAttemptId, string poolId, string errorCode, string errorMessage, DateTime updated, CancellationToken ct)
     {
@@ -1629,6 +1808,29 @@ public class PayoutIntentRepository : IPayoutIntentRepository
             attemptid = attemptId,
             mappingstate = mappingState
         }, tx, cancellationToken: ct));
+    }
+
+    private static async Task<bool> HasAttemptConfirmationAsync(IDbConnection con, IDbTransaction tx, long batchId,
+        long attemptId, string poolId, string kind, string value, CancellationToken ct)
+    {
+        const string query = @"SELECT COUNT(*)
+            FROM payout_external_confirmations
+            WHERE batchid = @batchid
+              AND attemptid = @attemptid
+              AND poolid = @poolid
+              AND kind = @kind
+              AND value = @value";
+
+        var count = await con.QuerySingleAsync<long>(new CommandDefinition(query, new
+        {
+            batchid = batchId,
+            attemptid = attemptId,
+            poolid,
+            kind,
+            value
+        }, tx, cancellationToken: ct));
+
+        return count > 0;
     }
 
     private static async Task<long> CountAttemptMappingsWithIntentStateAsync(IDbConnection con, IDbTransaction tx, long attemptId,
