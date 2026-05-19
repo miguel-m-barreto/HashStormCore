@@ -128,3 +128,67 @@ public record PayoutOperationStatusResult
     }
 }
 #nullable restore
+
+public enum PayoutAmbiguousReviewDecision
+{
+    AcceptedWithEvidence,
+    ProvenNoAccept
+}
+
+public enum PayoutAmbiguousReviewStatus
+{
+    Accepted,
+    FailedNoAccept,
+    AttemptNotEligible
+}
+
+#nullable enable annotations
+public record PayoutAmbiguousReviewRequest
+{
+    public string PoolId { get; init; }
+    public long BatchId { get; init; }
+    public long AttemptId { get; init; }
+    public PayoutAmbiguousReviewDecision Decision { get; init; }
+    public PayoutAttemptEvidence? Evidence { get; init; }
+    public string? ErrorCode { get; init; }
+    public string? ErrorMessage { get; init; }
+    public DateTime ReviewedAt { get; init; }
+}
+
+public record PayoutAmbiguousReviewResult
+{
+    public PayoutAmbiguousReviewStatus Status { get; init; }
+    public long BatchId { get; init; }
+    public long AttemptId { get; init; }
+
+    public static PayoutAmbiguousReviewResult Accepted(long batchId, long attemptId)
+    {
+        return new PayoutAmbiguousReviewResult
+        {
+            Status = PayoutAmbiguousReviewStatus.Accepted,
+            BatchId = batchId,
+            AttemptId = attemptId
+        };
+    }
+
+    public static PayoutAmbiguousReviewResult FailedNoAccept(long batchId, long attemptId)
+    {
+        return new PayoutAmbiguousReviewResult
+        {
+            Status = PayoutAmbiguousReviewStatus.FailedNoAccept,
+            BatchId = batchId,
+            AttemptId = attemptId
+        };
+    }
+
+    public static PayoutAmbiguousReviewResult AttemptNotEligible(long batchId, long attemptId)
+    {
+        return new PayoutAmbiguousReviewResult
+        {
+            Status = PayoutAmbiguousReviewStatus.AttemptNotEligible,
+            BatchId = batchId,
+            AttemptId = attemptId
+        };
+    }
+}
+#nullable restore
