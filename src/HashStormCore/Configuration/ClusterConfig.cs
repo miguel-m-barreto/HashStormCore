@@ -1149,6 +1149,7 @@ public class RewardRecipient
 {
     public string Address { get; set; }
     public decimal Percentage { get; set; }
+    public decimal? MinimumPayment { get; set; }
 
     /// <summary>
     /// Optional recipient type

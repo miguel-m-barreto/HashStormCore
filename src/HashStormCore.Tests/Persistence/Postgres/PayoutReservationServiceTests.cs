@@ -126,6 +126,54 @@ public class PayoutReservationServiceTests : PostgresIntegrationTestBase
     }
 
     [PostgresIntegrationFact]
+    public Task CreateReservationAsync_RewardRecipientNullThresholdInheritsPoolMinimum()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("reservation_service_reward_inherit");
+            var now = UtcNow();
+            await InsertBalanceAsync(con, tx, poolId, "reward-low", 4m, now);
+            await InsertBalanceAsync(con, tx, poolId, "reward-high", 5m, now.AddSeconds(1));
+
+            var result = await service.CreateReservationAsync(con, tx,
+                NewRequest(poolId, now, minimumPayment: 5m) with
+                {
+                    RewardRecipientThresholds = RewardThreshold("reward-low", null)
+                        .Concat(RewardThreshold("reward-high", null))
+                        .ToArray()
+                }, Ct);
+
+            var intent = Assert.Single(result.Intents);
+            Assert.Equal("reward-high", intent.Address);
+            Assert.Equal(5m, intent.PaymentThreshold);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateReservationAsync_RewardRecipientZeroThresholdCreatesReservation()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("reservation_service_reward_zero");
+            var now = UtcNow();
+            await InsertBalanceAsync(con, tx, poolId, "reward-zero", 0.00000001m, now);
+
+            var result = await service.CreateReservationAsync(con, tx,
+                NewRequest(poolId, now, minimumPayment: 10m) with
+                {
+                    RewardRecipientThresholds = RewardThreshold("reward-zero", 0m)
+                }, Ct);
+
+            var intent = Assert.Single(result.Intents);
+            Assert.Equal(PayoutReservationStatus.Created, result.Status);
+            Assert.Equal("reward-zero", intent.Address);
+            Assert.Equal(0m, intent.PaymentThreshold);
+            Assert.Equal(0, await CountPoolRowsAsync(con, tx, "payments", poolId));
+            Assert.Equal(0, await CountPoolRowsAsync(con, tx, "balance_changes", poolId));
+        });
+    }
+
+    [PostgresIntegrationFact]
     public async Task CreateReservationAsync_RecipientSetHashIsDeterministicIndependentOfInsertionOrder()
     {
         var poolId = NewPoolId("reservation_hash");
@@ -224,6 +272,24 @@ public class PayoutReservationServiceTests : PostgresIntegrationTestBase
 
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
                 service.CreateReservationAsync(con, tx, valid with { MaxCandidates = 0 }, Ct));
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                service.CreateReservationAsync(con, tx, valid with
+                {
+                    RewardRecipientThresholds = RewardThreshold("reward", 0m).Concat(RewardThreshold("reward", 1m)).ToArray()
+                }, Ct));
+
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+                service.CreateReservationAsync(con, tx, valid with
+                {
+                    RewardRecipientThresholds = RewardThreshold("reward", -1m)
+                }, Ct));
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                service.CreateReservationAsync(con, tx, valid with
+                {
+                    RewardRecipientThresholds = RewardThreshold(" ", 0m)
+                }, Ct));
         });
     }
 
@@ -315,5 +381,17 @@ public class PayoutReservationServiceTests : PostgresIntegrationTestBase
     private static DateTime UtcNow()
     {
         return DateTime.UtcNow;
+    }
+
+    private static PayoutRewardRecipientThreshold[] RewardThreshold(string address, decimal? minimumPayment)
+    {
+        return new[]
+        {
+            new PayoutRewardRecipientThreshold
+            {
+                Address = address,
+                MinimumPayment = minimumPayment
+            }
+        };
     }
 }

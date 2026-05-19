@@ -82,6 +82,114 @@ public class PayoutReservationRepositoryTests : PostgresIntegrationTestBase
     }
 
     [PostgresIntegrationFact]
+    public Task GetEligibleCandidatesAsync_RewardRecipientThresholdSelectsBelowPoolMinimum()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("reservation_reward_threshold");
+            var now = UtcNow();
+            await InsertBalanceAsync(con, tx, poolId, "reward-recipient", 2m, now);
+            await InsertBalanceAsync(con, tx, poolId, "normal-miner", 2m, now.AddSeconds(1));
+
+            var candidates = await repo.GetEligibleCandidatesAsync(con, tx, poolId, 10m, 100, Ct,
+                RewardThreshold("reward-recipient", 1m));
+
+            var candidate = Assert.Single(candidates);
+            Assert.Equal("reward-recipient", candidate.Address);
+            Assert.Equal(1m, candidate.PaymentThreshold);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task GetEligibleCandidatesAsync_RewardRecipientZeroThresholdAllowsPositiveBalance()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("reservation_reward_zero");
+            var now = UtcNow();
+            await InsertBalanceAsync(con, tx, poolId, "reward-zero", 0.00000001m, now);
+            await InsertBalanceAsync(con, tx, poolId, "reward-empty", 0m, now.AddSeconds(1));
+
+            var candidates = await repo.GetEligibleCandidatesAsync(con, tx, poolId, 10m, 100, Ct,
+                RewardThreshold(("reward-zero", 0m), ("reward-empty", 0m)));
+
+            var candidate = Assert.Single(candidates);
+            Assert.Equal("reward-zero", candidate.Address);
+            Assert.Equal(0m, candidate.PaymentThreshold);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task GetEligibleCandidatesAsync_RewardRecipientNullThresholdInheritsPoolMinimum()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("reservation_reward_inherit");
+            var now = UtcNow();
+            await InsertBalanceAsync(con, tx, poolId, "reward-low", 4m, now);
+            await InsertBalanceAsync(con, tx, poolId, "reward-high", 5m, now.AddSeconds(1));
+
+            var candidates = await repo.GetEligibleCandidatesAsync(con, tx, poolId, 5m, 100, Ct,
+                RewardThreshold(("reward-low", (decimal?) null), ("reward-high", (decimal?) null)));
+
+            var candidate = Assert.Single(candidates);
+            Assert.Equal("reward-high", candidate.Address);
+            Assert.Equal(5m, candidate.PaymentThreshold);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task GetEligibleCandidatesAsync_RewardRecipientThresholdOverridesMinerSettings()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("reservation_reward_overrides_miner");
+            var now = UtcNow();
+            await InsertBalanceAsync(con, tx, poolId, "reward", 3m, now);
+            await InsertMinerSettingsAsync(con, tx, poolId, "reward", 1m, now);
+
+            var candidates = await repo.GetEligibleCandidatesAsync(con, tx, poolId, 10m, 100, Ct,
+                RewardThreshold("reward", 5m));
+
+            Assert.Empty(candidates);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task GetEligibleCandidatesAsync_RewardRecipientBelowConfiguredThresholdIsNotSelected()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("reservation_reward_below");
+            var now = UtcNow();
+            await InsertBalanceAsync(con, tx, poolId, "reward", 4.99m, now);
+
+            var candidates = await repo.GetEligibleCandidatesAsync(con, tx, poolId, 10m, 100, Ct,
+                RewardThreshold("reward", 5m));
+
+            Assert.Empty(candidates);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task GetEligibleCandidatesAsync_RewardRecipientStillExcludesActiveIntent()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("reservation_reward_active");
+            var now = UtcNow();
+            await InsertBalanceAsync(con, tx, poolId, "reward-blocked", 1m, now);
+            await InsertPayoutIntentAsync(con, tx, poolId, "reward-blocked", PayoutBatchStates.Reserved,
+                PayoutIntentStates.Reserved, 1m, now);
+
+            var candidates = await repo.GetEligibleCandidatesAsync(con, tx, poolId, 10m, 100, Ct,
+                RewardThreshold("reward-blocked", 0m));
+
+            Assert.Empty(candidates);
+        });
+    }
+
+    [PostgresIntegrationFact]
     public Task GetEligibleCandidatesAsync_ExcludesActiveReservedIntent()
     {
         return AssertActiveIntentExclusionAsync(PayoutBatchStates.Reserved, PayoutIntentStates.Reserved, "active_reserved");
@@ -201,6 +309,16 @@ public class PayoutReservationRepositoryTests : PostgresIntegrationTestBase
 
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
                 repo.GetEligibleCandidatesAsync(con, tx, "pool", 1m, 0, Ct));
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                repo.GetEligibleCandidatesAsync(con, tx, "pool", 1m, 1, Ct, RewardThreshold(" ", 0m)));
+
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+                repo.GetEligibleCandidatesAsync(con, tx, "pool", 1m, 1, Ct, RewardThreshold("reward", -1m)));
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                repo.GetEligibleCandidatesAsync(con, tx, "pool", 1m, 1, Ct,
+                    RewardThreshold(("reward", 0m), ("reward", 1m))));
         });
     }
 
@@ -292,5 +410,21 @@ public class PayoutReservationRepositoryTests : PostgresIntegrationTestBase
     private static DateTime UtcNow()
     {
         return DateTime.UtcNow;
+    }
+
+    private static PayoutRewardRecipientThreshold[] RewardThreshold(params (string address, decimal? minimumPayment)[] thresholds)
+    {
+        return thresholds
+            .Select(x => new PayoutRewardRecipientThreshold
+            {
+                Address = x.address,
+                MinimumPayment = x.minimumPayment
+            })
+            .ToArray();
+    }
+
+    private static PayoutRewardRecipientThreshold[] RewardThreshold(string address, decimal? minimumPayment)
+    {
+        return RewardThreshold((address, minimumPayment));
     }
 }

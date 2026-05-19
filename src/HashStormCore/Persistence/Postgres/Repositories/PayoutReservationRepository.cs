@@ -24,7 +24,8 @@ public class PayoutReservationRepository : IPayoutReservationRepository
     };
 
     public async Task<PayoutReservationCandidate[]> GetEligibleCandidatesAsync(IDbConnection con, IDbTransaction tx,
-        string poolId, decimal minimumPayment, int maxCandidates, CancellationToken ct)
+        string poolId, decimal minimumPayment, int maxCandidates, CancellationToken ct,
+        IReadOnlyCollection<PayoutRewardRecipientThreshold> rewardRecipientThresholds = null)
     {
         con = RequireConnection(con);
         tx = RequireTransaction(tx);
@@ -38,7 +39,13 @@ public class PayoutReservationRepository : IPayoutReservationRepository
         if(maxCandidates <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxCandidates), "Maximum candidate count must be greater than zero");
 
-        const string query = @"WITH active_intents AS (
+        var rewardThresholds = NormalizeRewardRecipientThresholds(rewardRecipientThresholds, minimumPayment);
+
+        const string query = @"WITH reward_thresholds AS (
+                SELECT address, minimumpayment
+                FROM unnest(CAST(@rewardaddresses AS text[]), CAST(@rewardthresholds AS numeric[])) AS rt(address, minimumpayment)
+            ),
+            active_intents AS (
                 SELECT poolid, address,
                     COALESCE(SUM(CASE WHEN state = ANY(@reservedstates) THEN amount ELSE 0 END), 0) AS reservedamount,
                     COALESCE(SUM(CASE WHEN state = @ambiguousstate THEN amount ELSE 0 END), 0) AS ambiguousamount,
@@ -51,17 +58,24 @@ public class PayoutReservationRepository : IPayoutReservationRepository
                 b.address AS Address,
                 b.amount AS BalanceSnapshotAmount,
                 b.updated AS BalanceSnapshotUpdated,
-                COALESCE(ms.paymentthreshold, @minimumpayment) AS PaymentThreshold,
+                CASE
+                    WHEN rt.address IS NOT NULL THEN rt.minimumpayment
+                    ELSE COALESCE(ms.paymentthreshold, @minimumpayment)
+                END AS PaymentThreshold,
                 COALESCE(ai.reservedamount, 0) AS ReservedAmount,
                 COALESCE(ai.ambiguousamount, 0) AS AmbiguousAmount,
                 b.amount - COALESCE(ai.activeamount, 0) AS AvailableAmount
             FROM balances b
+            LEFT JOIN reward_thresholds rt ON rt.address = b.address
             LEFT JOIN miner_settings ms ON ms.poolid = b.poolid AND ms.address = b.address
             LEFT JOIN active_intents ai ON ai.poolid = b.poolid AND ai.address = b.address
             WHERE b.poolid = @poolid
               AND b.amount > 0
               AND COALESCE(ai.activeamount, 0) = 0
-              AND b.amount - COALESCE(ai.activeamount, 0) >= COALESCE(ms.paymentthreshold, @minimumpayment)
+              AND b.amount - COALESCE(ai.activeamount, 0) >= CASE
+                    WHEN rt.address IS NOT NULL THEN rt.minimumpayment
+                    ELSE COALESCE(ms.paymentthreshold, @minimumpayment)
+                  END
             ORDER BY b.updated, b.address
             LIMIT @maxcandidates
             FOR UPDATE OF b SKIP LOCKED";
@@ -71,12 +85,50 @@ public class PayoutReservationRepository : IPayoutReservationRepository
             poolid = poolId,
             minimumpayment = minimumPayment,
             maxcandidates = maxCandidates,
+            rewardaddresses = rewardThresholds.Select(x => x.Address).ToArray(),
+            rewardthresholds = rewardThresholds.Select(x => x.MinimumPayment.Value).ToArray(),
             reservedstates = ReservedAmountStates,
             activeintentstates = ActiveIntentStates,
             ambiguousstate = PayoutIntentStates.AmbiguousRequiresReview
         }, tx, cancellationToken: ct));
 
         return entities.Select(MapCandidate).ToArray();
+    }
+
+    private static PayoutRewardRecipientThreshold[] NormalizeRewardRecipientThresholds(
+        IReadOnlyCollection<PayoutRewardRecipientThreshold> rewardRecipientThresholds, decimal minimumPayment)
+    {
+        if(rewardRecipientThresholds == null || rewardRecipientThresholds.Count == 0)
+            return Array.Empty<PayoutRewardRecipientThreshold>();
+
+        var normalized = rewardRecipientThresholds
+            .Select(x =>
+            {
+                if(x == null)
+                    throw new ArgumentException("Reward recipient threshold entry is required", nameof(rewardRecipientThresholds));
+
+                if(string.IsNullOrWhiteSpace(x.Address))
+                    throw new ArgumentException("Reward recipient threshold address is required", nameof(rewardRecipientThresholds));
+
+                if(x.MinimumPayment.HasValue && x.MinimumPayment.Value < 0)
+                    throw new ArgumentOutOfRangeException(nameof(rewardRecipientThresholds),
+                        "Reward recipient minimum payment must be greater than or equal to zero");
+
+                return new PayoutRewardRecipientThreshold
+                {
+                    Address = x.Address,
+                    MinimumPayment = x.MinimumPayment ?? minimumPayment
+                };
+            })
+            .ToArray();
+
+        var duplicate = normalized
+            .GroupBy(x => x.Address, StringComparer.Ordinal)
+            .FirstOrDefault(x => x.Count() > 1);
+        if(duplicate != null)
+            throw new ArgumentException($"Duplicate reward recipient threshold address '{duplicate.Key}'", nameof(rewardRecipientThresholds));
+
+        return normalized;
     }
 
     private static PayoutReservationCandidate MapCandidate(Entities.PayoutReservationCandidate entity)

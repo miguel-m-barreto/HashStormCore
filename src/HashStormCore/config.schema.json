@@ -947,6 +947,13 @@
         "percentage": {
           "type": "number"
         },
+        "minimumPayment": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.0
+        },
         "type": {
           "type": [
             "string",

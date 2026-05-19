@@ -17,6 +17,14 @@ public record CreatePayoutReservationRequest
     public decimal MinimumPayment { get; init; }
     public int MaxCandidates { get; init; }
     public DateTime Created { get; init; }
+    public IReadOnlyCollection<PayoutRewardRecipientThreshold> RewardRecipientThresholds { get; init; } =
+        Array.Empty<PayoutRewardRecipientThreshold>();
+}
+
+public record PayoutRewardRecipientThreshold
+{
+    public string Address { get; init; }
+    public decimal? MinimumPayment { get; init; }
 }
 
 public record CreatePayoutReservationResult

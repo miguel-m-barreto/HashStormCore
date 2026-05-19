@@ -30,8 +30,10 @@ public class PayoutReservationService
         if(activeBatch != null)
             return CreatePayoutReservationResult.ActiveBatchExists(activeBatch);
 
+        var rewardRecipientThresholds = ResolveRewardRecipientThresholds(request);
+
         var candidates = await payoutReservationRepo.GetEligibleCandidatesAsync(con, tx, request.PoolId,
-            request.MinimumPayment, request.MaxCandidates, ct);
+            request.MinimumPayment, request.MaxCandidates, ct, rewardRecipientThresholds);
 
         if(candidates.Length == 0)
             return CreatePayoutReservationResult.NoEligibleBalances();
@@ -94,6 +96,46 @@ public class PayoutReservationService
 
         if(request.MaxCandidates <= 0)
             throw new ArgumentOutOfRangeException(nameof(request.MaxCandidates), "Maximum candidate count must be greater than zero");
+
+        ValidateRewardRecipientThresholds(request);
+    }
+
+    private static PayoutRewardRecipientThreshold[] ResolveRewardRecipientThresholds(CreatePayoutReservationRequest request)
+    {
+        if(request.RewardRecipientThresholds == null || request.RewardRecipientThresholds.Count == 0)
+            return Array.Empty<PayoutRewardRecipientThreshold>();
+
+        return request.RewardRecipientThresholds
+            .Select(x => new PayoutRewardRecipientThreshold
+            {
+                Address = x.Address,
+                MinimumPayment = x.MinimumPayment ?? request.MinimumPayment
+            })
+            .ToArray();
+    }
+
+    private static void ValidateRewardRecipientThresholds(CreatePayoutReservationRequest request)
+    {
+        if(request.RewardRecipientThresholds == null)
+            return;
+
+        foreach(var threshold in request.RewardRecipientThresholds)
+        {
+            if(threshold == null)
+                throw new ArgumentException("Reward recipient threshold entry is required", nameof(request));
+
+            RequireText(threshold.Address, nameof(threshold.Address));
+
+            if(threshold.MinimumPayment.HasValue && threshold.MinimumPayment.Value < 0)
+                throw new ArgumentOutOfRangeException(nameof(request),
+                    "Reward recipient minimum payment must be greater than or equal to zero");
+        }
+
+        var duplicate = request.RewardRecipientThresholds
+            .GroupBy(x => x.Address, StringComparer.Ordinal)
+            .FirstOrDefault(x => x.Count() > 1);
+        if(duplicate != null)
+            throw new ArgumentException($"Duplicate reward recipient threshold address '{duplicate.Key}'", nameof(request));
     }
 
     private static string CreateRecipientSetHash(CreatePayoutReservationRequest request, IReadOnlyCollection<PayoutReservationCandidate> candidates)
