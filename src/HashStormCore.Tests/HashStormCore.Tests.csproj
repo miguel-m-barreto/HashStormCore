@@ -57,6 +57,7 @@
     <ProjectReference Include="..\HashStormCore.DbWriter\HashStormCore.DbWriter.csproj" />
     <ProjectReference Include="..\HashStormCore.Eventing\HashStormCore.Eventing.csproj" />
     <ProjectReference Include="..\HashStormCore.LiveAggregator\HashStormCore.LiveAggregator.csproj" />
+    <ProjectReference Include="..\HashStormCore.Payouts\HashStormCore.Payouts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

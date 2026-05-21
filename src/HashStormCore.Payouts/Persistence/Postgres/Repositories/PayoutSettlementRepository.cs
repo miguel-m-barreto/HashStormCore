@@ -412,14 +412,14 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
         return values.Length == 1 ? values[0] : null;
     }
 
-    private static async Task<Entities.Balance> LoadBalanceForUpdateAsync(IDbConnection con, IDbTransaction tx,
+    private static async Task<BalanceRow> LoadBalanceForUpdateAsync(IDbConnection con, IDbTransaction tx,
         string poolId, string address, CancellationToken ct)
     {
         const string query = @"SELECT * FROM balances
             WHERE poolid = @poolid AND address = @address
             FOR UPDATE";
 
-        return await con.QuerySingleOrDefaultAsync<Entities.Balance>(new CommandDefinition(query, new
+        return await con.QuerySingleOrDefaultAsync<BalanceRow>(new CommandDefinition(query, new
         {
             poolid = poolId,
             address
@@ -581,4 +581,6 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
     }
 
     private record RequiredBalance(string PoolId, string Address, decimal Amount);
+
+    private record BalanceRow(decimal Amount);
 }

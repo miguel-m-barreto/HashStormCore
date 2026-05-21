@@ -24,6 +24,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HashStormCore.ApiProvider",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HashStormCore.PayoutProcessor", "HashStormCore.PayoutProcessor\HashStormCore.PayoutProcessor.csproj", "{9D94E6D8-C2A1-4BE9-A1B9-C0B3B4CF2B7B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HashStormCore.Payouts", "HashStormCore.Payouts\HashStormCore.Payouts.csproj", "{2B0EAC8C-D66C-437D-978C-273D1B6D6323}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -130,6 +132,18 @@ Global
 		{9D94E6D8-C2A1-4BE9-A1B9-C0B3B4CF2B7B}.Release|x64.Build.0 = Release|Any CPU
 		{9D94E6D8-C2A1-4BE9-A1B9-C0B3B4CF2B7B}.Release|x86.ActiveCfg = Release|Any CPU
 		{9D94E6D8-C2A1-4BE9-A1B9-C0B3B4CF2B7B}.Release|x86.Build.0 = Release|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Debug|x64.Build.0 = Debug|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Debug|x86.Build.0 = Debug|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Release|Any CPU.Build.0 = Release|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Release|x64.ActiveCfg = Release|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Release|x64.Build.0 = Release|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Release|x86.ActiveCfg = Release|Any CPU
+		{2B0EAC8C-D66C-437D-978C-273D1B6D6323}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
