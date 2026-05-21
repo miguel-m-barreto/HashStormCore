@@ -44,6 +44,7 @@ builder.Services.AddSingleton<PayoutStaleSendReconciliationService>();
 builder.Services.AddSingleton<PayoutOperationIdReconciliationService>();
 builder.Services.AddSingleton<PayoutAmbiguousReviewService>();
 builder.Services.AddSingleton<PayoutSettlementService>();
+builder.Services.AddSingleton<PayoutPoolOrchestrator>();
 builder.Services.AddHostedService<PayoutProcessorService>();
 
 await builder.Build().RunAsync();
