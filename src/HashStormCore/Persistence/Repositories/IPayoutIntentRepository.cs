@@ -31,6 +31,7 @@ public interface IPayoutIntentRepository
     Task<PayoutBatch> GetBatchForUpdateAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string coin, CancellationToken ct);
     Task<PayoutIntent[]> GetReservedIntentsForBatchAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string coin, CancellationToken ct);
     Task<long> GetSendAttemptCountForBatchAsync(IDbConnection con, IDbTransaction tx, long batchId, string poolId, string coin, CancellationToken ct);
+    Task<PayoutPlanningBatchCandidate[]> GetReservedBatchesForPlanningAsync(IDbConnection con, IDbTransaction tx, string poolId, int limit, CancellationToken ct);
     Task<PayoutSendAttempt[]> GetPreparedAttemptsForExecutionAsync(IDbConnection con, IDbTransaction tx, string poolId, int limit, CancellationToken ct);
 #nullable enable annotations
     Task<PayoutSendAttempt?> GetSendAttemptForExecutionAsync(IDbConnection con, IDbTransaction tx, long attemptId, string poolId, CancellationToken ct);

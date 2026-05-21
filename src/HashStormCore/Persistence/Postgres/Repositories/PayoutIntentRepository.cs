@@ -1203,6 +1203,49 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         }, tx, cancellationToken: ct));
     }
 
+    public async Task<PayoutPlanningBatchCandidate[]> GetReservedBatchesForPlanningAsync(IDbConnection con,
+        IDbTransaction tx, string poolId, int limit, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+
+        if(limit <= 0)
+            throw new ArgumentOutOfRangeException(nameof(limit), "Reserved payout batch query limit must be greater than zero");
+
+        const string query = @"SELECT
+                b.id AS BatchId,
+                b.poolid AS PoolId,
+                b.coin AS Coin,
+                b.coinfamily AS CoinFamily,
+                b.handler AS Handler,
+                b.sendshape AS SendShape,
+                b.intentcountsnapshot AS IntentCountSnapshot,
+                b.reservedamountsnapshot AS ReservedAmountSnapshot,
+                b.created AS Created,
+                b.updated AS Updated
+            FROM payout_batches b
+            WHERE b.poolid = @poolid
+              AND b.state = @reserved
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM payout_send_attempts psa
+                  WHERE psa.batchid = b.id
+                    AND psa.poolid = b.poolid
+                    AND psa.coin = b.coin
+              )
+            ORDER BY b.created, b.id
+            LIMIT @limit
+            FOR UPDATE OF b SKIP LOCKED";
+
+        return (await con.QueryAsync<PayoutPlanningBatchCandidate>(new CommandDefinition(query, new
+        {
+            poolid = poolId,
+            reserved = PayoutBatchStates.Reserved,
+            limit
+        }, tx, cancellationToken: ct))).ToArray();
+    }
+
     public async Task<PayoutSendAttempt[]> GetPreparedAttemptsForExecutionAsync(IDbConnection con, IDbTransaction tx,
         string poolId, int limit, CancellationToken ct)
     {

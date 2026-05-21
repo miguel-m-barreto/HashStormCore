@@ -9,6 +9,153 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
 {
     private const string PaymentDebitUsage = "Balance reset after payment";
 
+    public async Task<PayoutSettlementAttemptCandidate[]> GetAcceptedAttemptsForSettlementAsync(IDbConnection con,
+        IDbTransaction tx, string poolId, int limit, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+
+        if(limit <= 0)
+            throw new ArgumentOutOfRangeException(nameof(limit), "Accepted payout settlement query limit must be greater than zero");
+
+        const string query = @"WITH locked_batches AS (
+                SELECT b.*
+                FROM payout_batches b
+                WHERE b.poolid = @poolid
+                  AND b.state = ANY(@batchstates)
+                  AND EXISTS (
+                      SELECT 1
+                      FROM payout_send_attempts psa
+                      JOIN payout_attempt_intents pai ON pai.attemptid = psa.id
+                          AND pai.batchid = psa.batchid
+                          AND pai.poolid = psa.poolid
+                          AND pai.coin = psa.coin
+                          AND pai.state = @acceptedmapping
+                      JOIN payout_intents pi ON pi.id = pai.intentid
+                          AND pi.batchid = pai.batchid
+                          AND pi.poolid = pai.poolid
+                          AND pi.coin = pai.coin
+                      WHERE psa.batchid = b.id
+                        AND psa.poolid = b.poolid
+                        AND psa.coin = b.coin
+                        AND psa.state = @acceptedattempt
+                        AND pi.state = @submitted
+                        AND pi.paymentid IS NULL
+                        AND pi.balancechangeid IS NULL
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM payout_attempt_intents blocking_pai
+                            WHERE blocking_pai.attemptid = psa.id
+                              AND blocking_pai.batchid = psa.batchid
+                              AND blocking_pai.poolid = psa.poolid
+                              AND blocking_pai.coin = psa.coin
+                              AND blocking_pai.state <> @acceptedmapping
+                        )
+                        AND (
+                            SELECT COUNT(*)
+                            FROM (
+                                SELECT DISTINCT pec.value
+                                FROM payout_external_confirmations pec
+                                WHERE pec.batchid = psa.batchid
+                                  AND pec.attemptid = psa.id
+                                  AND pec.poolid = psa.poolid
+                                  AND pec.coin = psa.coin
+                                  AND pec.kind = ANY(@evidencekinds)
+                                  AND pec.value IS NOT NULL
+                                  AND btrim(pec.value) <> ''
+                            ) evidence_values
+                        ) = 1
+                  )
+                ORDER BY b.updated, b.id
+                LIMIT @limit
+                FOR UPDATE OF b SKIP LOCKED
+            )
+            SELECT
+                b.id AS BatchId,
+                psa.id AS AttemptId,
+                psa.poolid AS PoolId,
+                psa.coin AS Coin,
+                psa.method AS Method,
+                evidence.transactionconfirmationdata AS TransactionConfirmationData,
+                psa.created AS Created,
+                psa.updated AS Updated,
+                counts.submittedintentcount AS SubmittedIntentCount,
+                counts.unsettledsubmittedintentcount AS UnsettledSubmittedIntentCount,
+                counts.settledintentcount AS SettledIntentCount
+            FROM locked_batches b
+            JOIN payout_send_attempts psa ON psa.batchid = b.id
+                AND psa.poolid = b.poolid
+                AND psa.coin = b.coin
+                AND psa.state = @acceptedattempt
+            JOIN LATERAL (
+                SELECT
+                    COUNT(*) FILTER (WHERE pi.state = @submitted) AS submittedintentcount,
+                    COUNT(*) FILTER (
+                        WHERE pi.state = @submitted
+                          AND pi.paymentid IS NULL
+                          AND pi.balancechangeid IS NULL
+                    ) AS unsettledsubmittedintentcount,
+                    COUNT(*) FILTER (WHERE pi.state = @settled) AS settledintentcount
+                FROM payout_attempt_intents pai
+                JOIN payout_intents pi ON pi.id = pai.intentid
+                    AND pi.batchid = pai.batchid
+                    AND pi.poolid = pai.poolid
+                    AND pi.coin = pai.coin
+                WHERE pai.attemptid = psa.id
+                  AND pai.batchid = psa.batchid
+                  AND pai.poolid = psa.poolid
+                  AND pai.coin = psa.coin
+                  AND pai.state = @acceptedmapping
+            ) counts ON counts.unsettledsubmittedintentcount > 0
+            JOIN LATERAL (
+                SELECT MIN(value) AS transactionconfirmationdata, COUNT(*) AS evidencecount
+                FROM (
+                    SELECT DISTINCT pec.value
+                    FROM payout_external_confirmations pec
+                    WHERE pec.batchid = psa.batchid
+                      AND pec.attemptid = psa.id
+                      AND pec.poolid = psa.poolid
+                      AND pec.coin = psa.coin
+                      AND pec.kind = ANY(@evidencekinds)
+                      AND pec.value IS NOT NULL
+                      AND btrim(pec.value) <> ''
+                ) evidence_values
+            ) evidence ON evidence.evidencecount = 1
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM payout_attempt_intents blocking_pai
+                WHERE blocking_pai.attemptid = psa.id
+                  AND blocking_pai.batchid = psa.batchid
+                  AND blocking_pai.poolid = psa.poolid
+                  AND blocking_pai.coin = psa.coin
+                  AND blocking_pai.state <> @acceptedmapping
+            )
+            ORDER BY psa.updated, psa.id
+            LIMIT @limit";
+
+        return (await con.QueryAsync<PayoutSettlementAttemptCandidate>(new CommandDefinition(query, new
+        {
+            poolid = poolId,
+            batchstates = new[]
+            {
+                PayoutBatchStates.Sending,
+                PayoutBatchStates.Submitted,
+                PayoutBatchStates.AmbiguousRequiresReview
+            },
+            acceptedattempt = PayoutSendAttemptStates.Accepted,
+            acceptedmapping = PayoutAttemptIntentStates.Accepted,
+            submitted = PayoutIntentStates.Submitted,
+            settled = PayoutIntentStates.Settled,
+            evidencekinds = new[]
+            {
+                PayoutExternalConfirmationKinds.TxId,
+                PayoutExternalConfirmationKinds.RawHash
+            },
+            limit
+        }, tx, cancellationToken: ct))).ToArray();
+    }
+
     public async Task<PayoutSettlementResult> SettleAcceptedAttemptAsync(IDbConnection con, IDbTransaction tx,
         PayoutSettlementRequest request, CancellationToken ct)
     {
