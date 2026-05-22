@@ -22,6 +22,8 @@ builder.Configuration
 var clusterConfiguration = new ConfigurationBuilder()
     .AddJsonFile(clusterConfigPath, true)
     .Build();
+var clusterConfig = new PayoutProcessorClusterConfig();
+clusterConfiguration.Bind(clusterConfig);
 
 var sidecarConfiguration = new ConfigurationBuilder()
     .AddJsonFile("configs/payout-processor.json", true)
@@ -33,6 +35,7 @@ sidecarConfiguration.Bind(config);
 ApplyPoolCoreDefaults(clusterConfiguration, config);
 
 builder.Services.AddSingleton(config);
+builder.Services.AddSingleton(clusterConfig);
 builder.Services.AddSingleton<IConnectionFactory>(_ => new PgConnectionFactory(config.PostgresConnectionString));
 builder.Services.AddSingleton<IPayoutIntentRepository, PayoutIntentRepository>();
 builder.Services.AddSingleton<IPayoutReservationRepository, PayoutReservationRepository>();

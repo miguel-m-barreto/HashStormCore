@@ -1,3 +1,4 @@
+using HashStormCore.PayoutProcessor.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace HashStormCore.PayoutProcessor.Services;
@@ -11,39 +12,39 @@ public class PayoutPoolOrchestrator
 
     private readonly ILogger<PayoutPoolOrchestrator> logger;
 
-    public Task RunReservationTickAsync(string poolId, CancellationToken ct)
+    public Task RunReservationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
-        logger.LogInformation("Dry-run payout reservation tick for pool {PoolId}: no DB mutation performed", poolId);
+        logger.LogInformation("Dry-run payout reservation tick for pool {PoolId}: no DB mutation performed", pool.Id);
         return Task.CompletedTask;
     }
 
-    public Task RunPlanningTickAsync(string poolId, CancellationToken ct)
+    public Task RunPlanningTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
-        logger.LogInformation("Dry-run payout planning tick for pool {PoolId}: no DB mutation performed", poolId);
+        logger.LogInformation("Dry-run payout planning tick for pool {PoolId}: no DB mutation performed", pool.Id);
         return Task.CompletedTask;
     }
 
-    public Task RunExecutionTickAsync(string poolId, CancellationToken ct)
+    public Task RunExecutionTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
-        logger.LogInformation("Dry-run payout execution tick for pool {PoolId}: no sender/RPC/DB mutation performed", poolId);
+        logger.LogInformation("Dry-run payout execution tick for pool {PoolId}: no sender/RPC/DB mutation performed", pool.Id);
         return Task.CompletedTask;
     }
 
-    public Task RunStaleReconciliationTickAsync(string poolId, CancellationToken ct)
+    public Task RunStaleReconciliationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
-        logger.LogInformation("Dry-run stale sending reconciliation tick for pool {PoolId}: no DB mutation performed", poolId);
+        logger.LogInformation("Dry-run stale sending reconciliation tick for pool {PoolId}: no DB mutation performed", pool.Id);
         return Task.CompletedTask;
     }
 
-    public Task RunOperationIdReconciliationTickAsync(string poolId, CancellationToken ct)
+    public Task RunOperationIdReconciliationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
-        logger.LogInformation("Dry-run operation-id reconciliation tick for pool {PoolId}: no provider/RPC/DB mutation performed", poolId);
+        logger.LogInformation("Dry-run operation-id reconciliation tick for pool {PoolId}: no provider/RPC/DB mutation performed", pool.Id);
         return Task.CompletedTask;
     }
 
-    public Task RunSettlementTickAsync(string poolId, CancellationToken ct)
+    public Task RunSettlementTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
-        logger.LogInformation("Dry-run payout settlement tick for pool {PoolId}: no accounting mutation performed", poolId);
+        logger.LogInformation("Dry-run payout settlement tick for pool {PoolId}: no accounting mutation performed", pool.Id);
         return Task.CompletedTask;
     }
 }
