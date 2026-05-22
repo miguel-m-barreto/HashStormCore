@@ -127,6 +127,12 @@ public class PayoutManager : BackgroundService
                     continue;
                 }
 
+                if(IsIntentPayoutEngine(poolConfig))
+                {
+                    logger.Info(() => $"[{poolConfig.Id}] Skipping legacy payout sending because paymentProcessing.engine=intent");
+                    continue;
+                }
+
                 await PayoutPoolBalancesAsync(pool, poolConfig, handler, ct);
             }
 
@@ -165,6 +171,32 @@ public class PayoutManager : BackgroundService
     private static bool IsPaymentProcessingEnabled(IMiningPool pool)
     {
         return pool.Config.Enabled && pool.Config.PaymentProcessing?.Enabled == true;
+    }
+
+    private static bool IsIntentPayoutEngine(PoolConfig poolConfig)
+    {
+        return ResolvePayoutEngine(poolConfig) == PoolPaymentProcessingConfig.EngineIntent;
+    }
+
+    private static string ResolvePayoutEngine(PoolConfig poolConfig)
+    {
+        var engine = poolConfig.PaymentProcessing?.Engine;
+
+        if(string.IsNullOrWhiteSpace(engine))
+            return PoolPaymentProcessingConfig.EngineLegacy;
+
+        var trimmedEngine = engine.Trim();
+
+        if(string.Equals(trimmedEngine, PoolPaymentProcessingConfig.EngineLegacy,
+               StringComparison.OrdinalIgnoreCase))
+            return PoolPaymentProcessingConfig.EngineLegacy;
+
+        if(string.Equals(trimmedEngine, PoolPaymentProcessingConfig.EngineIntent,
+               StringComparison.OrdinalIgnoreCase))
+            return PoolPaymentProcessingConfig.EngineIntent;
+
+        throw new InvalidOperationException(
+            $"Pool '{poolConfig.Id}' has invalid paymentProcessing.engine '{trimmedEngine}'");
     }
 
     private async Task<PoolPayoutLock> TryAcquirePoolPayoutLockAsync(string poolId, CancellationToken ct)

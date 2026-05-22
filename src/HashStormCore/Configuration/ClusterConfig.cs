@@ -1117,7 +1117,11 @@ public partial class PoolShareBasedBanningConfig
 
 public partial class PoolPaymentProcessingConfig
 {
+    public const string EngineLegacy = "legacy";
+    public const string EngineIntent = "intent";
+
     public bool Enabled { get; set; }
+    public string Engine { get; set; } = EngineLegacy;
     public decimal MinimumPayment { get; set; } // in pool-base-currency (ie. Bitcoin, not Satoshis)
     public PayoutScheme PayoutScheme { get; set; }
     public JToken PayoutSchemeConfig { get; set; }

@@ -731,6 +731,20 @@
         "null"
       ],
       "properties": {
+        "engine": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "legacy",
+            "intent",
+            "",
+            null
+          ],
+          "default": "legacy",
+          "description": "Payout engine for this pool. Missing, null, or empty values use the legacy payout engine."
+        },
         "enabled": {
           "type": "boolean"
         },

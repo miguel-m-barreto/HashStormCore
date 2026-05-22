@@ -7,6 +7,9 @@ namespace HashStormCore.PayoutProcessor.Services;
 
 public class PayoutProcessorService : BackgroundService
 {
+    private const string PayoutEngineLegacy = "legacy";
+    private const string PayoutEngineIntent = "intent";
+
     public PayoutProcessorService(PayoutProcessorConfig config, PayoutProcessorClusterConfig clusterConfig,
         PayoutPoolOrchestrator orchestrator, ILogger<PayoutProcessorService> logger)
     {
@@ -67,8 +70,8 @@ public class PayoutProcessorService : BackgroundService
         foreach(var pool in pools)
         {
             logger.LogInformation(
-                "PayoutProcessor dry-run pool {PoolId}: coin={Coin}, minimumPayment={MinimumPayment}, rewardRecipients={RewardRecipientCount}",
-                pool.Id, pool.Coin, pool.MinimumPayment, pool.RewardRecipients.Count);
+                "PayoutProcessor dry-run pool {PoolId}: coin={Coin}, engine={Engine}, minimumPayment={MinimumPayment}, rewardRecipients={RewardRecipientCount}",
+                pool.Id, pool.Coin, pool.Engine, pool.MinimumPayment, pool.RewardRecipients.Count);
 
             foreach(var recipient in pool.RewardRecipients)
             {
@@ -132,12 +135,30 @@ public class PayoutProcessorService : BackgroundService
             if(string.IsNullOrWhiteSpace(pool.Coin))
                 throw new InvalidOperationException($"Pool '{poolId}' has missing coin");
 
+            var engine = ResolvePayoutEngine(poolId, pool.PaymentProcessing.Engine);
             var rewardRecipients = DiscoverRewardRecipients(poolId, pool.RewardRecipients);
             discoveredPools.Add(new PayoutProcessorPoolConfig(poolId, pool.Coin.Trim(),
-                pool.PaymentProcessing.MinimumPayment, rewardRecipients));
+                engine, pool.PaymentProcessing.MinimumPayment, rewardRecipients));
         }
 
         return discoveredPools;
+    }
+
+    private static string ResolvePayoutEngine(string poolId, string? engine)
+    {
+        if(string.IsNullOrWhiteSpace(engine))
+            return PayoutEngineLegacy;
+
+        var trimmedEngine = engine.Trim();
+
+        if(string.Equals(trimmedEngine, PayoutEngineLegacy, StringComparison.OrdinalIgnoreCase))
+            return PayoutEngineLegacy;
+
+        if(string.Equals(trimmedEngine, PayoutEngineIntent, StringComparison.OrdinalIgnoreCase))
+            return PayoutEngineIntent;
+
+        throw new InvalidOperationException(
+            $"Pool '{poolId}' has invalid paymentProcessing.engine '{trimmedEngine}'");
     }
 
     private IReadOnlyCollection<PayoutProcessorRewardRecipientConfig> DiscoverRewardRecipients(string poolId,

@@ -18,6 +18,7 @@ public class PayoutProcessorClusterPoolConfig
 public class PayoutProcessorClusterPaymentProcessingConfig
 {
     public bool Enabled { get; set; }
+    public string? Engine { get; set; }
     public decimal MinimumPayment { get; set; }
 }
 
@@ -32,6 +33,7 @@ public class PayoutProcessorClusterRewardRecipientConfig
 public record PayoutProcessorPoolConfig(
     string Id,
     string Coin,
+    string Engine,
     decimal MinimumPayment,
     IReadOnlyCollection<PayoutProcessorRewardRecipientConfig> RewardRecipients);
 
