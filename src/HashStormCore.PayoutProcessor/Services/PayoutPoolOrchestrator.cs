@@ -169,10 +169,10 @@ public class PayoutPoolOrchestrator
             return;
         }
 
-        if(config.ExecutionBatchSize <= 0)
+        if(config.PlanningMaxBatches <= 0)
         {
             logger.LogWarning(
-                "Skipping payout planning for pool {PoolId}: ExecutionBatchSize must be greater than zero for DbMutating planning",
+                "Skipping payout planning for pool {PoolId}: PlanningMaxBatches must be greater than zero for DbMutating planning",
                 pool.Id);
             return;
         }
@@ -187,6 +187,14 @@ public class PayoutPoolOrchestrator
         logger.LogInformation(
             "Payout planning tick for pool {PoolId} completed: candidateBatches={CandidateBatchCount}, plannedBatches={PlannedBatchCount}, skippedBatches={SkippedBatchCount}",
             request.PoolId, result.CandidateBatchCount, result.PlannedBatchCount, result.SkippedBatchCount);
+
+        foreach(var skipped in result.SkippedBatches)
+        {
+            logger.LogWarning(
+                "Skipped payout planning for batch {BatchId} in pool {PoolId}: coin={Coin}, coinFamily={CoinFamily}, handler={Handler}, sendShape={SendShape}, reason={Reason}",
+                skipped.BatchId, skipped.PoolId, skipped.Coin, skipped.CoinFamily, skipped.Handler,
+                skipped.SendShape, skipped.Reason);
+        }
     }
 
     public Task RunExecutionTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
@@ -232,6 +240,7 @@ public class PayoutPoolOrchestrator
             Handler = profile.AdapterId,
             SendShape = profile.SendShape,
             MinimumPayment = pool.MinimumPayment,
+            // ReservationMaxCandidates is a safety page size. Balances outside the page remain eligible for later reservation cycles.
             MaxCandidates = config.ReservationMaxCandidates,
             Created = DateTime.UtcNow,
             RewardRecipientThresholds = pool.RewardRecipients
@@ -250,7 +259,7 @@ public class PayoutPoolOrchestrator
         return new PayoutPlanningRunnerRequest
         {
             PoolId = pool.Id,
-            MaxBatches = config.ExecutionBatchSize,
+            MaxBatches = config.PlanningMaxBatches,
             Created = DateTime.UtcNow
         };
     }

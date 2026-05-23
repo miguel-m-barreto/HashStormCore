@@ -166,6 +166,51 @@ public class PayoutProfileResolverTests
     }
 
     [Fact]
+    public void XelisProfileIsReservationReadyWithLegacyMaxRecipientLimit()
+    {
+        var resolver = NewResolver(Coin("xelis", "xelis", "XEL"));
+
+        var result = resolver.Resolve("xelis");
+
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
+        Assert.Equal(PayoutProfileConstants.AdapterIds.XelisWalletRpc, result.Profile.AdapterId);
+        Assert.Equal(PayoutProfileConstants.SendShapes.AddressGroup, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.BuildTransaction, result.Profile.SendMethod);
+        Assert.Equal(PayoutProfileConstants.SettlementEvidenceKinds.RawHash, result.Profile.SettlementEvidenceKind);
+        Assert.True(result.Profile.RequiresWalletDaemon);
+        Assert.True(result.Profile.AllowsBatchMultiRecipient);
+        Assert.True(result.Profile.ReservationReady);
+        Assert.Equal(255, result.Profile.MaxRecipientsPerAttempt);
+    }
+
+    [Fact]
+    public void ConcealAddressGroupProfileRemainsReservationReadyWithMaxRecipientLimit()
+    {
+        var resolver = NewResolver(Coin("conceal", "conceal", "CCX"));
+
+        var result = resolver.Resolve("conceal");
+
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
+        Assert.Equal(PayoutProfileConstants.SendShapes.AddressGroup, result.Profile.SendShape);
+        Assert.True(result.Profile.ReservationReady);
+        Assert.True(result.Profile.MaxRecipientsPerAttempt > 0);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForReservationReadyAddressGroupWithoutMaxRecipientLimit()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-group", "bad-group", "BAD") }),
+            new[] { new BadAddressGroupProvider() });
+
+        var result = resolver.Resolve("bad-group");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("MaxRecipientsPerAttempt", result.Reason);
+    }
+
+    [Fact]
     public void ResolverNeverReturnsNullDefaultProfile()
     {
         var resolver = NewResolver(Coin("ergo", "ergo", "ERG"));
@@ -229,6 +274,29 @@ public class PayoutProfileResolverTests
         public bool TryGetCoin(string coinKey, out CoinDescriptor descriptor)
         {
             return coins.TryGetValue(coinKey, out descriptor!);
+        }
+    }
+
+    private class BadAddressGroupProvider : IPayoutProfileProvider
+    {
+        public bool CanResolve(CoinDescriptor coin)
+        {
+            return string.Equals(coin.Family, "bad-group", StringComparison.Ordinal);
+        }
+
+        public PayoutProfileResolution Resolve(CoinDescriptor coin)
+        {
+            return PayoutProfileResolution.Resolved(new PayoutProfile
+            {
+                CoinKey = coin.CoinKey,
+                CoinSymbol = coin.Symbol,
+                CoinFamily = coin.Family,
+                AdapterId = "bad-group-adapter",
+                SendShape = PayoutProfileConstants.SendShapes.AddressGroup,
+                SendMethod = "bad-send",
+                SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+                ReservationReady = true
+            });
         }
     }
 }

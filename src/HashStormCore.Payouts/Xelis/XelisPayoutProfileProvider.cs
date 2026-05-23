@@ -5,6 +5,9 @@ namespace HashStormCore.Payouts.Xelis;
 
 public class XelisPayoutProfileProvider : IPayoutProfileProvider
 {
+    // Matches legacy XelisConstants.MaximumDestinationPerTransfer.
+    private const int MaximumDestinationPerTransfer = 255;
+
     public bool CanResolve(CoinDescriptor coin)
     {
         return PayoutProfileProviderHelpers.FamilyEquals(coin, PayoutProfileConstants.Families.Xelis);
@@ -19,6 +22,7 @@ public class XelisPayoutProfileProvider : IPayoutProfileProvider
             PayoutProfileConstants.SettlementEvidenceKinds.RawHash) with
         {
             AllowsBatchMultiRecipient = true,
+            MaxRecipientsPerAttempt = MaximumDestinationPerTransfer,
             RequiresWalletDaemon = true,
             ReservationReady = true
         };

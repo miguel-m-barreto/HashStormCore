@@ -34,7 +34,7 @@ public class DbPayoutPlanningRunner : IPayoutPlanningRunner
             var candidates = await payoutIntentRepository.GetReservedBatchesForPlanningAsync(con, tx, request.PoolId,
                 request.MaxBatches, ct);
             var results = new List<CreatePayoutSendAttemptsResult>();
-            var skipped = 0;
+            var skipped = new List<PayoutPlanningSkippedBatch>();
 
             foreach(var candidate in candidates)
             {
@@ -42,28 +42,46 @@ public class DbPayoutPlanningRunner : IPayoutPlanningRunner
 
                 if(!resolution.HasProfile)
                 {
-                    skipped++;
+                    skipped.Add(CreateSkippedBatch(candidate, $"profile resolution failed: {resolution.Reason}"));
                     continue;
                 }
 
                 var profile = resolution.Profile;
                 if(!profile.ReservationReady)
                 {
-                    skipped++;
+                    skipped.Add(CreateSkippedBatch(candidate,
+                        string.IsNullOrWhiteSpace(profile.NotReadyReason)
+                            ? "profile is not reservation-ready"
+                            : profile.NotReadyReason));
                     continue;
                 }
 
-                if(!string.Equals(candidate.Handler, profile.AdapterId, StringComparison.Ordinal) ||
-                   !string.Equals(candidate.SendShape, profile.SendShape, StringComparison.Ordinal))
+                if(!string.Equals(candidate.CoinFamily, profile.CoinFamily, StringComparison.Ordinal))
                 {
-                    skipped++;
+                    skipped.Add(CreateSkippedBatch(candidate,
+                        $"coinFamily mismatch: reserved '{candidate.CoinFamily}', resolved '{profile.CoinFamily}'"));
+                    continue;
+                }
+
+                if(!string.Equals(candidate.Handler, profile.AdapterId, StringComparison.Ordinal))
+                {
+                    skipped.Add(CreateSkippedBatch(candidate,
+                        $"handler mismatch: reserved '{candidate.Handler}', resolved '{profile.AdapterId}'"));
+                    continue;
+                }
+
+                if(!string.Equals(candidate.SendShape, profile.SendShape, StringComparison.Ordinal))
+                {
+                    skipped.Add(CreateSkippedBatch(candidate,
+                        $"sendShape mismatch: reserved '{candidate.SendShape}', resolved '{profile.SendShape}'"));
                     continue;
                 }
 
                 if(string.Equals(candidate.SendShape, PayoutSendShapes.AddressGroup, StringComparison.Ordinal) &&
                    (!profile.MaxRecipientsPerAttempt.HasValue || profile.MaxRecipientsPerAttempt.Value <= 0))
                 {
-                    skipped++;
+                    skipped.Add(CreateSkippedBatch(candidate,
+                        "address_group planning requires MaxRecipientsPerAttempt greater than zero"));
                     continue;
                 }
 
@@ -86,10 +104,25 @@ public class DbPayoutPlanningRunner : IPayoutPlanningRunner
             {
                 CandidateBatchCount = candidates.Length,
                 PlannedBatchCount = results.Count,
-                SkippedBatchCount = skipped,
+                SkippedBatchCount = skipped.Count,
+                SkippedBatches = skipped,
                 Results = results
             };
         });
+    }
+
+    private static PayoutPlanningSkippedBatch CreateSkippedBatch(PayoutPlanningBatchCandidate candidate, string reason)
+    {
+        return new PayoutPlanningSkippedBatch
+        {
+            BatchId = candidate.BatchId,
+            PoolId = candidate.PoolId,
+            Coin = candidate.Coin,
+            CoinFamily = candidate.CoinFamily,
+            Handler = candidate.Handler,
+            SendShape = candidate.SendShape,
+            Reason = reason
+        };
     }
 
     private static void ValidateRequest(PayoutPlanningRunnerRequest request)

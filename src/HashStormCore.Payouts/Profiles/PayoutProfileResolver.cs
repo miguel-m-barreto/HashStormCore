@@ -40,6 +40,17 @@ public class PayoutProfileResolver : IPayoutProfileResolver
         if(resolution == null || (!resolution.HasProfile && resolution.Status != PayoutProfileResolutionStatus.Unsupported))
             return PayoutProfileResolution.Unsupported($"Coin '{coin.CoinKey}' did not resolve to a payout profile");
 
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           string.Equals(resolution.Profile.SendShape, PayoutProfileConstants.SendShapes.AddressGroup,
+               StringComparison.Ordinal) &&
+           (!resolution.Profile.MaxRecipientsPerAttempt.HasValue ||
+            resolution.Profile.MaxRecipientsPerAttempt.Value <= 0))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                "Address-group payout planning requires MaxRecipientsPerAttempt greater than zero before reservation is enabled");
+        }
+
         return resolution;
     }
 }

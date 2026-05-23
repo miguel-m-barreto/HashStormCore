@@ -1,4 +1,5 @@
 using System;
+using System.Data;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -6,7 +7,9 @@ using HashStormCore.PayoutProcessor.Configuration;
 using HashStormCore.PayoutProcessor.Services;
 using HashStormCore.Payouts.Profiles;
 using HashStormCore.Payments;
+using HashStormCore.Persistence;
 using HashStormCore.Persistence.Model;
+using HashStormCore.Persistence.Repositories;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
@@ -107,7 +110,8 @@ public class PayoutPoolOrchestratorTests
         var pool = NewPool("bitcoin", "intent");
         var config = new PayoutProcessorConfig
         {
-            ExecutionBatchSize = 17
+            PlanningMaxBatches = 17,
+            ExecutionBatchSize = 99
         };
         var before = DateTime.UtcNow;
 
@@ -192,7 +196,8 @@ public class PayoutPoolOrchestratorTests
             Substitute.For<IPayoutProfileResolver>(),
             Substitute.For<IPayoutReservationRunner>(),
             planningRunner,
-            executionBatchSize: 23);
+            planningMaxBatches: 23,
+            executionBatchSize: 99);
 
         await orchestrator.RunPlanningTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
 
@@ -211,7 +216,7 @@ public class PayoutPoolOrchestratorTests
             Substitute.For<IPayoutProfileResolver>(),
             Substitute.For<IPayoutReservationRunner>(),
             planningRunner,
-            executionBatchSize: 0);
+            planningMaxBatches: 0);
 
         await orchestrator.RunPlanningTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
 
@@ -236,6 +241,52 @@ public class PayoutPoolOrchestratorTests
 
         await planningRunner.DidNotReceive().CreateSendAttemptsAsync(Arg.Any<PayoutPlanningRunnerRequest>(),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task DbPayoutPlanningRunnerSkipsCoinFamilyMismatchWithStructuredReason()
+    {
+        var connectionFactory = Substitute.For<IConnectionFactory>();
+        var con = Substitute.For<IDbConnection>();
+        var tx = Substitute.For<IDbTransaction>();
+        connectionFactory.OpenConnectionAsync().Returns(Task.FromResult(con));
+        con.BeginTransaction(IsolationLevel.ReadCommitted).Returns(tx);
+
+        var intentRepo = Substitute.For<IPayoutIntentRepository>();
+        intentRepo.GetReservedBatchesForPlanningAsync(con, tx, "pool-a", 5, Arg.Any<CancellationToken>())
+            .Returns(new[]
+            {
+                new PayoutPlanningBatchCandidate
+                {
+                    BatchId = 42,
+                    PoolId = "pool-a",
+                    Coin = "bitcoin",
+                    CoinFamily = "wrong-family",
+                    Handler = PayoutProfileConstants.AdapterIds.BitcoinRpc,
+                    SendShape = PayoutProfileConstants.SendShapes.BatchMultiRecipient
+                }
+            });
+        var resolver = Substitute.For<IPayoutProfileResolver>();
+        resolver.Resolve("bitcoin").Returns(PayoutProfileResolution.Resolved(NewReadyProfile()));
+        var runner = new DbPayoutPlanningRunner(connectionFactory, intentRepo,
+            new PayoutSendAttemptPlannerService(intentRepo), resolver);
+
+        var result = await runner.CreateSendAttemptsAsync(new PayoutPlanningRunnerRequest
+        {
+            PoolId = "pool-a",
+            MaxBatches = 5,
+            Created = DateTime.UtcNow
+        }, CancellationToken.None);
+
+        Assert.Equal(1, result.CandidateBatchCount);
+        Assert.Equal(0, result.PlannedBatchCount);
+        Assert.Equal(1, result.SkippedBatchCount);
+        var skipped = Assert.Single(result.SkippedBatches);
+        Assert.Equal(42, skipped.BatchId);
+        Assert.Equal("pool-a", skipped.PoolId);
+        Assert.Equal("bitcoin", skipped.Coin);
+        Assert.Equal("wrong-family", skipped.CoinFamily);
+        Assert.Contains("coinFamily mismatch", skipped.Reason);
     }
 
     [Fact]
@@ -377,13 +428,14 @@ public class PayoutPoolOrchestratorTests
 
     private static PayoutPoolOrchestrator NewOrchestrator(PayoutProcessorMode mode, IPayoutProfileResolver resolver,
         IPayoutReservationRunner runner, IPayoutPlanningRunner planningRunner = null, bool enabled = true,
-        int reservationMaxCandidates = 50, int executionBatchSize = 8)
+        int reservationMaxCandidates = 50, int planningMaxBatches = 8, int executionBatchSize = 8)
     {
         var config = new PayoutProcessorConfig
         {
             Enabled = enabled,
             Mode = mode,
             ReservationMaxCandidates = reservationMaxCandidates,
+            PlanningMaxBatches = planningMaxBatches,
             ExecutionBatchSize = executionBatchSize
         };
 

@@ -27,6 +27,22 @@ public record PayoutProfileResolution
         };
     }
 
+    public static PayoutProfileResolution NotReady(PayoutProfile profile, string reason)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        return new PayoutProfileResolution
+        {
+            Status = PayoutProfileResolutionStatus.NotReady,
+            Profile = profile with
+            {
+                ReservationReady = false,
+                NotReadyReason = reason
+            },
+            Reason = reason
+        };
+    }
+
     public static PayoutProfileResolution Unsupported(string reason)
     {
         return new PayoutProfileResolution
