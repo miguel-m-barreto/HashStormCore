@@ -55,6 +55,7 @@ internal partial class ApiMapper
     [MapProperty(nameof(PersistencePoolStats.SharesPerSecond), nameof(HashStormCore.Api.Responses.AggregatedPoolStats.ValidSharesPerSecond))]
     internal partial HashStormCore.Api.Responses.AggregatedPoolStats MapAggregatedPoolStats(PersistencePoolStats source);
 
+    [MapperIgnoreSource(nameof(HashStormCore.Configuration.PoolPaymentProcessingConfig.Engine))]
     internal partial ApiPoolPaymentProcessingConfig MapPoolPaymentProcessingConfig(HashStormCore.Configuration.PoolPaymentProcessingConfig source);
 
     internal partial ApiWorkerPerformanceStats MapWorkerPerformanceStats(ProjectionWorkerPerformanceStats source);

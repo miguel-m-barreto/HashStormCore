@@ -12,6 +12,7 @@ public class PayoutProcessorConfig
     public bool Enabled { get; set; } = false;
     public PayoutProcessorMode Mode { get; set; } = PayoutProcessorMode.Disabled;
     public string PostgresConnectionString { get; set; } = string.Empty;
+    public string CoinsJsonPath { get; set; } = string.Empty;
     public string[] Pools { get; set; } = Array.Empty<string>();
     public int ReservationIntervalSeconds { get; set; } = 60;
     public int PlanningIntervalSeconds { get; set; } = 15;

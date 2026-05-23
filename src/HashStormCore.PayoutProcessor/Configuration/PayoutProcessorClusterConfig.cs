@@ -7,10 +7,10 @@ public class PayoutProcessorClusterConfig
 
 public class PayoutProcessorClusterPoolConfig
 {
-    public string? Id { get; set; }
+    public string Id { get; set; }
     public bool Enabled { get; set; }
-    public string? Coin { get; set; }
-    public PayoutProcessorClusterPaymentProcessingConfig? PaymentProcessing { get; set; }
+    public string Coin { get; set; }
+    public PayoutProcessorClusterPaymentProcessingConfig PaymentProcessing { get; set; }
     public PayoutProcessorClusterRewardRecipientConfig[] RewardRecipients { get; set; } =
         Array.Empty<PayoutProcessorClusterRewardRecipientConfig>();
 }
@@ -18,15 +18,15 @@ public class PayoutProcessorClusterPoolConfig
 public class PayoutProcessorClusterPaymentProcessingConfig
 {
     public bool Enabled { get; set; }
-    public string? Engine { get; set; }
+    public string Engine { get; set; }
     public decimal MinimumPayment { get; set; }
 }
 
 public class PayoutProcessorClusterRewardRecipientConfig
 {
-    public string? Address { get; set; }
+    public string Address { get; set; }
     public decimal Percentage { get; set; }
-    public string? Type { get; set; }
+    public string Type { get; set; }
     public decimal? MinimumPayment { get; set; }
 }
 
@@ -40,5 +40,5 @@ public record PayoutProcessorPoolConfig(
 public record PayoutProcessorRewardRecipientConfig(
     string Address,
     decimal Percentage,
-    string? Type,
+    string Type,
     decimal? MinimumPayment);

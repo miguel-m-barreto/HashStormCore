@@ -1,5 +1,20 @@
 using HashStormCore.PayoutProcessor.Configuration;
 using HashStormCore.PayoutProcessor.Services;
+using HashStormCore.Payouts.Alephium;
+using HashStormCore.Payouts.Beam;
+using HashStormCore.Payouts.Bitcoin;
+using HashStormCore.Payouts.CoinMetadata;
+using HashStormCore.Payouts.Conceal;
+using HashStormCore.Payouts.Cryptonote;
+using HashStormCore.Payouts.Equihash;
+using HashStormCore.Payouts.Ergo;
+using HashStormCore.Payouts.Ethereum;
+using HashStormCore.Payouts.Handshake;
+using HashStormCore.Payouts.Kaspa;
+using HashStormCore.Payouts.Profiles;
+using HashStormCore.Payouts.Warthog;
+using HashStormCore.Payouts.Xelis;
+using HashStormCore.Payouts.Zano;
 using HashStormCore.Payments;
 using HashStormCore.Persistence;
 using HashStormCore.Persistence.Postgres;
@@ -36,12 +51,29 @@ ApplyPoolCoreDefaults(clusterConfiguration, config);
 
 builder.Services.AddSingleton(config);
 builder.Services.AddSingleton(clusterConfig);
+builder.Services.AddSingleton<ICoinMetadataRegistry>(_ => new CoinsJsonCoinMetadataRegistry(ResolveCoinsJsonPath(config)));
+builder.Services.AddSingleton<IPayoutProfileProvider, BitcoinPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, HandshakePayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, EquihashPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, CryptonotePayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, ConcealPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, ZanoPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, EthereumPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, ErgoPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, BeamPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, AlephiumPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, KaspaPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, XelisPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileProvider, WarthogPayoutProfileProvider>();
+builder.Services.AddSingleton<IPayoutProfileResolver, PayoutProfileResolver>();
 builder.Services.AddSingleton<IConnectionFactory>(_ => new PgConnectionFactory(config.PostgresConnectionString));
 builder.Services.AddSingleton<IPayoutIntentRepository, PayoutIntentRepository>();
 builder.Services.AddSingleton<IPayoutReservationRepository, PayoutReservationRepository>();
 builder.Services.AddSingleton<IPayoutSettlementRepository, PayoutSettlementRepository>();
 builder.Services.AddSingleton<PayoutReservationService>();
+builder.Services.AddSingleton<IPayoutReservationRunner, DbPayoutReservationRunner>();
 builder.Services.AddSingleton<PayoutSendAttemptPlannerService>();
+builder.Services.AddSingleton<IPayoutPlanningRunner, DbPayoutPlanningRunner>();
 builder.Services.AddSingleton<PayoutSendExecutorService>();
 builder.Services.AddSingleton<PayoutStaleSendReconciliationService>();
 builder.Services.AddSingleton<PayoutOperationIdReconciliationService>();
@@ -84,4 +116,17 @@ static string BuildPostgresConnectionString(IConfiguration configuration)
         connectionString.SslMode = SslMode.Require;
 
     return connectionString.ToString();
+}
+
+static string ResolveCoinsJsonPath(PayoutProcessorConfig config)
+{
+    if(!string.IsNullOrWhiteSpace(config.CoinsJsonPath))
+        return config.CoinsJsonPath;
+
+    const string repositoryRelativePath = "src/HashStormCore/coins.json";
+
+    if(File.Exists(repositoryRelativePath))
+        return repositoryRelativePath;
+
+    return Path.Combine(AppContext.BaseDirectory, "coins.json");
 }

@@ -1822,7 +1822,7 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         }, tx, cancellationToken: ct));
     }
 
-    private static async Task<Entities.PayoutBatch?> LoadBatchForAttemptForUpdateAsync(IDbConnection con, IDbTransaction tx,
+    private static async Task<Entities.PayoutBatch> LoadBatchForAttemptForUpdateAsync(IDbConnection con, IDbTransaction tx,
         long attemptId, string poolId, CancellationToken ct)
     {
         const string query = @"SELECT b.*
@@ -1868,7 +1868,7 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         {
             batchid = batchId,
             attemptid = attemptId,
-            poolid,
+            poolid = poolId,
             kind,
             value
         }, tx, cancellationToken: ct));

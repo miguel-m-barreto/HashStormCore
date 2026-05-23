@@ -11,7 +11,8 @@ public class PayoutProcessorService : BackgroundService
     private const string PayoutEngineIntent = "intent";
 
     public PayoutProcessorService(PayoutProcessorConfig config, PayoutProcessorClusterConfig clusterConfig,
-        PayoutPoolOrchestrator orchestrator, ILogger<PayoutProcessorService> logger)
+        PayoutPoolOrchestrator orchestrator,
+        ILogger<PayoutProcessorService> logger)
     {
         this.config = config;
         this.clusterConfig = clusterConfig;
@@ -45,44 +46,48 @@ public class PayoutProcessorService : BackgroundService
             return;
         }
 
-        if(config.Mode == PayoutProcessorMode.DbMutating)
-        {
-            logger.LogCritical("PayoutProcessor DbMutating mode is not implemented in this patch");
-            throw new InvalidOperationException("PayoutProcessor DbMutating mode is not implemented");
-        }
-
-        if(config.Mode != PayoutProcessorMode.DryRun)
+        if(config.Mode != PayoutProcessorMode.DryRun && config.Mode != PayoutProcessorMode.DbMutating)
             throw new InvalidOperationException($"Unsupported PayoutProcessor mode '{config.Mode}'");
-
-        logger.LogWarning("PayoutProcessor dry-run mode performs no DB mutations, no settlement, and no wallet/daemon/RPC calls");
 
         var pools = DiscoverPools();
 
         if(pools.Count == 0)
         {
-            logger.LogWarning("PayoutProcessor dry-run discovered no enabled payout-capable pools; per-pool loop ticks will not run");
+            logger.LogWarning("PayoutProcessor discovered no enabled payout-capable pools; per-pool loop ticks will not run");
             await WaitUntilCancelledAsync(stoppingToken);
             return;
         }
 
-        logger.LogInformation("PayoutProcessor dry-run discovered {PoolCount} payout-capable pool(s)", pools.Count);
+        if(config.Mode == PayoutProcessorMode.DryRun)
+            logger.LogWarning("PayoutProcessor dry-run mode performs no DB mutations, no settlement, and no wallet/daemon/RPC calls");
+        else
+        {
+            logger.LogWarning(
+                "PayoutProcessor DbMutating mode is enabled for reservation and planning only. Execution, reconciliation, settlement, and wallet/daemon/RPC calls remain disabled");
+            logger.LogWarning("PayoutProcessor DbMutating reservation and planning process only pools with paymentProcessing.engine=intent");
+        }
+
+        logger.LogInformation("PayoutProcessor discovered {PoolCount} payout-capable pool(s)", pools.Count);
 
         foreach(var pool in pools)
         {
             logger.LogInformation(
-                "PayoutProcessor dry-run pool {PoolId}: coin={Coin}, engine={Engine}, minimumPayment={MinimumPayment}, rewardRecipients={RewardRecipientCount}",
+                "PayoutProcessor pool {PoolId}: coin={Coin}, engine={Engine}, minimumPayment={MinimumPayment}, rewardRecipients={RewardRecipientCount}",
                 pool.Id, pool.Coin, pool.Engine, pool.MinimumPayment, pool.RewardRecipients.Count);
 
             foreach(var recipient in pool.RewardRecipients)
             {
                 logger.LogInformation(
-                    "PayoutProcessor dry-run reward recipient for pool {PoolId}: address={Address}, type={Type}, percentage={Percentage}, minimumPayment={MinimumPaymentSummary}",
+                    "PayoutProcessor reward recipient for pool {PoolId}: address={Address}, type={Type}, percentage={Percentage}, minimumPayment={MinimumPaymentSummary}",
                     pool.Id, recipient.Address, recipient.Type ?? string.Empty, recipient.Percentage,
                     FormatRewardRecipientMinimumPayment(recipient.MinimumPayment));
             }
         }
 
-        await RunDryRunLoopsAsync(pools, stoppingToken);
+        if(config.Mode == PayoutProcessorMode.DryRun)
+            await RunDryRunLoopsAsync(pools, stoppingToken);
+        else
+            await RunDbMutatingReservationAndPlanningLoopsAsync(pools, stoppingToken);
     }
 
     private IReadOnlyCollection<PayoutProcessorPoolConfig> DiscoverPools()
@@ -144,7 +149,7 @@ public class PayoutProcessorService : BackgroundService
         return discoveredPools;
     }
 
-    private static string ResolvePayoutEngine(string poolId, string? engine)
+    private static string ResolvePayoutEngine(string poolId, string engine)
     {
         if(string.IsNullOrWhiteSpace(engine))
             return PayoutEngineLegacy;
@@ -162,7 +167,7 @@ public class PayoutProcessorService : BackgroundService
     }
 
     private IReadOnlyCollection<PayoutProcessorRewardRecipientConfig> DiscoverRewardRecipients(string poolId,
-        IReadOnlyCollection<PayoutProcessorClusterRewardRecipientConfig>? rewardRecipients)
+        IReadOnlyCollection<PayoutProcessorClusterRewardRecipientConfig> rewardRecipients)
     {
         var results = new List<PayoutProcessorRewardRecipientConfig>();
 
@@ -271,6 +276,74 @@ public class PayoutProcessorService : BackgroundService
         catch(OperationCanceledException) when(ct.IsCancellationRequested)
         {
             logger.LogInformation("PayoutProcessor dry-run loop stopped");
+        }
+    }
+
+    private async Task RunDbMutatingReservationAndPlanningLoopsAsync(IReadOnlyCollection<PayoutProcessorPoolConfig> pools,
+        CancellationToken ct)
+    {
+        var reservationInterval = GetInterval(config.ReservationIntervalSeconds);
+        var planningInterval = GetInterval(config.PlanningIntervalSeconds);
+        var nextReservation = DateTimeOffset.MinValue;
+        var nextPlanning = DateTimeOffset.MinValue;
+
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+
+        try
+        {
+            while(await timer.WaitForNextTickAsync(ct))
+            {
+                var now = DateTimeOffset.UtcNow;
+
+                if(now < nextReservation)
+                {
+                    if(now >= nextPlanning)
+                    {
+                        foreach(var pool in pools)
+                            await RunPoolTickAsync(pool, () => orchestrator.RunPlanningTickAsync(pool, ct),
+                                "Payout planning tick failed for pool {PoolId}", ct);
+
+                        nextPlanning = now + planningInterval;
+                    }
+
+                    continue;
+                }
+
+                foreach(var pool in pools)
+                    await RunPoolTickAsync(pool, () => orchestrator.RunReservationTickAsync(pool, ct),
+                        "Payout reservation tick failed for pool {PoolId}", ct);
+
+                nextReservation = now + reservationInterval;
+
+                if(now >= nextPlanning)
+                {
+                    foreach(var pool in pools)
+                        await RunPoolTickAsync(pool, () => orchestrator.RunPlanningTickAsync(pool, ct),
+                            "Payout planning tick failed for pool {PoolId}", ct);
+
+                    nextPlanning = now + planningInterval;
+                }
+            }
+        }
+        catch(OperationCanceledException) when(ct.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task RunPoolTickAsync(PayoutProcessorPoolConfig pool, Func<Task> tick, string errorMessage,
+        CancellationToken ct)
+    {
+        try
+        {
+            await tick();
+        }
+        catch(OperationCanceledException) when(ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch(Exception ex)
+        {
+            logger.LogError(ex, errorMessage, pool.Id);
         }
     }
 

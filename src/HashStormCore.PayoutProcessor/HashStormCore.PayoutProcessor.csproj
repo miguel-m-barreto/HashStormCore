@@ -15,4 +15,8 @@
   <ItemGroup>
     <ProjectReference Include="..\HashStormCore.Payouts\HashStormCore.Payouts.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\HashStormCore\coins.json" Link="coins.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
