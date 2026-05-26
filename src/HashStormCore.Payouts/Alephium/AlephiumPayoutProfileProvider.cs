@@ -21,8 +21,12 @@ public class AlephiumPayoutProfileProvider : IPayoutProfileProvider
             SupportsTransparentTxId = true,
             AllowsBatchMultiRecipient = true,
             RequiresWalletDaemon = true,
-            ReservationReady = false,
-            NotReadyReason = "Alephium payouts require address-group-aware planning before reservation is enabled"
+            AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware,
+            // Planning safety page-size. Execution must still validate gas per attempt and must
+            // never silently remove recipients from a prepared attempt.
+            MaxRecipientsPerAttempt = 64,
+            AddressGroupCount = 4,
+            ReservationReady = true
         };
 
         return PayoutProfileResolution.Resolved(profile);

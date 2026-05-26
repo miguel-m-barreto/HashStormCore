@@ -73,6 +73,16 @@ public class PayoutProfileResolver : IPayoutProfileResolver
                 $"before reservation is enabled; transfer_split multi-hash is not supported for attempt-level settlement");
         }
 
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           string.Equals(resolution.Profile.AttemptPlanningPolicy,
+               PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware, StringComparison.Ordinal) &&
+           (!resolution.Profile.AddressGroupCount.HasValue || resolution.Profile.AddressGroupCount.Value != 4))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                $"Alephium group-aware planning requires AddressGroupCount=4 before reservation is enabled");
+        }
+
         return resolution;
     }
 

@@ -315,6 +315,71 @@ public class PayoutProfileResolverTests
     }
 
     [Fact]
+    public void AlephiumProfileIsReservationReadyWithGroupAwarePlanning()
+    {
+        var resolver = NewResolver(Coin("alephium", "alephium", "ALPH"));
+
+        var result = resolver.Resolve("alephium");
+
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
+        Assert.Equal(PayoutProfileConstants.AdapterIds.AlephiumWalletApi, result.Profile.AdapterId);
+        Assert.Equal(PayoutProfileConstants.SendShapes.AddressGroup, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.BuildSignSubmit, result.Profile.SendMethod);
+        Assert.Equal(PayoutProfileConstants.SettlementEvidenceKinds.TxId, result.Profile.SettlementEvidenceKind);
+        Assert.Equal(PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware,
+            result.Profile.AttemptPlanningPolicy);
+        Assert.True(result.Profile.SupportsTransparentTxId);
+        Assert.True(result.Profile.AllowsBatchMultiRecipient);
+        Assert.True(result.Profile.RequiresWalletDaemon);
+        Assert.Equal(4, result.Profile.AddressGroupCount);
+        Assert.True(result.Profile.MaxRecipientsPerAttempt > 0);
+        Assert.True(result.Profile.ReservationReady);
+        Assert.Empty(result.Profile.NotReadyReason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForAlephiumGroupAwarePolicyWithoutAddressGroupCount()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-alph", "bad-alph", "BAD") }),
+            new[] { new BadAlephiumGroupAwareProvider(addressGroupCount: null, maxRecipientsPerAttempt: 64) });
+
+        var result = resolver.Resolve("bad-alph");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("AddressGroupCount", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForAlephiumGroupAwarePolicyWithWrongAddressGroupCount()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-alph", "bad-alph", "BAD") }),
+            new[] { new BadAlephiumGroupAwareProvider(addressGroupCount: 2, maxRecipientsPerAttempt: 64) });
+
+        var result = resolver.Resolve("bad-alph");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("AddressGroupCount", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForAlephiumGroupAwarePolicyWithoutMaxRecipientsPerAttempt()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-alph", "bad-alph", "BAD") }),
+            new[] { new BadAlephiumGroupAwareProvider(addressGroupCount: 4, maxRecipientsPerAttempt: 0) });
+
+        var result = resolver.Resolve("bad-alph");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("MaxRecipientsPerAttempt", result.Reason);
+    }
+
+    [Fact]
     public void ResolverNeverReturnsNullDefaultProfile()
     {
         var resolver = NewResolver(Coin("ergo", "ergo", "ERG"));
@@ -399,6 +464,41 @@ public class PayoutProfileResolverTests
                 SendShape = PayoutProfileConstants.SendShapes.AddressGroup,
                 SendMethod = "bad-send",
                 SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+                ReservationReady = true
+            });
+        }
+    }
+
+    private class BadAlephiumGroupAwareProvider : IPayoutProfileProvider
+    {
+        private readonly int? addressGroupCount;
+        private readonly int maxRecipientsPerAttempt;
+
+        public BadAlephiumGroupAwareProvider(int? addressGroupCount, int maxRecipientsPerAttempt)
+        {
+            this.addressGroupCount = addressGroupCount;
+            this.maxRecipientsPerAttempt = maxRecipientsPerAttempt;
+        }
+
+        public bool CanResolve(CoinDescriptor coin)
+        {
+            return string.Equals(coin.Family, "bad-alph", StringComparison.Ordinal);
+        }
+
+        public PayoutProfileResolution Resolve(CoinDescriptor coin)
+        {
+            return PayoutProfileResolution.Resolved(new PayoutProfile
+            {
+                CoinKey = coin.CoinKey,
+                CoinSymbol = coin.Symbol,
+                CoinFamily = coin.Family,
+                AdapterId = "bad-alph-adapter",
+                SendShape = PayoutProfileConstants.SendShapes.AddressGroup,
+                SendMethod = PayoutProfileConstants.SendMethods.BuildSignSubmit,
+                SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+                AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware,
+                MaxRecipientsPerAttempt = maxRecipientsPerAttempt,
+                AddressGroupCount = addressGroupCount,
                 ReservationReady = true
             });
         }

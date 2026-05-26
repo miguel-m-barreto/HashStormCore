@@ -29,4 +29,5 @@ public record PayoutProfile
     public bool ReservationReady { get; init; }
     public string NotReadyReason { get; init; } = string.Empty;
     public IReadOnlyCollection<ulong> IntegratedAddressPrefixes { get; init; } = Array.Empty<ulong>();
+    public int? AddressGroupCount { get; init; }
 }

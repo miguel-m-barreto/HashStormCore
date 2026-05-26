@@ -82,6 +82,7 @@ public static class PayoutProfileConstants
         public const string ConcealPaymentIdAware = "conceal_payment_id_aware";
         public const string CryptonotePaymentIdAware = "cryptonote_payment_id_aware";
         public const string ZanoPaymentIdAware = "zano_payment_id_aware";
+        public const string AlephiumGroupAware = "alephium_group_aware";
     }
 
     public static class MultiHashEvidencePolicies

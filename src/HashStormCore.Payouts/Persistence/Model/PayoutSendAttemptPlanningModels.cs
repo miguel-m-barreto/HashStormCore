@@ -21,6 +21,7 @@ public record CreatePayoutSendAttemptsRequest
     public string AttemptPlanningPolicy { get; init; } = PayoutProfileConstants.PlanningPolicies.Default;
     public int MaxRecipientsPerAttempt { get; init; }
     public IReadOnlyCollection<ulong> IntegratedAddressPrefixes { get; init; } = Array.Empty<ulong>();
+    public int AddressGroupCount { get; init; }
     public DateTime Created { get; init; }
 }
 

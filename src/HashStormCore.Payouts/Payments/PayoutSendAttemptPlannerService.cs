@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using System.Data;
 using System.Globalization;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using HashStormCore.Payouts.Profiles;
@@ -16,7 +18,20 @@ public class PayoutSendAttemptPlannerService
     }
 
     private const string HashDomain = "HashStormCore:payout-send-attempt:v1";
+
+    // Shared by CryptoNote block-based Base58 and standard Bitcoin-style Base58 (Alephium).
     private const string CryptoNoteBase58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+    // Alephium LockupScript type bytes (see upstream protocol/script/LockupScript.scala).
+    private const byte AlephiumTypeP2PKH = 0;
+    private const byte AlephiumTypeP2MPKH = 1;
+    private const byte AlephiumTypeP2SH = 2;
+    private const byte AlephiumTypeP2C = 3;
+    private const byte AlephiumTypeP2PK = 4;
+    private const byte AlephiumTypeP2HMPK = 5;
+    private const int AlephiumHashLength = 32;
+    private const int AlephiumLockupScriptSerializedLength = 1 + AlephiumHashLength;
+    private const int AlephiumGroupedKeySerializedLength = 39;
     private static readonly int[] CryptoNoteEncodedBlockSizes = { 0, 2, 3, 5, 6, 7, 9, 10, 11 };
     private const int CryptoNoteStandardPayloadLength = 32 + 32 + 4;
     private const int CryptoNoteIntegratedPayloadLength = 8 + 32 + 32 + 4;
@@ -100,6 +115,9 @@ public class PayoutSendAttemptPlannerService
             case PayoutSendShapes.AddressGroup:
                 if(IsPaymentIdAwarePlanningPolicy(request.AttemptPlanningPolicy))
                     return CreatePaymentIdAwareGroups(request, orderedIntents);
+
+                if(IsAlephiumGroupAwarePolicy(request.AttemptPlanningPolicy))
+                    return CreateAlephiumGroupAwareGroups(request, orderedIntents);
 
                 return orderedIntents
                     .Select((intent, index) => new { intent, index })
@@ -206,11 +224,18 @@ public class PayoutSendAttemptPlannerService
             case PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware:
             case PayoutProfileConstants.PlanningPolicies.CryptonotePaymentIdAware:
             case PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware:
+            case PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware:
                 break;
 
             default:
                 throw new ArgumentException(
                     $"Unsupported payout attempt planning policy '{request.AttemptPlanningPolicy}'", nameof(request));
+        }
+
+        if(IsAlephiumGroupAwarePolicy(request.AttemptPlanningPolicy) && request.AddressGroupCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request.AddressGroupCount),
+                "Alephium group-aware payout planning requires an address group count greater than zero");
         }
     }
 
@@ -222,6 +247,272 @@ public class PayoutSendAttemptPlannerService
                    StringComparison.Ordinal) ||
                string.Equals(policy, PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware,
                    StringComparison.Ordinal);
+    }
+
+    private static bool IsAlephiumGroupAwarePolicy(string policy)
+    {
+        return string.Equals(policy, PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware,
+            StringComparison.Ordinal);
+    }
+
+    // Groups intents by Alephium network group and chunks within each group by
+    // MaxRecipientsPerAttempt. Attempts from different groups are never mixed.
+    // Throws InvalidOperationException for any address that cannot be classified.
+    private static List<PayoutIntent[]> CreateAlephiumGroupAwareGroups(CreatePayoutSendAttemptsRequest request,
+        PayoutIntent[] orderedIntents)
+    {
+        var groupCount = request.AddressGroupCount;
+        var groupBuckets = new List<PayoutIntent>[groupCount];
+        for(var g = 0; g < groupCount; g++)
+            groupBuckets[g] = new List<PayoutIntent>();
+
+        foreach(var intent in orderedIntents)
+        {
+            var groupIndex = ClassifyAlephiumAddressGroup(intent.Address, groupCount);
+            if(groupIndex == null)
+                throw new InvalidOperationException(
+                    $"Alephium: unclassifiable address in intent {intent.Id}, " +
+                    $"batch {request.BatchId}, pool {request.PoolId}");
+
+            groupBuckets[groupIndex.Value].Add(intent);
+        }
+
+        var result = new List<PayoutIntent[]>();
+        for(var g = 0; g < groupCount; g++)
+        {
+            var bucket = groupBuckets[g];
+            if(bucket.Count == 0)
+                continue;
+
+            for(var i = 0; i < bucket.Count; i += request.MaxRecipientsPerAttempt)
+                result.Add(bucket.Skip(i).Take(request.MaxRecipientsPerAttempt).ToArray());
+        }
+
+        return result;
+    }
+
+    // Classifies an Alephium address into a configured network group.
+    // Returns null for any address that cannot be safely classified (unclassifiable).
+    //
+    // Supported types (upstream protocol/script/LockupScript.scala):
+    //   P2PKH (0): group via ScriptHint of 32-byte public-key hash
+    //   P2MPKH(1): group via ScriptHint of first public-key hash
+    //   P2SH  (2): group via ScriptHint of 32-byte script hash
+    //   P2C   (3): group = last byte of 32-byte contract id when it is a valid group index
+    //   P2PK/P2HMPK explicit suffix ":N": group = N when payload and suffix are valid
+    private static int? ClassifyAlephiumAddressGroup(string address, int addressGroupCount)
+    {
+        if(string.IsNullOrWhiteSpace(address))
+            return null;
+
+        // P2PK / P2HMPK explicit grouped address: "base58payload:groupByte"
+        var colonIdx = address.LastIndexOf(':');
+        if(colonIdx >= 0)
+        {
+            var payload = address[..colonIdx];
+            var suffix = address[(colonIdx + 1)..];
+            return ClassifyAlephiumExplicitGroupAddress(payload, suffix, addressGroupCount);
+        }
+
+        var decoded = DecodeStandardBase58(address);
+        if(decoded == null || decoded.Length == 0)
+            return null;
+
+        var typeByte = decoded[0];
+
+        switch(typeByte)
+        {
+            case AlephiumTypeP2PKH:
+            case AlephiumTypeP2SH:
+                if(decoded.Length != AlephiumLockupScriptSerializedLength)
+                    return null;
+
+                // group from ScriptHint of the 32-byte hash (upstream ScriptHint.scala)
+                return AlephiumGroupFromScriptHint(decoded.AsSpan(1, AlephiumHashLength), addressGroupCount);
+
+            case AlephiumTypeP2MPKH:
+                return ClassifyAlephiumP2MPKHGroup(decoded.AsSpan(1), addressGroupCount);
+
+            case AlephiumTypeP2C:
+                if(decoded.Length != AlephiumLockupScriptSerializedLength)
+                    return null;
+
+                // ContractId encodes the group in the last byte. It is not modulo-reduced.
+                return decoded[32] < addressGroupCount ? (int?) decoded[32] : null;
+
+            default:
+                return null;
+        }
+    }
+
+    private static int? ClassifyAlephiumP2MPKHGroup(ReadOnlySpan<byte> payload, int addressGroupCount)
+    {
+        var offset = 0;
+        if(!TryReadAlephiumCompactSignedInt(payload, ref offset, out var publicKeyHashCount) ||
+           publicKeyHashCount <= 0)
+        {
+            return null;
+        }
+
+        if(publicKeyHashCount > (payload.Length - offset) / AlephiumHashLength)
+            return null;
+
+        var firstPublicKeyHash = payload.Slice(offset, AlephiumHashLength);
+        offset += publicKeyHashCount * AlephiumHashLength;
+
+        if(!TryReadAlephiumCompactSignedInt(payload, ref offset, out var threshold) ||
+           threshold < 1 ||
+           threshold > publicKeyHashCount ||
+           offset != payload.Length)
+        {
+            return null;
+        }
+
+        return AlephiumGroupFromScriptHint(firstPublicKeyHash, addressGroupCount);
+    }
+
+    private static int? ClassifyAlephiumExplicitGroupAddress(string payload, string suffix, int addressGroupCount)
+    {
+        if(string.IsNullOrEmpty(payload) || suffix.Length != 1 || suffix[0] < '0' || suffix[0] > '9')
+            return null;
+
+        var group = suffix[0] - '0';
+        if(group < 0 || group >= addressGroupCount)
+            return null;
+
+        var decoded = DecodeStandardBase58(payload);
+        if(decoded == null || decoded.Length != AlephiumGroupedKeySerializedLength)
+            return null;
+
+        return decoded[0] is AlephiumTypeP2PK or AlephiumTypeP2HMPK ? group : null;
+    }
+
+    // Alephium IntSerde delegates to CompactInteger.Signed.
+    private static bool TryReadAlephiumCompactSignedInt(ReadOnlySpan<byte> bytes, ref int offset, out int value)
+    {
+        value = 0;
+        if(offset < 0 || offset >= bytes.Length)
+            return false;
+
+        var first = bytes[offset];
+        var mode = first & 0xc0;
+        var size = mode switch
+        {
+            0x00 => 1,
+            0x40 => 2,
+            0x80 => 4,
+            _ => (first & 0x3f) + 5
+        };
+
+        if(size <= 0 || bytes.Length - offset < size)
+            return false;
+
+        var body = bytes.Slice(offset, size);
+        offset += size;
+
+        if(mode == 0xc0)
+        {
+            if(size != 5)
+                return false;
+
+            value = BinaryPrimitives.ReadInt32BigEndian(body.Slice(1));
+            return true;
+        }
+
+        var isPositive = (body[0] & 0x20) == 0;
+        if(isPositive)
+        {
+            value = size switch
+            {
+                1 => body[0],
+                2 => ((body[0] & 0x3f) << 8) | (body[1] & 0xff),
+                4 => ((body[0] & 0x3f) << 24) |
+                     ((body[1] & 0xff) << 16) |
+                     ((body[2] & 0xff) << 8) |
+                     (body[3] & 0xff),
+                _ => 0
+            };
+        }
+        else
+        {
+            value = size switch
+            {
+                1 => unchecked((int) ((uint) body[0] | 0xffffffc0u)),
+                2 => unchecked((int) ((((uint) body[0] | 0xffffffc0u) << 8) |
+                                      (uint) (body[1] & 0xff))),
+                4 => unchecked((int) ((((uint) body[0] | 0xffffffc0u) << 24) |
+                                      ((uint) (body[1] & 0xff) << 16) |
+                                      ((uint) (body[2] & 0xff) << 8) |
+                                      (uint) (body[3] & 0xff))),
+                _ => 0
+            };
+        }
+
+        return size is 1 or 2 or 4;
+    }
+
+    // ScriptHint.groupIndex (upstream util/ScriptHint.scala):
+    //   value = DjbHash(hashBytes) | 1
+    //   xorByte = byte0 ^ byte1 ^ byte2 ^ byte3   (each byte of the 32-bit value)
+    //   group   = (xorByte & 0xff) % groupCount
+    private static int AlephiumGroupFromScriptHint(ReadOnlySpan<byte> hashBytes, int addressGroupCount)
+    {
+        var scriptHint = AlephiumDjbHash(hashBytes) | 1;
+        var xorByte = (byte)(scriptHint ^ (scriptHint >> 8) ^ (scriptHint >> 16) ^ (scriptHint >> 24));
+        return (xorByte & 0xff) % addressGroupCount;
+    }
+
+    // DjbHash.intHash (upstream util/djb2/DjbHash.scala):
+    //   start = 5381
+    //   for each byte b: hash = ((hash << 5) + hash) + (b & 0xff)
+    //   uses 32-bit signed int semantics (wraps on overflow)
+    private static int AlephiumDjbHash(ReadOnlySpan<byte> bytes)
+    {
+        unchecked
+        {
+            var hash = 5381;
+            foreach(var b in bytes)
+                hash = ((hash << 5) + hash) + (b & 0xff);
+            return hash;
+        }
+    }
+
+    // Standard Bitcoin-style Base58 decoder (BigInteger-based, NOT CryptoNote block-based).
+    // Leading '1' characters each decode to a 0x00 byte (as per Bitcoin Base58 convention).
+    // Returns null for any invalid character or empty input.
+    private static byte[] DecodeStandardBase58(string input)
+    {
+        if(string.IsNullOrEmpty(input))
+            return null;
+
+        var leadingZeros = 0;
+        foreach(var c in input)
+        {
+            if(c != '1') break;
+            leadingZeros++;
+        }
+
+        var value = BigInteger.Zero;
+        foreach(var c in input)
+        {
+            var digit = CryptoNoteBase58Alphabet.IndexOf(c);
+            if(digit < 0)
+                return null;
+
+            value = value * 58 + digit;
+        }
+
+        if(value.IsZero)
+            return new byte[leadingZeros];
+
+        var valueBytes = value.ToByteArray(isUnsigned: true, isBigEndian: true);
+
+        if(leadingZeros == 0)
+            return valueBytes;
+
+        var result = new byte[leadingZeros + valueBytes.Length];
+        valueBytes.CopyTo(result, leadingZeros);
+        return result;
     }
 
     private static void ExtractAddressAndPaymentId(string input, out string address, out string paymentId)

@@ -397,6 +397,112 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public async Task DbPayoutPlanningRunnerPassesAlephiumGroupProfileFieldsToPlannerAndClassifiesAddress()
+    {
+        var connectionFactory = Substitute.For<IConnectionFactory>();
+        var con = Substitute.For<IDbConnection>();
+        var tx = Substitute.For<IDbTransaction>();
+        connectionFactory.OpenConnectionAsync().Returns(Task.FromResult(con));
+        con.BeginTransaction(IsolationLevel.ReadCommitted).Returns(tx);
+
+        // Official P2PKH fixture — group 1 with AddressGroupCount=4.
+        const string group1Address = "1H7CmpbvGJwgyLzR91wzSJJSkiBC92WDPTWny4gmhQJQc";
+
+        var intentRepo = Substitute.For<IPayoutIntentRepository>();
+        intentRepo.GetReservedBatchesForPlanningAsync(con, tx, "pool-alph", 5, Arg.Any<CancellationToken>())
+            .Returns(new[]
+            {
+                new PayoutPlanningBatchCandidate
+                {
+                    BatchId = 77,
+                    PoolId = "pool-alph",
+                    Coin = "alephium",
+                    CoinFamily = "alephium",
+                    Handler = PayoutProfileConstants.AdapterIds.AlephiumWalletApi,
+                    SendShape = PayoutProfileConstants.SendShapes.AddressGroup
+                }
+            });
+        intentRepo.GetBatchForUpdateAsync(con, tx, 77, "pool-alph", "alephium", Arg.Any<CancellationToken>())
+            .Returns(new PayoutBatch
+            {
+                Id = 77,
+                PoolId = "pool-alph",
+                Coin = "alephium",
+                State = PayoutBatchStates.Reserved,
+                SendShape = PayoutProfileConstants.SendShapes.AddressGroup
+            });
+        intentRepo.GetSendAttemptCountForBatchAsync(con, tx, 77, "pool-alph", "alephium",
+                Arg.Any<CancellationToken>())
+            .Returns(0);
+        intentRepo.GetReservedIntentsForBatchAsync(con, tx, 77, "pool-alph", "alephium",
+                Arg.Any<CancellationToken>())
+            .Returns(new[]
+            {
+                new PayoutIntent
+                {
+                    Id = 55,
+                    BatchId = 77,
+                    PoolId = "pool-alph",
+                    Coin = "alephium",
+                    Address = group1Address,
+                    Amount = 10m
+                }
+            });
+        intentRepo.CreateSendAttemptAsync(con, tx,
+                Arg.Any<CreatePayoutSendAttemptRequest>(),
+                Arg.Any<IReadOnlyCollection<long>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var attempt = callInfo.Arg<CreatePayoutSendAttemptRequest>();
+                return Task.FromResult(new PayoutSendAttempt
+                {
+                    Id = 200,
+                    BatchId = attempt.BatchId,
+                    PoolId = attempt.PoolId,
+                    Coin = attempt.Coin,
+                    Method = attempt.Method,
+                    AttemptNo = attempt.AttemptNo,
+                    RecipientCount = attempt.RecipientCount,
+                    AmountSnapshot = attempt.AmountSnapshot
+                });
+            });
+
+        var resolver = Substitute.For<IPayoutProfileResolver>();
+        resolver.Resolve("alephium").Returns(PayoutProfileResolution.Resolved(new PayoutProfile
+        {
+            CoinKey = "alephium",
+            CoinSymbol = "ALPH",
+            CoinFamily = "alephium",
+            AdapterId = PayoutProfileConstants.AdapterIds.AlephiumWalletApi,
+            SendShape = PayoutProfileConstants.SendShapes.AddressGroup,
+            SendMethod = PayoutProfileConstants.SendMethods.BuildSignSubmit,
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+            AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware,
+            MaxRecipientsPerAttempt = 64,
+            AddressGroupCount = 4,
+            ReservationReady = true
+        }));
+        var runner = new DbPayoutPlanningRunner(connectionFactory, intentRepo,
+            new PayoutSendAttemptPlannerService(intentRepo), resolver);
+
+        var result = await runner.CreateSendAttemptsAsync(new PayoutPlanningRunnerRequest
+        {
+            PoolId = "pool-alph",
+            MaxBatches = 5,
+            Created = DateTime.UtcNow
+        }, CancellationToken.None);
+
+        Assert.Equal(1, result.PlannedBatchCount);
+        Assert.Equal(0, result.SkippedBatchCount);
+        var planResult = Assert.Single(result.Results);
+        Assert.Equal(PayoutSendAttemptPlanningStatus.Created, planResult.Status);
+        var attempt = Assert.Single(planResult.Attempts);
+        Assert.Equal(PayoutProfileConstants.SendMethods.BuildSignSubmit, attempt.Method);
+        Assert.Equal(1, attempt.RecipientCount);
+    }
+
+    [Fact]
     public async Task RunReservationTickAsync_DisabledConfigSkipsBeforeProfileResolution()
     {
         var runner = Substitute.For<IPayoutReservationRunner>();

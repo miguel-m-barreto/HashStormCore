@@ -95,6 +95,7 @@ public class DbPayoutPlanningRunner : IPayoutPlanningRunner
                     AttemptPlanningPolicy = profile.AttemptPlanningPolicy,
                     MaxRecipientsPerAttempt = profile.MaxRecipientsPerAttempt ?? 0,
                     IntegratedAddressPrefixes = profile.IntegratedAddressPrefixes,
+                    AddressGroupCount = profile.AddressGroupCount ?? 0,
                     Created = request.Created
                 };
 

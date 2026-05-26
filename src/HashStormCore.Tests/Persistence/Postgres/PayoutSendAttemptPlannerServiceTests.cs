@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Globalization;
 using System.Linq;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -370,6 +371,342 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
     }
 
     [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyGroupsSameGroupAddressesTogether()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            // Official P2PKH fixtures — both expected group 1 with AddressGroupCount=4
+            const string group1Address1 = "1H7CmpbvGJwgyLzR91wzSJJSkiBC92WDPTWny4gmhQJQc";
+            const string group1Address2 = "1C2RAVWSuaXw8xtUxqVERR7ChKBE1XgscNFw73NSHE1v3";
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_same_group"),
+                PayoutSendShapes.AddressGroup, (group1Address1, 1m), (group1Address2, 2m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewAlephiumRequest(batch, maxRecipientsPerAttempt: 64), Ct);
+
+            var attempt = Assert.Single(result.Attempts);
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(2, attempt.RecipientCount);
+            var addresses = await GetAttemptAddressesAsync(con, tx, attempt.Id);
+            Assert.Contains(group1Address1, addresses);
+            Assert.Contains(group1Address2, addresses);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicySeparatesDifferentGroupAddresses()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            // Official P2PKH fixtures across groups 0, 1, 3 with AddressGroupCount=4.
+            const string group0Address = "1DkrQMni2h8KYpvY8t7dECshL66gwnxiR5uD2Udxps6og";
+            const string group1Address = "1H7CmpbvGJwgyLzR91wzSJJSkiBC92WDPTWny4gmhQJQc";
+            const string group3Address = "131R8ufDhcsu6SRztR9D3m8GUzkWFUPfT78aQ6jgtgzob";
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_diff_groups"),
+                PayoutSendShapes.AddressGroup,
+                (group0Address, 1m), (group1Address, 2m), (group3Address, 3m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewAlephiumRequest(batch, maxRecipientsPerAttempt: 64), Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            // One attempt per occupied group (groups 0, 1, 3 in order)
+            Assert.Equal(3, result.Attempts.Count);
+            Assert.All(result.Attempts, a => Assert.Equal(1, a.RecipientCount));
+            Assert.Equal(new[] { group0Address },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { group1Address },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+            Assert.Equal(new[] { group3Address },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(2).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyAllFourOfficialP2PKHFixturesClassifiedCorrectly()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            // All four official P2PKH fixtures using AddressGroupCount=4:
+            // 1C2R... -> 1, 1H7... -> 1, 1Dkr... -> 0, 131... -> 3.
+            const string group0A = "1DkrQMni2h8KYpvY8t7dECshL66gwnxiR5uD2Udxps6og";
+            const string group1A = "1C2RAVWSuaXw8xtUxqVERR7ChKBE1XgscNFw73NSHE1v3";
+            const string group1B = "1H7CmpbvGJwgyLzR91wzSJJSkiBC92WDPTWny4gmhQJQc";
+            const string group3A = "131R8ufDhcsu6SRztR9D3m8GUzkWFUPfT78aQ6jgtgzob";
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_all_fixtures"),
+                PayoutSendShapes.AddressGroup,
+                (group0A, 1m), (group1A, 2m), (group1B, 3m), (group3A, 4m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewAlephiumRequest(batch, maxRecipientsPerAttempt: 64), Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            // Groups 0 (1 addr), 1 (2 addrs), 3 (1 addr) in group order.
+            Assert.Equal(3, result.Attempts.Count);
+            Assert.Equal(1, result.Attempts.ElementAt(0).RecipientCount);
+            Assert.Equal(2, result.Attempts.ElementAt(1).RecipientCount);
+            Assert.Equal(1, result.Attempts.ElementAt(2).RecipientCount);
+            Assert.Equal(new[] { group0A },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { group1A, group1B }.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+            Assert.Equal(new[] { group3A },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(2).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyP2SHAddressClassifiesByScriptHint()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var scriptHash = CreateAlephiumHash(0x10);
+            var p2shAddress = CreateAlephiumLockupScriptAddress(2, scriptHash);
+
+            await AssertAlephiumAddressPlansInGroupAsync(con, tx, p2shAddress, expectedGroup: 0);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyP2PKExplicitGroupSuffixGroupsWithSameGroupP2PKH()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            // P2PK address with explicit group-0 suffix alongside a P2PKH address in group 0.
+            const string p2pkGroup0 = "3ccJ8aEBYKBPJKuk6b9yZ1W1oFDYPesa3qQeM8v9jhaJtbSaueJ3L:0";
+            const string p2pkhGroup0 = "1DkrQMni2h8KYpvY8t7dECshL66gwnxiR5uD2Udxps6og";
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_p2pk_suffix"),
+                PayoutSendShapes.AddressGroup, (p2pkGroup0, 1m), (p2pkhGroup0, 2m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewAlephiumRequest(batch, maxRecipientsPerAttempt: 64), Ct);
+
+            var attempt = Assert.Single(result.Attempts);
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(2, attempt.RecipientCount);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyP2PKExplicitGroupSuffixesClassifyWhenPayloadIsValid()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            const string payload = "3ccJ8aEBYKBPJKuk6b9yZ1W1oFDYPesa3qQeM8v9jhaJtbSaueJ3L";
+            var group0 = $"{payload}:0";
+            var group1 = $"{payload}:1";
+            var group2 = $"{payload}:2";
+            var group3 = $"{payload}:3";
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_p2pk_suffixes"),
+                PayoutSendShapes.AddressGroup,
+                (group0, 1m), (group1, 2m), (group2, 3m), (group3, 4m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewAlephiumRequest(batch, maxRecipientsPerAttempt: 64), Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(4, result.Attempts.Count);
+            Assert.Equal(new[] { group0 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { group1 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+            Assert.Equal(new[] { group2 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(2).Id));
+            Assert.Equal(new[] { group3 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(3).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyP2HMPKExplicitGroupSuffixesClassifyWhenPayloadIsValid()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var payload = CreateAlephiumGroupedAddressPayload(5);
+            var group0 = $"{payload}:0";
+            var group1 = $"{payload}:1";
+            var group2 = $"{payload}:2";
+            var group3 = $"{payload}:3";
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_p2hmpk_suffixes"),
+                PayoutSendShapes.AddressGroup,
+                (group0, 1m), (group1, 2m), (group2, 3m), (group3, 4m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewAlephiumRequest(batch, maxRecipientsPerAttempt: 64), Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(4, result.Attempts.Count);
+            Assert.Equal(new[] { group0 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { group1 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+            Assert.Equal(new[] { group2 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(2).Id));
+            Assert.Equal(new[] { group3 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(3).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyThrowsForInvalidExplicitGroupSuffixPayloads()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var addresses = new[]
+            {
+                "bad:1",
+                "3ccJ8aEBYKBPJKuk6b9yZ1W1oFDYPesa3qQeM8v9jhaJtbSaueJ3L:4",
+                "3ccJ8aEBYKBPJKuk6b9yZ1W1oFDYPesa3qQeM8v9jhaJtbSaueJ3L:01",
+                "3ccJ8aEBYKBPJKuk6b9yZ1W1oFDYPesa3qQeM8v9jhaJtbSaueJ3L:-1",
+                "111111111111111111111111111111111111111:1"
+            };
+
+            foreach(var address in addresses)
+            {
+                var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_bad_suffix"),
+                    PayoutSendShapes.AddressGroup, (address, 1m));
+
+                await AssertAlephiumUnclassifiableAsync(con, tx, batch);
+            }
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyP2CAddressGroupsByRawLastContractIdByte()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var group0 = CreateAlephiumLockupScriptAddress(3, 0x00);
+            var group1 = CreateAlephiumLockupScriptAddress(3, 0x01);
+            var group2 = CreateAlephiumLockupScriptAddress(3, 0x02);
+            var group3 = CreateAlephiumLockupScriptAddress(3, 0x03);
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_p2c_valid"),
+                PayoutSendShapes.AddressGroup,
+                (group0, 1m), (group1, 2m), (group2, 3m), (group3, 4m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewAlephiumRequest(batch, maxRecipientsPerAttempt: 64), Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(4, result.Attempts.Count);
+            Assert.Equal(new[] { group0 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { group1 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+            Assert.Equal(new[] { group2 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(2).Id));
+            Assert.Equal(new[] { group3 },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(3).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyThrowsForP2CAddressWithInvalidRawGroupByte()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var addresses = new[]
+            {
+                // Official P2C fixtures with raw group bytes 0xef and 0xa9; they must not be modulo-reduced.
+                "22sTaM5xer7h81LzaGA2JiajRwHwECpAv9bBuFUH5rrnr",
+                "2AA91hkrsVv14QDZWgxMJXxDDKTRKzZMPyakCVUbZEGoS"
+            };
+
+            foreach(var address in addresses)
+            {
+                var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_p2c_invalid"),
+                    PayoutSendShapes.AddressGroup, (address, 1m));
+
+                await AssertAlephiumUnclassifiableAsync(con, tx, batch);
+            }
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyThrowsForUnclassifiableAddress()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            const string validAddress = "1H7CmpbvGJwgyLzR91wzSJJSkiBC92WDPTWny4gmhQJQc";
+            const string invalidAddress = "not-a-valid-alephium-address";
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_unclassifiable"),
+                PayoutSendShapes.AddressGroup, (validAddress, 1m), (invalidAddress, 2m));
+
+            var ex = await AssertAlephiumUnclassifiableAsync(con, tx, batch);
+
+            Assert.Contains("Alephium", ex.Message);
+            Assert.Contains("unclassifiable", ex.Message);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyOfficialP2MPKHFixturesClassifiedCorrectly()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var fixtures = new[]
+            {
+                ("2jjvDdgGjC6X9HHMCMHohVfvp1uf3LHQrAGWaufR17P7AFwtxodTxSktqKc2urNEtaoUCy5xXpBUwpZ8QM8Q3e5BYCx", 1),
+                ("2jjvDdgGjC6X9HHMCMHohVfvp1uf3LHQrAGWaufR17P7AFwtxodTxSktqKc2urNEtaoUCy5xXpBUwpZ8QM8Q3e5BYCy", 1),
+                ("X3RMnvb8h3RFrrbBraEouAWU9Ufu4s2WTXUQfLCvDtcmqCWRwkVLc69q2NnwYW2EMwg4QBN2UopkEmYLLLgHP9TQ38FK15RnhhEwguRyY6qCuAoRfyjHRnqYnTvfypPgD7w1ku", 1)
+            };
+
+            foreach(var (address, expectedGroup) in fixtures)
+                await AssertAlephiumAddressPlansInGroupAsync(con, tx, address, expectedGroup);
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyThrowsForMalformedP2MPKHAddress()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var malformedAddresses = new[]
+            {
+                CreateAlephiumP2MPKHAddress(Array.Empty<byte[]>(), threshold: 1),
+                CreateAlephiumP2MPKHAddress(new[] { CreateAlephiumHash(0x10) }, threshold: 0),
+                CreateAlephiumP2MPKHAddress(new[] { CreateAlephiumHash(0x20) }, threshold: 2),
+                CreateMalformedAlephiumP2MPKHAddress(publicKeyHashCount: 1, hashBytesToWrite: 31,
+                    threshold: 1, appendTrailing: false),
+                CreateAlephiumP2MPKHAddress(new[] { CreateAlephiumHash(0x30) }, threshold: 1,
+                    appendTrailing: true)
+            };
+
+            foreach(var address in malformedAddresses)
+            {
+                var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_bad_p2mpkh"),
+                    PayoutSendShapes.AddressGroup, (address, 1m));
+
+                await AssertAlephiumUnclassifiableAsync(con, tx, batch);
+            }
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_AlephiumPolicyChunksLargeGroupByMaxRecipientsPerAttempt()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            // Four group-0 addresses chunked at 2 should produce 2 attempts for group 0.
+            const string addr1 = "1DkrQMni2h8KYpvY8t7dECshL66gwnxiR5uD2Udxps6og";
+            var addr2 = CreateAlephiumLockupScriptAddress(3, 0x00);
+            const string addr3 = "3ccJ8aEBYKBPJKuk6b9yZ1W1oFDYPesa3qQeM8v9jhaJtbSaueJ3L:0";
+            const string addr4 = "3ddL9bFECBYCKBQKjb7aZW2pGGEYCesc4oPcbQ9jibcKuebTbfJ4M:0";
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_chunks"),
+                PayoutSendShapes.AddressGroup,
+                (addr1, 1m), (addr2, 2m), (addr3, 3m), (addr4, 4m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewAlephiumRequest(batch, maxRecipientsPerAttempt: 2), Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(2, result.Attempts.Count);
+            Assert.Equal(2, result.Attempts.ElementAt(0).RecipientCount);
+            Assert.Equal(2, result.Attempts.ElementAt(1).RecipientCount);
+        });
+    }
+
+    [PostgresIntegrationFact]
     public Task CreateSendAttemptsAsync_ExistingAttemptsReturnNoOp()
     {
         return WithRollbackAsync(async (con, tx) =>
@@ -533,6 +870,15 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
                     SendShape = PayoutSendShapes.AddressGroup,
                     MaxRecipientsPerAttempt = 0
                 }, Ct));
+
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+                service.CreateSendAttemptsAsync(con, tx, valid with
+                {
+                    SendShape = PayoutSendShapes.AddressGroup,
+                    MaxRecipientsPerAttempt = 64,
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware,
+                    AddressGroupCount = 0
+                }, Ct));
         });
     }
 
@@ -582,6 +928,51 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
             MaxRecipientsPerAttempt = maxRecipientsPerAttempt,
             Created = created ?? UtcNow()
         };
+    }
+
+    private static CreatePayoutSendAttemptsRequest NewAlephiumRequest(PayoutBatch batch, int maxRecipientsPerAttempt)
+    {
+        return NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt) with
+        {
+            AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware,
+            AddressGroupCount = 4
+        };
+    }
+
+    private Task<InvalidOperationException> AssertAlephiumUnclassifiableAsync(NpgsqlConnection con, NpgsqlTransaction tx,
+        PayoutBatch batch)
+    {
+        return Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CreateSendAttemptsAsync(con, tx, NewAlephiumRequest(batch, maxRecipientsPerAttempt: 64), Ct));
+    }
+
+    private async Task AssertAlephiumAddressPlansInGroupAsync(NpgsqlConnection con, NpgsqlTransaction tx,
+        string targetAddress, int expectedGroup)
+    {
+        var groupAddresses = Enumerable.Range(0, 4)
+            .Select(x => CreateAlephiumLockupScriptAddress(3, (byte) x))
+            .ToArray();
+        var intents = groupAddresses
+            .Select((address, index) => (address, amount: (decimal) (index + 1)))
+            .Append((address: targetAddress, amount: 10m))
+            .ToArray();
+        var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_aleph_expected_group"),
+            PayoutSendShapes.AddressGroup, intents);
+
+        var result = await service.CreateSendAttemptsAsync(con, tx,
+            NewAlephiumRequest(batch, maxRecipientsPerAttempt: 64), Ct);
+
+        Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+        Assert.Equal(4, result.Attempts.Count);
+
+        for(var i = 0; i < result.Attempts.Count; i++)
+        {
+            var addresses = await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(i).Id);
+            if(i == expectedGroup)
+                Assert.Contains(targetAddress, addresses);
+            else
+                Assert.DoesNotContain(targetAddress, addresses);
+        }
     }
 
     private static string CreateExpectedRequestHash(CreatePayoutSendAttemptsRequest request, int attemptNo,
@@ -686,6 +1077,145 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
             decoded[prefixBytes.Length + i] = (byte) (i + 1);
 
         return EncodeCryptoNoteBase58(decoded);
+    }
+
+    private static string CreateAlephiumLockupScriptAddress(byte typeByte, byte lastByte)
+    {
+        var decoded = new byte[33];
+        decoded[0] = typeByte;
+
+        for(var i = 1; i < decoded.Length - 1; i++)
+            decoded[i] = (byte) i;
+
+        decoded[^1] = lastByte;
+        return EncodeStandardBase58(decoded);
+    }
+
+    private static string CreateAlephiumLockupScriptAddress(byte typeByte, byte[] hashBytes)
+    {
+        if(hashBytes.Length != 32)
+            throw new ArgumentException("Alephium hash fixtures must be 32 bytes");
+
+        var decoded = new byte[33];
+        decoded[0] = typeByte;
+        Buffer.BlockCopy(hashBytes, 0, decoded, 1, hashBytes.Length);
+        return EncodeStandardBase58(decoded);
+    }
+
+    private static string CreateAlephiumGroupedAddressPayload(byte typeByte)
+    {
+        var decoded = new byte[39];
+        decoded[0] = typeByte;
+
+        for(var i = 1; i < decoded.Length; i++)
+            decoded[i] = (byte) (0x20 + i);
+
+        return EncodeStandardBase58(decoded);
+    }
+
+    private static string CreateAlephiumP2MPKHAddress(IReadOnlyCollection<byte[]> publicKeyHashes, int threshold,
+        bool appendTrailing = false)
+    {
+        var bytes = new List<byte> { 1 };
+        bytes.AddRange(EncodeAlephiumCompactSignedInt(publicKeyHashes.Count));
+
+        foreach(var publicKeyHash in publicKeyHashes)
+        {
+            if(publicKeyHash.Length != 32)
+                throw new ArgumentException("Alephium public-key hash fixtures must be 32 bytes");
+
+            bytes.AddRange(publicKeyHash);
+        }
+
+        bytes.AddRange(EncodeAlephiumCompactSignedInt(threshold));
+
+        if(appendTrailing)
+            bytes.Add(0xff);
+
+        return EncodeStandardBase58(bytes.ToArray());
+    }
+
+    private static string CreateMalformedAlephiumP2MPKHAddress(int publicKeyHashCount, int hashBytesToWrite,
+        int? threshold, bool appendTrailing)
+    {
+        var bytes = new List<byte> { 1 };
+        bytes.AddRange(EncodeAlephiumCompactSignedInt(publicKeyHashCount));
+
+        for(var i = 0; i < hashBytesToWrite; i++)
+            bytes.Add((byte) (0x40 + i));
+
+        if(threshold.HasValue)
+            bytes.AddRange(EncodeAlephiumCompactSignedInt(threshold.Value));
+
+        if(appendTrailing)
+            bytes.Add(0xff);
+
+        return EncodeStandardBase58(bytes.ToArray());
+    }
+
+    private static byte[] CreateAlephiumHash(byte seed)
+    {
+        var hash = new byte[32];
+        for(var i = 0; i < hash.Length; i++)
+            hash[i] = (byte) (seed + i);
+
+        return hash;
+    }
+
+    private static byte[] EncodeAlephiumCompactSignedInt(int value)
+    {
+        if(value < 0)
+            throw new ArgumentOutOfRangeException(nameof(value));
+
+        if(value < 0x20)
+            return new[] { (byte) value };
+
+        if(value < 0x2000)
+            return new[] { (byte) ((value >> 8) + 0x40), (byte) value };
+
+        if(value < 0x20000000)
+        {
+            return new[]
+            {
+                (byte) ((value >> 24) + 0x80),
+                (byte) (value >> 16),
+                (byte) (value >> 8),
+                (byte) value
+            };
+        }
+
+        return new[]
+        {
+            (byte) 0xc0,
+            (byte) (value >> 24),
+            (byte) (value >> 16),
+            (byte) (value >> 8),
+            (byte) value
+        };
+    }
+
+    private static string EncodeStandardBase58(byte[] bytes)
+    {
+        const string alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        var value = new BigInteger(bytes, isUnsigned: true, isBigEndian: true);
+        var chars = new List<char>();
+
+        while(value > BigInteger.Zero)
+        {
+            value = BigInteger.DivRem(value, 58, out var remainder);
+            chars.Add(alphabet[(int) remainder]);
+        }
+
+        foreach(var b in bytes)
+        {
+            if(b != 0)
+                break;
+
+            chars.Add(alphabet[0]);
+        }
+
+        chars.Reverse();
+        return chars.Count == 0 ? alphabet[0].ToString() : new string(chars.ToArray());
     }
 
     private static byte[] EncodeVarInt(ulong value)
