@@ -83,6 +83,7 @@ builder.Services.AddSingleton<IPayoutStaleSendReconciliationRunner, DbPayoutStal
 builder.Services.AddSingleton<PayoutOperationIdReconciliationService>();
 builder.Services.AddSingleton<PayoutAmbiguousReviewService>();
 builder.Services.AddSingleton<PayoutSettlementService>();
+builder.Services.AddSingleton<IPayoutSettlementRunner, DbPayoutSettlementRunner>();
 builder.Services.AddSingleton<PayoutPoolOrchestrator>();
 builder.Services.AddHostedService<PayoutProcessorService>();
 

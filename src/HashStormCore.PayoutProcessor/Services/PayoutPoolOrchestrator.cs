@@ -17,6 +17,7 @@ public class PayoutPoolOrchestrator
         IPayoutReservationRunner payoutReservationRunner, IPayoutPlanningRunner payoutPlanningRunner,
         IPayoutExecutionRunner payoutExecutionRunner,
         IPayoutStaleSendReconciliationRunner payoutStaleSendReconciliationRunner,
+        IPayoutSettlementRunner payoutSettlementRunner,
         ILogger<PayoutPoolOrchestrator> logger)
     {
         this.config = config;
@@ -25,6 +26,7 @@ public class PayoutPoolOrchestrator
         this.payoutPlanningRunner = payoutPlanningRunner;
         this.payoutExecutionRunner = payoutExecutionRunner;
         this.payoutStaleSendReconciliationRunner = payoutStaleSendReconciliationRunner;
+        this.payoutSettlementRunner = payoutSettlementRunner;
         this.logger = logger;
     }
 
@@ -34,6 +36,7 @@ public class PayoutPoolOrchestrator
     private readonly IPayoutPlanningRunner payoutPlanningRunner;
     private readonly IPayoutExecutionRunner payoutExecutionRunner;
     private readonly IPayoutStaleSendReconciliationRunner payoutStaleSendReconciliationRunner;
+    private readonly IPayoutSettlementRunner payoutSettlementRunner;
     private readonly ILogger<PayoutPoolOrchestrator> logger;
 
     public async Task RunReservationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
@@ -373,12 +376,81 @@ public class PayoutPoolOrchestrator
         return Task.CompletedTask;
     }
 
-    public Task RunSettlementTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
+    public async Task RunSettlementTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+
+        if(!config.Enabled)
+        {
+            logger.LogInformation("Skipping payout settlement for pool {PoolId}: PayoutProcessor is disabled", pool.Id);
+            return;
+        }
+
+        if(config.Mode == PayoutProcessorMode.Disabled)
+        {
+            logger.LogInformation("Skipping payout settlement for pool {PoolId}: PayoutProcessor mode is Disabled",
+                pool.Id);
+            return;
+        }
+
+        if(!string.Equals(pool.Engine, PayoutEngineIntent, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogInformation(
+                "Skipping payout settlement for pool {PoolId}: paymentProcessing.engine={Engine}, only engine=intent is processed by PayoutProcessor",
+                pool.Id, pool.Engine);
+            return;
+        }
+
+        if(config.Mode == PayoutProcessorMode.DryRun)
+        {
+            logger.LogInformation(
+                "Dry-run payout settlement tick for pool {PoolId}: would enumerate accepted attempts, limit={Limit}",
+                pool.Id, config.ExecutionBatchSize);
+            return;
+        }
+
+        if(config.Mode != PayoutProcessorMode.DbMutating)
+        {
+            logger.LogInformation("Payout settlement tick for pool {PoolId} skipped: processor mode is {Mode}",
+                pool.Id, config.Mode);
+            return;
+        }
+
+        if(config.ExecutionBatchSize <= 0)
+        {
+            logger.LogWarning(
+                "Skipping payout settlement for pool {PoolId}: ExecutionBatchSize is used as the settlement limit and must be greater than zero",
+                pool.Id);
+            return;
+        }
+
+        var request = BuildSettlementRequest(pool, config);
+
+        logger.LogInformation("DB-mutating payout settlement tick for pool {PoolId}: limit={Limit}",
+            request.PoolId, request.Limit);
+
+        var result = await payoutSettlementRunner.SettleAcceptedAttemptsAsync(request, ct);
+
         logger.LogInformation(
-            "Payout settlement tick for pool {PoolId} using engine {Engine}: settlement loop is not implemented and no accounting mutation is performed",
-            pool.Id, pool.Engine);
-        return Task.CompletedTask;
+            "Payout settlement tick for pool {PoolId} completed: candidateAttempts={CandidateCount}, settledAttempts={SettledCount}, alreadySettledAttempts={AlreadySettledCount}, skippedAttempts={SkippedCount}, failedAttempts={FailureCount}",
+            request.PoolId, result.CandidateCount, result.SettledCount, result.AlreadySettledCount,
+            result.SkippedCount, result.FailureCount);
+
+        foreach(var skipped in result.SkippedCandidates)
+        {
+            logger.LogWarning(
+                "Skipped payout settlement for attempt {AttemptId} in pool {PoolId}: coin={Coin}, method={Method}, evidenceKind={EvidenceKind}, status={Status}, reason={Reason}",
+                skipped.AttemptId, skipped.PoolId, skipped.Coin, skipped.Method, skipped.EvidenceKind,
+                skipped.Status, skipped.Reason);
+        }
+
+        foreach(var failure in result.Failures)
+        {
+            logger.LogWarning(
+                "Payout settlement attempt {AttemptId} in pool {PoolId} failed before completion: coin={Coin}, method={Method}, evidenceKind={EvidenceKind}, errorType={ErrorType}",
+                failure.AttemptId, failure.PoolId, failure.Coin, failure.Method, failure.EvidenceKind,
+                failure.ErrorType);
+        }
     }
 
     public static CreatePayoutReservationRequest BuildReservationRequest(PayoutProcessorPoolConfig pool,
@@ -439,6 +511,17 @@ public class PayoutPoolOrchestrator
             Limit = config.ExecutionBatchSize,
             ErrorCode = StaleSendingErrorCode,
             ErrorMessage = StaleSendingErrorMessage
+        };
+    }
+
+    public static PayoutSettlementRunnerRequest BuildSettlementRequest(PayoutProcessorPoolConfig pool,
+        PayoutProcessorConfig config)
+    {
+        return new PayoutSettlementRunnerRequest
+        {
+            PoolId = pool.Id,
+            Limit = config.ExecutionBatchSize,
+            SettledAt = DateTime.UtcNow
         };
     }
 }

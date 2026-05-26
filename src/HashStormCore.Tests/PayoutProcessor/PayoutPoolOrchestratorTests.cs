@@ -166,6 +166,24 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public void BuildSettlementRequestMapsPoolIdLimitAndSettledAt()
+    {
+        var pool = NewPool("bitcoin", "intent");
+        var config = new PayoutProcessorConfig
+        {
+            ExecutionBatchSize = 15
+        };
+        var before = DateTime.UtcNow;
+
+        var request = PayoutPoolOrchestrator.BuildSettlementRequest(pool, config);
+
+        var after = DateTime.UtcNow;
+        Assert.Equal("pool-a", request.PoolId);
+        Assert.Equal(15, request.Limit);
+        Assert.InRange(request.SettledAt, before, after);
+    }
+
+    [Fact]
     public async Task RunPlanningTickAsync_DryRunDoesNotCallPlanningRunner()
     {
         var planningRunner = Substitute.For<IPayoutPlanningRunner>();
@@ -644,6 +662,183 @@ public class PayoutPoolOrchestratorTests
 
         await staleRunner.DidNotReceive().ReconcileStaleSendingAsync(
             Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunSettlementTickAsync_DisabledConfigSkipsBeforeRunner()
+    {
+        var settlementRunner = Substitute.For<IPayoutSettlementRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            enabled: false,
+            settlementRunner: settlementRunner);
+
+        await orchestrator.RunSettlementTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await settlementRunner.DidNotReceive().SettleAcceptedAttemptsAsync(
+            Arg.Any<PayoutSettlementRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunSettlementTickAsync_DisabledModeSkipsBeforeRunner()
+    {
+        var settlementRunner = Substitute.For<IPayoutSettlementRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.Disabled,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            settlementRunner: settlementRunner);
+
+        await orchestrator.RunSettlementTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await settlementRunner.DidNotReceive().SettleAcceptedAttemptsAsync(
+            Arg.Any<PayoutSettlementRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunSettlementTickAsync_LegacyEngineSkipsBeforeRunner()
+    {
+        var settlementRunner = Substitute.For<IPayoutSettlementRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            settlementRunner: settlementRunner);
+
+        await orchestrator.RunSettlementTickAsync(NewPool("bitcoin", "legacy"), CancellationToken.None);
+
+        await settlementRunner.DidNotReceive().SettleAcceptedAttemptsAsync(
+            Arg.Any<PayoutSettlementRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunSettlementTickAsync_DryRunDoesNotCallRunner()
+    {
+        var settlementRunner = Substitute.For<IPayoutSettlementRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DryRun,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            settlementRunner: settlementRunner);
+
+        await orchestrator.RunSettlementTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await settlementRunner.DidNotReceive().SettleAcceptedAttemptsAsync(
+            Arg.Any<PayoutSettlementRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunSettlementTickAsync_DbMutatingInvalidLimitSourceSkipsBeforeRunner()
+    {
+        var settlementRunner = Substitute.For<IPayoutSettlementRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionBatchSize: 0,
+            settlementRunner: settlementRunner);
+
+        await orchestrator.RunSettlementTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await settlementRunner.DidNotReceive().SettleAcceptedAttemptsAsync(
+            Arg.Any<PayoutSettlementRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunSettlementTickAsync_DbMutatingIntentPoolCallsRunnerWithRequest()
+    {
+        var settlementRunner = Substitute.For<IPayoutSettlementRunner>();
+        PayoutSettlementRunnerRequest capturedRequest = null;
+        settlementRunner.SettleAcceptedAttemptsAsync(Arg.Do<PayoutSettlementRunnerRequest>(x => capturedRequest = x),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutSettlementRunnerResult()));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionBatchSize: 24,
+            settlementRunner: settlementRunner);
+        var before = DateTime.UtcNow;
+
+        await orchestrator.RunSettlementTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        var after = DateTime.UtcNow;
+        await settlementRunner.Received(1).SettleAcceptedAttemptsAsync(Arg.Any<PayoutSettlementRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("pool-a", capturedRequest.PoolId);
+        Assert.Equal(24, capturedRequest.Limit);
+        Assert.InRange(capturedRequest.SettledAt, before, after);
+    }
+
+    [Fact]
+    public async Task RunSettlementTickAsync_HandlesResultWithSettledSkippedAndFailuresWithoutThrowing()
+    {
+        var settlementRunner = Substitute.For<IPayoutSettlementRunner>();
+        settlementRunner.SettleAcceptedAttemptsAsync(Arg.Any<PayoutSettlementRunnerRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutSettlementRunnerResult
+            {
+                CandidateCount = 3,
+                SettledCount = 1,
+                SkippedCount = 1,
+                FailureCount = 1,
+                SettlementResults = new[]
+                {
+                    PayoutSettlementResult.Settled(10, 20, new[] { 30L }, new[] { 40L }, new[] { 50L },
+                        "txid-settled")
+                },
+                SkippedCandidates = new[]
+                {
+                    new PayoutSettlementSkippedCandidate
+                    {
+                        BatchId = 11,
+                        AttemptId = 21,
+                        PoolId = "pool-a",
+                        Coin = "bitcoin",
+                        Method = "sendmany",
+                        EvidenceKind = PayoutExternalConfirmationKinds.RawHash,
+                        Status = PayoutSettlementEligibilityStatus.EvidenceKindNotSupported.ToString(),
+                        Reason = "wrong evidence kind"
+                    }
+                },
+                Failures = new[]
+                {
+                    new PayoutSettlementAttemptFailure
+                    {
+                        BatchId = 12,
+                        AttemptId = 22,
+                        PoolId = "pool-a",
+                        Coin = "bitcoin",
+                        Method = "sendmany",
+                        EvidenceKind = PayoutExternalConfirmationKinds.TxId,
+                        ErrorType = nameof(InvalidOperationException)
+                    }
+                }
+            }));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            settlementRunner: settlementRunner);
+
+        await orchestrator.RunSettlementTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await settlementRunner.Received(1).SettleAcceptedAttemptsAsync(Arg.Any<PayoutSettlementRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunSettlementTickAsync_CancellationIsPropagated()
+    {
+        var settlementRunner = Substitute.For<IPayoutSettlementRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            settlementRunner: settlementRunner);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            orchestrator.RunSettlementTickAsync(NewPool("bitcoin", "intent"), cts.Token));
+
+        await settlementRunner.DidNotReceive().SettleAcceptedAttemptsAsync(
+            Arg.Any<PayoutSettlementRunnerRequest>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1162,7 +1357,8 @@ public class PayoutPoolOrchestratorTests
         IPayoutReservationRunner runner, IPayoutPlanningRunner planningRunner = null, bool enabled = true,
         int reservationMaxCandidates = 50, int planningMaxBatches = 8, int executionBatchSize = 8,
         int staleSendingAgeSeconds = 900, IPayoutExecutionRunner executionRunner = null,
-        IPayoutStaleSendReconciliationRunner staleReconciliationRunner = null)
+        IPayoutStaleSendReconciliationRunner staleReconciliationRunner = null,
+        IPayoutSettlementRunner settlementRunner = null)
     {
         if(staleReconciliationRunner == null)
         {
@@ -1170,6 +1366,14 @@ public class PayoutPoolOrchestratorTests
             staleReconciliationRunner.ReconcileStaleSendingAsync(Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(),
                     Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new PayoutStaleSendReconciliationResult()));
+        }
+
+        if(settlementRunner == null)
+        {
+            settlementRunner = Substitute.For<IPayoutSettlementRunner>();
+            settlementRunner.SettleAcceptedAttemptsAsync(Arg.Any<PayoutSettlementRunnerRequest>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new PayoutSettlementRunnerResult()));
         }
 
         var config = new PayoutProcessorConfig
@@ -1186,6 +1390,7 @@ public class PayoutPoolOrchestratorTests
             planningRunner ?? Substitute.For<IPayoutPlanningRunner>(),
             executionRunner ?? Substitute.For<IPayoutExecutionRunner>(),
             staleReconciliationRunner,
+            settlementRunner,
             NullLogger<PayoutPoolOrchestrator>.Instance);
     }
 

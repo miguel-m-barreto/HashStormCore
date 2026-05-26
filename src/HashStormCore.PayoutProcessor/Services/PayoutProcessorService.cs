@@ -63,8 +63,8 @@ public class PayoutProcessorService : BackgroundService
         else
         {
             logger.LogWarning(
-                "PayoutProcessor DbMutating mode is enabled for reservation, planning, no-sender-safe execution, and local stale sending quarantine. Operation-id reconciliation, settlement, and wallet/daemon/RPC calls remain disabled");
-            logger.LogWarning("PayoutProcessor DbMutating reservation, planning, execution, and stale sending quarantine process only pools with paymentProcessing.engine=intent");
+                "PayoutProcessor DbMutating mode is enabled for reservation, planning, no-sender-safe execution, local stale sending quarantine, and profile-validated settlement. Operation-id reconciliation and wallet/daemon/RPC calls remain disabled");
+            logger.LogWarning("PayoutProcessor DbMutating reservation, planning, execution, stale sending quarantine, and settlement process only pools with paymentProcessing.engine=intent");
         }
 
         logger.LogInformation("PayoutProcessor discovered {PoolCount} payout-capable pool(s)", pools.Count);
@@ -87,7 +87,8 @@ public class PayoutProcessorService : BackgroundService
         if(config.Mode == PayoutProcessorMode.DryRun)
             await RunDryRunLoopsAsync(pools, stoppingToken);
         else
-            await RunDbMutatingReservationPlanningExecutionAndStaleReconciliationLoopsAsync(pools, stoppingToken);
+            await RunDbMutatingReservationPlanningExecutionStaleReconciliationAndSettlementLoopsAsync(pools,
+                stoppingToken);
     }
 
     private IReadOnlyCollection<PayoutProcessorPoolConfig> DiscoverPools()
@@ -279,17 +280,19 @@ public class PayoutProcessorService : BackgroundService
         }
     }
 
-    private async Task RunDbMutatingReservationPlanningExecutionAndStaleReconciliationLoopsAsync(IReadOnlyCollection<PayoutProcessorPoolConfig> pools,
+    private async Task RunDbMutatingReservationPlanningExecutionStaleReconciliationAndSettlementLoopsAsync(IReadOnlyCollection<PayoutProcessorPoolConfig> pools,
         CancellationToken ct)
     {
         var reservationInterval = GetInterval(config.ReservationIntervalSeconds);
         var planningInterval = GetInterval(config.PlanningIntervalSeconds);
         var executionInterval = GetInterval(config.ExecutionIntervalSeconds);
         var staleReconciliationInterval = GetInterval(config.StaleReconciliationIntervalSeconds);
+        var settlementInterval = GetInterval(config.SettlementIntervalSeconds);
         var nextReservation = DateTimeOffset.MinValue;
         var nextPlanning = DateTimeOffset.MinValue;
         var nextExecution = DateTimeOffset.MinValue;
         var nextStaleReconciliation = DateTimeOffset.MinValue;
+        var nextSettlement = DateTimeOffset.MinValue;
 
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
 
@@ -328,6 +331,15 @@ public class PayoutProcessorService : BackgroundService
                         nextStaleReconciliation = now + staleReconciliationInterval;
                     }
 
+                    if(now >= nextSettlement)
+                    {
+                        foreach(var pool in pools)
+                            await RunPoolTickAsync(pool, () => orchestrator.RunSettlementTickAsync(pool, ct),
+                                "Payout settlement tick failed for pool {PoolId}", ct);
+
+                        nextSettlement = now + settlementInterval;
+                    }
+
                     continue;
                 }
 
@@ -362,6 +374,15 @@ public class PayoutProcessorService : BackgroundService
                             "Payout stale sending reconciliation tick failed for pool {PoolId}", ct);
 
                     nextStaleReconciliation = now + staleReconciliationInterval;
+                }
+
+                if(now >= nextSettlement)
+                {
+                    foreach(var pool in pools)
+                        await RunPoolTickAsync(pool, () => orchestrator.RunSettlementTickAsync(pool, ct),
+                            "Payout settlement tick failed for pool {PoolId}", ct);
+
+                    nextSettlement = now + settlementInterval;
                 }
             }
         }
