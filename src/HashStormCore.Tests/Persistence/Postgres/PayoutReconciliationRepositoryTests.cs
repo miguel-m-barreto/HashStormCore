@@ -182,6 +182,10 @@ public class PayoutReconciliationRepositoryTests : PostgresIntegrationTestBase
 
             Assert.Equal(new[] { operationIdAttempt.Id }, results.Select(x => x.AttemptId).ToArray());
             Assert.Equal("opid-123", results.Single().ExternalOperationId);
+            Assert.Equal(CoinFamily, results.Single().CoinFamily);
+            Assert.Equal(Handler, results.Single().Handler);
+            Assert.Equal(PayoutSendShapes.BatchMultiRecipient, results.Single().SendShape);
+            Assert.Equal(Method, results.Single().Method);
         });
     }
 

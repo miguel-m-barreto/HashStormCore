@@ -55,7 +55,7 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
                         AND (
                             SELECT COUNT(*)
                             FROM (
-                                SELECT DISTINCT pec.value
+                                SELECT DISTINCT pec.kind, pec.value
                                 FROM payout_external_confirmations pec
                                 WHERE pec.batchid = psa.batchid
                                   AND pec.attemptid = psa.id
@@ -77,6 +77,7 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
                 psa.poolid AS PoolId,
                 psa.coin AS Coin,
                 psa.method AS Method,
+                evidence.evidencekind AS EvidenceKind,
                 evidence.transactionconfirmationdata AS TransactionConfirmationData,
                 psa.created AS Created,
                 psa.updated AS Updated,
@@ -109,9 +110,9 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
                   AND pai.state = @acceptedmapping
             ) counts ON counts.unsettledsubmittedintentcount > 0
             JOIN LATERAL (
-                SELECT MIN(value) AS transactionconfirmationdata, COUNT(*) AS evidencecount
+                SELECT MIN(kind) AS evidencekind, MIN(value) AS transactionconfirmationdata, COUNT(*) AS evidencecount
                 FROM (
-                    SELECT DISTINCT pec.value
+                    SELECT DISTINCT pec.kind, pec.value
                     FROM payout_external_confirmations pec
                     WHERE pec.batchid = psa.batchid
                       AND pec.attemptid = psa.id
@@ -207,7 +208,7 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
                 settledConfirmationData);
 
         var transactionConfirmationData = await GetSettlementConfirmationAsync(con, tx, batch.Id, attempt.Id,
-            batch.PoolId, batch.Coin, ct);
+            batch.PoolId, batch.Coin, request.ExpectedEvidenceKind, ct);
         if(string.IsNullOrWhiteSpace(transactionConfirmationData))
             return PayoutSettlementResult.InsufficientEvidence(batch.Id, attempt.Id);
         if(settledConfirmationData != null && settledConfirmationData != transactionConfirmationData)
@@ -390,14 +391,14 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
     }
 
     private static async Task<string> GetSettlementConfirmationAsync(IDbConnection con, IDbTransaction tx, long batchId,
-        long attemptId, string poolId, string coin, CancellationToken ct)
+        long attemptId, string poolId, string coin, string expectedEvidenceKind, CancellationToken ct)
     {
         const string query = @"SELECT DISTINCT value FROM payout_external_confirmations
             WHERE batchid = @batchid
               AND attemptid = @attemptid
               AND poolid = @poolid
               AND coin = @coin
-              AND kind = ANY(@kinds)
+              AND kind = @kind
             ORDER BY value";
 
         var values = (await con.QueryAsync<string>(new CommandDefinition(query, new
@@ -406,7 +407,7 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
             attemptid = attemptId,
             poolid = poolId,
             coin,
-            kinds = new[] { PayoutExternalConfirmationKinds.TxId, PayoutExternalConfirmationKinds.RawHash }
+            kind = expectedEvidenceKind
         }, tx, cancellationToken: ct))).ToArray();
 
         return values.Length == 1 ? values[0] : null;
@@ -550,12 +551,18 @@ public class PayoutSettlementRepository : IPayoutSettlementRepository
             throw new ArgumentNullException(nameof(request));
 
         RequireText(request.PoolId, nameof(request.PoolId));
+        RequireText(request.ExpectedEvidenceKind, nameof(request.ExpectedEvidenceKind));
 
         if(request.BatchId <= 0)
             throw new ArgumentOutOfRangeException(nameof(request.BatchId), "Payout batch id must be greater than zero");
 
         if(request.AttemptId <= 0)
             throw new ArgumentOutOfRangeException(nameof(request.AttemptId), "Payout send attempt id must be greater than zero");
+
+        if(request.ExpectedEvidenceKind != PayoutExternalConfirmationKinds.TxId &&
+           request.ExpectedEvidenceKind != PayoutExternalConfirmationKinds.RawHash)
+            throw new ArgumentException("Settlement expected evidence kind must be txid or raw_hash",
+                nameof(request.ExpectedEvidenceKind));
     }
 
     private static void EnsureRowCount(int actual, int expected, string description)

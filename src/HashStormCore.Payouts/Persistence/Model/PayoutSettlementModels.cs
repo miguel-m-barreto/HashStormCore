@@ -6,7 +6,55 @@ public enum PayoutSettlementStatus
     AlreadySettled,
     AttemptNotEligible,
     InsufficientEvidence,
-    InsufficientBalance
+    InsufficientBalance,
+    ProfileValidationFailed     // profile not eligible for settlement with this evidence kind
+}
+
+public enum PayoutSettlementEligibilityStatus
+{
+    Eligible,
+    ProfileNotReady,
+    EvidenceKindNotSupported,
+    UnsafeEvidenceValue
+}
+
+public record PayoutSettlementEligibilityResult
+{
+    public PayoutSettlementEligibilityStatus Status { get; init; }
+    public string Reason { get; init; } = string.Empty;
+    public bool IsEligible => Status == PayoutSettlementEligibilityStatus.Eligible;
+
+    public static PayoutSettlementEligibilityResult Eligible()
+    {
+        return new PayoutSettlementEligibilityResult { Status = PayoutSettlementEligibilityStatus.Eligible };
+    }
+
+    public static PayoutSettlementEligibilityResult ProfileNotReady(string reason)
+    {
+        return new PayoutSettlementEligibilityResult
+        {
+            Status = PayoutSettlementEligibilityStatus.ProfileNotReady,
+            Reason = reason
+        };
+    }
+
+    public static PayoutSettlementEligibilityResult EvidenceKindNotSupported(string reason)
+    {
+        return new PayoutSettlementEligibilityResult
+        {
+            Status = PayoutSettlementEligibilityStatus.EvidenceKindNotSupported,
+            Reason = reason
+        };
+    }
+
+    public static PayoutSettlementEligibilityResult UnsafeEvidenceValue(string reason)
+    {
+        return new PayoutSettlementEligibilityResult
+        {
+            Status = PayoutSettlementEligibilityStatus.UnsafeEvidenceValue,
+            Reason = reason
+        };
+    }
 }
 
 public record PayoutSettlementRequest
@@ -14,6 +62,7 @@ public record PayoutSettlementRequest
     public string PoolId { get; init; }
     public long BatchId { get; init; }
     public long AttemptId { get; init; }
+    public string ExpectedEvidenceKind { get; init; }
     public DateTime SettledAt { get; init; }
 }
 
@@ -83,6 +132,16 @@ public record PayoutSettlementResult
         return new PayoutSettlementResult
         {
             Status = PayoutSettlementStatus.InsufficientBalance,
+            BatchId = batchId,
+            AttemptId = attemptId
+        };
+    }
+
+    public static PayoutSettlementResult ProfileValidationFailed(long batchId, long attemptId)
+    {
+        return new PayoutSettlementResult
+        {
+            Status = PayoutSettlementStatus.ProfileValidationFailed,
             BatchId = batchId,
             AttemptId = attemptId
         };

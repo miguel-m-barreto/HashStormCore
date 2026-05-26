@@ -111,8 +111,10 @@ public class PayoutOrchestrationSelectorTests : PostgresIntegrationTestBase
 
             Assert.Single(txidCandidates);
             Assert.Equal(txidData.Attempt.Id, txidCandidates[0].AttemptId);
+            Assert.Equal(PayoutExternalConfirmationKinds.TxId, txidCandidates[0].EvidenceKind);
             Assert.Single(rawHashCandidates);
             Assert.Equal(rawHashData.Attempt.Id, rawHashCandidates[0].AttemptId);
+            Assert.Equal(PayoutExternalConfirmationKinds.RawHash, rawHashCandidates[0].EvidenceKind);
             Assert.Equal(1, rawHashCandidates[0].SubmittedIntentCount);
             Assert.Equal(1, rawHashCandidates[0].UnsettledSubmittedIntentCount);
             Assert.Equal(0, rawHashCandidates[0].SettledIntentCount);
@@ -133,8 +135,9 @@ public class PayoutOrchestrationSelectorTests : PostgresIntegrationTestBase
             await AssertNoSettlementCandidateAsync(con, tx, PayoutExternalConfirmationKinds.WalletAck,
                 $"wallet-ack-selector-{Guid.NewGuid():N}", "settlement_wallet_ack");
 
+            var sharedConfirmation = $"same-confirmation-{Guid.NewGuid():N}";
             var conflicting = await CreateAcceptedAttemptAsync(con, tx, NewPoolId("settlement_conflict"), now,
-                PayoutExternalConfirmationKinds.TxId, $"txid-conflict-{Guid.NewGuid():N}", ("addr-a", 1m));
+                PayoutExternalConfirmationKinds.TxId, sharedConfirmation, ("addr-a", 1m));
             await payoutIntentRepo.InsertExternalConfirmationAsync(con, tx, new PayoutExternalConfirmation
             {
                 PoolId = conflicting.Batch.PoolId,
@@ -142,7 +145,7 @@ public class PayoutOrchestrationSelectorTests : PostgresIntegrationTestBase
                 BatchId = conflicting.Batch.Id,
                 AttemptId = conflicting.Attempt.Id,
                 Kind = PayoutExternalConfirmationKinds.RawHash,
-                Value = $"raw-conflict-{Guid.NewGuid():N}",
+                Value = sharedConfirmation,
                 Created = now.AddMinutes(3)
             }, Ct);
 

@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using HashStormCore.Payments;
+using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Postgres;
 using HashStormCore.Persistence.Postgres.Repositories;
@@ -242,9 +243,147 @@ public class PayoutOperationIdReconciliationServiceTests : PostgresCommittedInte
         });
     }
 
+    // ── Profile-aware reconciliation tests ───────────────────────────────────
+
+    [PostgresIntegrationFact]
+    public Task ReconcileOperationIdsAsync_ConstructorRequiresProfileResolver()
+    {
+        var poolId = NewCommittedPoolId("opid_constructor_requires_resolver");
+
+        return WithCommittedCleanupAsync(poolId, _ =>
+        {
+            Assert.Throws<ArgumentNullException>(() =>
+                new PayoutOperationIdReconciliationService(new PgConnectionFactory(GetConnectionString()), repo, null));
+            return Task.CompletedTask;
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReconcileOperationIdsAsync_ProfileNotReadySkipsTxIdAttachmentCountsAsNeedsReview()
+    {
+        var poolId = NewCommittedPoolId("opid_profile_not_ready");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var data = await CreateAcceptedOperationIdAttemptAsync(con, poolId, now, "opid-not-ready");
+            var confirmationsBefore = await CountConfirmationsAsync(con, poolId);
+            var statesBefore = await GetStatesAsync(con, data);
+            var provider = new StaticOperationStatusProvider(PayoutOperationStatusResult.ResolvedTxId("txid-should-not-attach"));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Unsupported("coin not configured"));
+
+            var result = await NewServiceWithResolver(resolver).ReconcileOperationIdsAsync(
+                NewRequest(poolId, now.AddMinutes(1)), provider, Ct);
+
+            Assert.Equal(1, result.CandidateCount);
+            Assert.Equal(1, result.NeedsReviewCount);
+            Assert.Equal(0, result.EvidenceAttachedCount);
+            Assert.Equal(0, result.ProviderErrorCount);
+            Assert.Equal(confirmationsBefore, await CountConfirmationsAsync(con, poolId));
+            Assert.Equal(statesBefore, await GetStatesAsync(con, data));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReconcileOperationIdsAsync_NonAsyncProfileSkipsTxIdAttachmentCountsAsNeedsReview()
+    {
+        var poolId = NewCommittedPoolId("opid_non_async_profile");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var data = await CreateAcceptedOperationIdAttemptAsync(con, poolId, now, "opid-direct");
+            var confirmationsBefore = await CountConfirmationsAsync(con, poolId);
+            var statesBefore = await GetStatesAsync(con, data);
+            var provider = new StaticOperationStatusProvider(PayoutOperationStatusResult.ResolvedTxId("txid-direct-bypass"));
+            // TxId-only direct profile is not eligible for reconciliation
+            var txIdProfile = new PayoutProfile
+            {
+                CoinKey = "test-txid",
+                CoinFamily = "bitcoin",
+                AdapterId = "bitcoin-rpc",
+                SendShape = PayoutSendShapes.BatchMultiRecipient,
+                SendMethod = "sendmany",
+                SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+                ReservationReady = true
+            };
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(txIdProfile));
+
+            var result = await NewServiceWithResolver(resolver).ReconcileOperationIdsAsync(
+                NewRequest(poolId, now.AddMinutes(1)), provider, Ct);
+
+            Assert.Equal(1, result.CandidateCount);
+            Assert.Equal(1, result.NeedsReviewCount);
+            Assert.Equal(0, result.EvidenceAttachedCount);
+            Assert.Equal(0, result.ProviderErrorCount);
+            Assert.Equal(confirmationsBefore, await CountConfirmationsAsync(con, poolId));
+            Assert.Equal(statesBefore, await GetStatesAsync(con, data));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReconcileOperationIdsAsync_UnsafeFakeTxIdFromProviderIsRejectedAsNeedsReview()
+    {
+        var poolId = NewCommittedPoolId("opid_unsafe_txid");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var data = await CreateAcceptedOperationIdAttemptAsync(con, poolId, now, "opid-unsafe");
+            var confirmationsBefore = await CountConfirmationsAsync(con, poolId);
+            var statesBefore = await GetStatesAsync(con, data);
+            var provider = new StaticOperationStatusProvider(PayoutOperationStatusResult.ResolvedTxId("send:fake-txid-inject"));
+            var asyncProfile = MatchingAsyncOperationProfile();
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(asyncProfile));
+
+            var result = await NewServiceWithResolver(resolver).ReconcileOperationIdsAsync(
+                NewRequest(poolId, now.AddMinutes(1)), provider, Ct);
+
+            Assert.Equal(1, result.CandidateCount);
+            Assert.Equal(1, result.NeedsReviewCount);
+            Assert.Equal(0, result.EvidenceAttachedCount);
+            Assert.Equal(0, result.ProviderErrorCount);
+            Assert.Equal(confirmationsBefore, await CountConfirmationsAsync(con, poolId));
+            Assert.Equal(statesBefore, await GetStatesAsync(con, data));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReconcileOperationIdsAsync_MetadataMismatchSkipsTxIdAttachmentCountsAsNeedsReview()
+    {
+        var poolId = NewCommittedPoolId("opid_metadata_mismatch");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var data = await CreateAcceptedOperationIdAttemptAsync(con, poolId, now, "opid-metadata-mismatch");
+            var confirmationsBefore = await CountConfirmationsAsync(con, poolId);
+            var statesBefore = await GetStatesAsync(con, data);
+            var provider = new StaticOperationStatusProvider(PayoutOperationStatusResult.ResolvedTxId("txid-should-not-attach"));
+            var mismatchProfile = MatchingAsyncOperationProfile() with { AdapterId = "different-handler" };
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(mismatchProfile));
+
+            var result = await NewServiceWithResolver(resolver).ReconcileOperationIdsAsync(
+                NewRequest(poolId, now.AddMinutes(1)), provider, Ct);
+
+            Assert.Equal(1, result.CandidateCount);
+            Assert.Equal(1, result.NeedsReviewCount);
+            Assert.Equal(0, result.EvidenceAttachedCount);
+            Assert.Equal(0, provider.CallCount);
+            Assert.Equal(confirmationsBefore, await CountConfirmationsAsync(con, poolId));
+            Assert.Equal(statesBefore, await GetStatesAsync(con, data));
+        });
+    }
+
     private PayoutOperationIdReconciliationService NewService()
     {
-        return new PayoutOperationIdReconciliationService(new PgConnectionFactory(GetConnectionString()), repo);
+        return NewServiceWithResolver(
+            new FixedProfileResolver(PayoutProfileResolution.Resolved(MatchingAsyncOperationProfile())));
+    }
+
+    private PayoutOperationIdReconciliationService NewServiceWithResolver(IPayoutProfileResolver resolver)
+    {
+        return new PayoutOperationIdReconciliationService(new PgConnectionFactory(GetConnectionString()), repo, resolver);
     }
 
     private static PayoutOperationIdReconciliationRequest NewRequest(string poolId, DateTime checkedAt, int limit = 10)
@@ -254,6 +393,22 @@ public class PayoutOperationIdReconciliationServiceTests : PostgresCommittedInte
             PoolId = poolId,
             CheckedAt = checkedAt,
             Limit = limit
+        };
+    }
+
+    private static PayoutProfile MatchingAsyncOperationProfile()
+    {
+        return new PayoutProfile
+        {
+            CoinKey = Coin,
+            CoinFamily = CoinFamily,
+            AdapterId = Handler,
+            SendShape = PayoutSendShapes.AsyncOperation,
+            SendMethod = Method,
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId,
+            RequiresOperationIdProvider = true,
+            SupportsShieldedOperationTracking = true,
+            ReservationReady = true
         };
     }
 
@@ -551,5 +706,17 @@ public class PayoutOperationIdReconciliationServiceTests : PostgresCommittedInte
             ObservedCommittedAttempt = attemptCount == 1;
             return PayoutOperationStatusResult.ResolvedTxId(txId);
         }
+    }
+
+    private class FixedProfileResolver : IPayoutProfileResolver
+    {
+        public FixedProfileResolver(PayoutProfileResolution resolution)
+        {
+            this.resolution = resolution;
+        }
+
+        private readonly PayoutProfileResolution resolution;
+
+        public PayoutProfileResolution Resolve(string coinKey) => resolution;
     }
 }

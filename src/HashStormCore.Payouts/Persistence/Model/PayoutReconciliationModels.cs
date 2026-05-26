@@ -6,6 +6,9 @@ public record PayoutReconciliationAttemptSummary
     public long AttemptId { get; init; }
     public string PoolId { get; init; }
     public string Coin { get; init; }
+    public string CoinFamily { get; init; }
+    public string Handler { get; init; }
+    public string SendShape { get; init; }
     public string AttemptState { get; init; }
     public string BatchState { get; init; }
     public string Method { get; init; }

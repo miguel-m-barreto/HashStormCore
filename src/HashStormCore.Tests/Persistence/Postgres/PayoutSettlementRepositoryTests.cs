@@ -111,6 +111,7 @@ public class PayoutSettlementRepositoryTests : PostgresIntegrationTestBase
                     PoolId = poolId,
                     BatchId = batch.Id,
                     AttemptId = attempt.Id,
+                    ExpectedEvidenceKind = PayoutExternalConfirmationKinds.TxId,
                     SettledAt = now.AddMinutes(3)
                 }, Ct);
 
@@ -188,7 +189,7 @@ public class PayoutSettlementRepositoryTests : PostgresIntegrationTestBase
     }
 
     [PostgresIntegrationFact]
-    public Task SettleAcceptedAttemptAsync_RejectsConflictingSettlementEvidence()
+    public Task SettleAcceptedAttemptAsync_FiltersSettlementEvidenceByExpectedKind()
     {
         return WithRollbackAsync(async (con, tx) =>
         {
@@ -208,6 +209,28 @@ public class PayoutSettlementRepositoryTests : PostgresIntegrationTestBase
             }, Ct);
 
             var result = await settlementRepo.SettleAcceptedAttemptAsync(con, tx, NewRequest(data, now.AddMinutes(2)), Ct);
+
+            Assert.Equal(PayoutSettlementStatus.Settled, result.Status);
+            Assert.Equal("txid-conflict-1", result.TransactionConfirmationData);
+            Assert.Equal(PayoutIntentStates.Settled, await GetIntentStateAsync(con, tx, data.Batch.Intents[0].Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task SettleAcceptedAttemptAsync_DoesNotSettleWrongExpectedEvidenceKind()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var now = UtcNow();
+            var data = await CreateAcceptedAttemptAsync(con, tx, NewPoolId("settle_wrong_expected_kind"), now,
+                PayoutExternalConfirmationKinds.TxId, "txid-only-kind", ("addr-a", 1m));
+            await InsertBalanceAsync(con, tx, data.Batch.PoolId, "addr-a", 1m, now);
+
+            var result = await settlementRepo.SettleAcceptedAttemptAsync(con, tx,
+                NewRequest(data, now.AddMinutes(1)) with
+                {
+                    ExpectedEvidenceKind = PayoutExternalConfirmationKinds.RawHash
+                }, Ct);
 
             Assert.Equal(PayoutSettlementStatus.InsufficientEvidence, result.Status);
             Assert.Equal(PayoutIntentStates.Submitted, await GetIntentStateAsync(con, tx, data.Batch.Intents[0].Id));
@@ -236,6 +259,7 @@ public class PayoutSettlementRepositoryTests : PostgresIntegrationTestBase
                 PoolId = poolId,
                 BatchId = batch.Id,
                 AttemptId = first.Id,
+                ExpectedEvidenceKind = PayoutExternalConfirmationKinds.TxId,
                 SettledAt = now.AddMinutes(3)
             }, Ct);
 
@@ -326,6 +350,7 @@ public class PayoutSettlementRepositoryTests : PostgresIntegrationTestBase
                 PoolId = "pool",
                 BatchId = 1,
                 AttemptId = 1,
+                ExpectedEvidenceKind = PayoutExternalConfirmationKinds.TxId,
                 SettledAt = UtcNow()
             };
 
@@ -341,6 +366,11 @@ public class PayoutSettlementRepositoryTests : PostgresIntegrationTestBase
                 settlementRepo.SettleAcceptedAttemptAsync(con, tx, request with { BatchId = 0 }, Ct));
             await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
                 settlementRepo.SettleAcceptedAttemptAsync(con, tx, request with { AttemptId = 0 }, Ct));
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                settlementRepo.SettleAcceptedAttemptAsync(con, tx, request with { ExpectedEvidenceKind = " " }, Ct));
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                settlementRepo.SettleAcceptedAttemptAsync(con, tx,
+                    request with { ExpectedEvidenceKind = PayoutExternalConfirmationKinds.OperationId }, Ct));
         });
     }
 
@@ -389,7 +419,7 @@ public class PayoutSettlementRepositoryTests : PostgresIntegrationTestBase
             }, Ct);
         }
 
-        return new TestPayoutData(batch, attempt);
+        return new TestPayoutData(batch, attempt, evidenceKind);
     }
 
     private Task<PayoutBatch> CreateBatchAsync(NpgsqlConnection con, NpgsqlTransaction tx, string poolId, DateTime created,
@@ -446,8 +476,16 @@ public class PayoutSettlementRepositoryTests : PostgresIntegrationTestBase
             PoolId = data.Batch.PoolId,
             BatchId = data.Batch.Id,
             AttemptId = data.Attempt.Id,
+            ExpectedEvidenceKind = GetFinalEvidenceKindOrTxId(data.EvidenceKind),
             SettledAt = settledAt
         };
+    }
+
+    private static string GetFinalEvidenceKindOrTxId(string evidenceKind)
+    {
+        return evidenceKind == PayoutExternalConfirmationKinds.RawHash
+            ? PayoutExternalConfirmationKinds.RawHash
+            : PayoutExternalConfirmationKinds.TxId;
     }
 
     private static PayoutAttemptEvidence NewEvidence(string kind, string value)
@@ -548,5 +586,5 @@ public class PayoutSettlementRepositoryTests : PostgresIntegrationTestBase
         return DateTime.UtcNow;
     }
 
-    private record TestPayoutData(PayoutBatch Batch, PayoutSendAttempt Attempt);
+    private record TestPayoutData(PayoutBatch Batch, PayoutSendAttempt Attempt, string EvidenceKind);
 }

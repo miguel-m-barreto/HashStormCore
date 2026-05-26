@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using HashStormCore.Payments;
+using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Postgres;
 using HashStormCore.Persistence.Postgres.Repositories;
@@ -60,22 +61,24 @@ public class PayoutSendExecutorServiceTests : PostgresCommittedIntegrationTestBa
     }
 
     [PostgresIntegrationFact]
-    public Task ExecutePreparedAttemptAsync_AcceptsOperationIdEvidence()
+    public Task ExecutePreparedAttemptAsync_AsyncOperationProfileAcceptsOperationIdEvidence()
     {
         var poolId = NewCommittedPoolId("accepted_operationid");
 
         return WithCommittedCleanupAsync(poolId, async con =>
         {
             var now = UtcNow();
-            var testData = await CreatePreparedAttemptAsync(con, poolId, now, ("addr-a", 1m));
+            var profile = AsyncMatchingProfile();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, profile, ("addr-a", 1m));
             var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
             {
                 Kind = PayoutExternalConfirmationKinds.OperationId,
                 Value = "opid-accepted"
             }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(profile));
 
-            var result = await NewService().ExecutePreparedAttemptAsync(NewRequest(poolId, testData.Attempt.Id, now),
-                sender, Ct);
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
 
             Assert.Equal(PayoutSendExecutionStatus.Accepted, result.Status);
             Assert.Equal(PayoutExternalConfirmationKinds.OperationId, result.Evidence.Kind);
@@ -89,7 +92,7 @@ public class PayoutSendExecutorServiceTests : PostgresCommittedIntegrationTestBa
     }
 
     [PostgresIntegrationFact]
-    public Task ExecutePreparedAttemptAsync_AcceptsAdditionalEvidenceAtomically()
+    public Task ExecutePreparedAttemptAsync_RejectsWalletAckAdditionalEvidenceAsAmbiguous()
     {
         var poolId = NewCommittedPoolId("accepted_extra_evidence");
 
@@ -118,11 +121,8 @@ public class PayoutSendExecutorServiceTests : PostgresCommittedIntegrationTestBa
             var result = await NewService().ExecutePreparedAttemptAsync(NewRequest(poolId, testData.Attempt.Id, now),
                 sender, Ct);
 
-            Assert.Equal(PayoutSendExecutionStatus.Accepted, result.Status);
-            Assert.Equal(1, await CountExternalConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId));
-            Assert.Equal(1, await CountExternalConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.RawHash));
-            Assert.Equal(1, await CountExternalConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.WalletAck));
-            Assert.Equal(PayoutSendAttemptStates.Accepted, await GetAttemptStateAsync(con, testData.Attempt.Id));
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+            Assert.Equal(0, await CountExternalConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.WalletAck));
         });
     }
 
@@ -416,9 +416,639 @@ public class PayoutSendExecutorServiceTests : PostgresCommittedIntegrationTestBa
         });
     }
 
+    // ── Profile-aware executor tests ─────────────────────────────────────────
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_ConstructorRequiresProfileResolver()
+    {
+        var poolId = NewCommittedPoolId("constructor_requires_resolver");
+
+        return WithCommittedCleanupAsync(poolId, _ =>
+        {
+            Assert.Throws<ArgumentNullException>(() =>
+                new PayoutSendExecutorService(new PgConnectionFactory(GetConnectionString()), payoutIntentRepo, null));
+            return Task.CompletedTask;
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_ProfileResolutionFailedDoesNotCallSenderAndLeavesAttemptPrepared()
+    {
+        var poolId = NewCommittedPoolId("profile_not_ready");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptAsync(con, poolId, now, ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.TxId,
+                Value = "txid-should-not-reach"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Unsupported("coin not found"));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            Assert.Equal(PayoutSendExecutionStatus.ProfileResolutionFailed, result.Status);
+            Assert.Equal(0, sender.CallCount);
+            Assert.Equal(PayoutSendAttemptStates.Prepared, await GetAttemptStateAsync(con, testData.Attempt.Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_ContextValidationFailedAfterClaimMarksAttemptAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("ctx_mismatch");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            // Batch is created with CoinFamily="testfamily", Handler="test-handler"
+            // but the profile says CoinFamily="bitcoin" — mismatch triggers ContextValidationFailed
+            var testData = await CreatePreparedAttemptAsync(con, poolId, now, ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.TxId,
+                Value = "txid-should-not-reach"
+            }));
+            var mismatchProfile = TxIdMatchingProfile();
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(mismatchProfile));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            Assert.Equal(PayoutSendExecutionStatus.ContextValidationFailed, result.Status);
+            Assert.Equal(0, sender.CallCount);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview, await GetAttemptStateAsync(con, testData.Attempt.Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_TxIdProfileAcceptsTxId()
+    {
+        var poolId = NewCommittedPoolId("profile_txid_accepted");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, TxIdMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.TxId,
+                Value = "txid-ok"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(TxIdMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            Assert.Equal(PayoutSendExecutionStatus.Accepted, result.Status);
+            Assert.Equal(1, sender.CallCount);
+            Assert.Equal(PayoutSendAttemptStates.Accepted, await GetAttemptStateAsync(con, testData.Attempt.Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_TxIdProfileRejectsRawHashAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_txid_rejects_rawhash");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, TxIdMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.RawHash,
+                Value = "rawhash-wrong-kind"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(TxIdMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            Assert.Equal(PayoutSendExecutionStatus.SenderFailedAmbiguous, result.Status);
+            Assert.Equal("sender_invalid_evidence_ambiguous", result.ErrorCode);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview, await GetAttemptStateAsync(con, testData.Attempt.Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_TxIdProfileRejectsOperationIdAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_txid_rejects_opid");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, TxIdMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.OperationId,
+                Value = "opid-wrong-kind"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(TxIdMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_TxIdProfileRejectsWalletAckAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_txid_rejects_ack");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, TxIdMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.WalletAck,
+                Value = "ack-wrong-kind"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(TxIdMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_RawHashProfileAcceptsRawHash()
+    {
+        var poolId = NewCommittedPoolId("profile_rawhash_accepted");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var profile = RawHashMatchingProfile();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, profile, ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.RawHash,
+                Value = "rawhash-ok"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(profile));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            Assert.Equal(PayoutSendExecutionStatus.Accepted, result.Status);
+            Assert.Equal(PayoutSendAttemptStates.Accepted, await GetAttemptStateAsync(con, testData.Attempt.Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_RawHashProfileRejectsTxIdAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_rawhash_rejects_txid");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var profile = RawHashMatchingProfile();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, profile, ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.TxId,
+                Value = "txid-wrong-kind"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(profile));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_RawHashProfileRejectsOperationIdAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_rawhash_rejects_opid");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var profile = RawHashMatchingProfile();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, profile, ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.OperationId,
+                Value = "opid-wrong-kind"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(profile));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_RawHashProfileRejectsWalletAckAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_rawhash_rejects_ack");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var profile = RawHashMatchingProfile();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, profile, ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.WalletAck,
+                Value = "ack-wrong-kind"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(profile));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_AsyncOperationProfileAcceptsOperationId()
+    {
+        var poolId = NewCommittedPoolId("profile_async_accepted_opid");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, AsyncMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.OperationId,
+                Value = "opid-ok"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(AsyncMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            Assert.Equal(PayoutSendExecutionStatus.Accepted, result.Status);
+            Assert.Equal(1, sender.CallCount);
+            Assert.Equal(PayoutSendAttemptStates.Accepted, await GetAttemptStateAsync(con, testData.Attempt.Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_AsyncOperationProfileRejectsPrimaryTxIdAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_async_rejects_txid");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, AsyncMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.TxId,
+                Value = "txid-wrong-primary"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(AsyncMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_AsyncOperationProfileRejectsPrimaryRawHashAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_async_rejects_rawhash");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, AsyncMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.RawHash,
+                Value = "rawhash-wrong-primary"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(AsyncMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_AsyncOperationProfileRejectsTxIdInAdditionalEvidenceAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_async_rejects_txid_additional");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, AsyncMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(
+                new PayoutAttemptEvidence
+                {
+                    Kind = PayoutExternalConfirmationKinds.OperationId,
+                    Value = "opid-ok"
+                },
+                new[]
+                {
+                    new PayoutAttemptEvidence
+                    {
+                        Kind = PayoutExternalConfirmationKinds.TxId,
+                        Value = "txid-bypass-attempt"
+                    }
+                }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(AsyncMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_AsyncOperationProfileRejectsRawHashInAdditionalEvidenceAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_async_rejects_rawhash_additional");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, AsyncMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(
+                new PayoutAttemptEvidence
+                {
+                    Kind = PayoutExternalConfirmationKinds.OperationId,
+                    Value = "opid-ok"
+                },
+                new[]
+                {
+                    new PayoutAttemptEvidence
+                    {
+                        Kind = PayoutExternalConfirmationKinds.RawHash,
+                        Value = "rawhash-bypass-attempt"
+                    }
+                }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(AsyncMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_PrimaryDuplicatedInAdditionalEvidenceRejectedAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_duplicate_primary_additional");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, TxIdMatchingProfile(), ("addr-a", 1m));
+            var primary = new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.TxId,
+                Value = "txid-primary-duplicate"
+            };
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(primary, new[] { primary }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(TxIdMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_DuplicateAdditionalEvidenceRejectedAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_duplicate_additional");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, TxIdMatchingProfile(), ("addr-a", 1m));
+            var duplicate = new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.RawHash,
+                Value = "rawhash-duplicate"
+            };
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(
+                new PayoutAttemptEvidence
+                {
+                    Kind = PayoutExternalConfirmationKinds.TxId,
+                    Value = "txid-primary"
+                },
+                new[] { duplicate, duplicate }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(TxIdMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_UnsafeSendPrefixValueRejectedAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_unsafe_send_prefix");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, TxIdMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.TxId,
+                Value = "send:fake-txid"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(TxIdMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ExecutePreparedAttemptAsync_PlaceholderValueRejectedAsAmbiguous()
+    {
+        var poolId = NewCommittedPoolId("profile_placeholder_value");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var testData = await CreatePreparedAttemptWithProfileAsync(con, poolId, now, TxIdMatchingProfile(), ("addr-a", 1m));
+            var sender = new StaticSender(PayoutAttemptSendResult.Accepted(new PayoutAttemptEvidence
+            {
+                Kind = PayoutExternalConfirmationKinds.TxId,
+                Value = "fake-placeholder-txid"
+            }));
+            var resolver = new FixedProfileResolver(PayoutProfileResolution.Resolved(TxIdMatchingProfile()));
+
+            var result = await NewServiceWithResolver(resolver).ExecutePreparedAttemptAsync(
+                NewRequest(poolId, testData.Attempt.Id, now), sender, Ct);
+
+            await AssertSafetyAmbiguousAsync(con, testData, result, "sender_invalid_evidence_ambiguous");
+        });
+    }
+
+    // ── Profile-aware helpers ─────────────────────────────────────────────────
+
     private PayoutSendExecutorService NewService()
     {
-        return new PayoutSendExecutorService(new PgConnectionFactory(GetConnectionString()), payoutIntentRepo);
+        return NewServiceWithResolver(new FixedProfileResolver(PayoutProfileResolution.Resolved(DefaultMatchingProfile())));
+    }
+
+    private PayoutSendExecutorService NewServiceWithResolver(IPayoutProfileResolver resolver)
+    {
+        return new PayoutSendExecutorService(new PgConnectionFactory(GetConnectionString()), payoutIntentRepo, resolver);
+    }
+
+    // TxIdMatchingProfile returns a profile whose fields match what TxId-profile batches are created with.
+    private static PayoutProfile TxIdMatchingProfile()
+    {
+        return new PayoutProfile
+        {
+            CoinKey = "test-txid-match",
+            CoinFamily = "bitcoin",
+            AdapterId = "bitcoin-rpc",
+            SendShape = PayoutSendShapes.BatchMultiRecipient,
+            SendMethod = "sendmany",
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+            ReservationReady = true
+        };
+    }
+
+    private static PayoutProfile DefaultMatchingProfile()
+    {
+        return new PayoutProfile
+        {
+            CoinKey = Coin,
+            CoinFamily = CoinFamily,
+            AdapterId = Handler,
+            SendShape = PayoutSendShapes.BatchMultiRecipient,
+            SendMethod = Method,
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+            ReservationReady = true
+        };
+    }
+
+    private static PayoutProfile RawHashMatchingProfile()
+    {
+        return new PayoutProfile
+        {
+            CoinKey = "test-rawhash-match",
+            CoinFamily = "warthog",
+            AdapterId = "warthog-rest-signed",
+            SendShape = PayoutSendShapes.PerAddress,
+            SendMethod = "transaction/add",
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.RawHash,
+            ReservationReady = true
+        };
+    }
+
+    private static PayoutProfile AsyncMatchingProfile()
+    {
+        return new PayoutProfile
+        {
+            CoinKey = "test-async-match",
+            CoinFamily = "equihash",
+            AdapterId = "equihash-z-async",
+            SendShape = PayoutSendShapes.AsyncOperation,
+            SendMethod = "z_sendmany",
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId,
+            RequiresOperationIdProvider = true,
+            SupportsShieldedOperationTracking = true,
+            MaxRecipientsPerAttempt = 50,
+            ReservationReady = true
+        };
+    }
+
+    private async Task<TestPayoutData> CreatePreparedAttemptWithProfileAsync(NpgsqlConnection con, string poolId,
+        DateTime created, PayoutProfile profile, params (string address, decimal amount)[] intents)
+    {
+        await using var tx = await con.BeginTransactionAsync();
+        try
+        {
+            var batch = await CreateBatchWithProfileAsync(con, tx, poolId, created, profile, intents);
+            var attempt = await CreateAttemptWithProfileAsync(con, tx, batch, created, profile,
+                batch.Intents.Select(x => x.Id).ToArray());
+            await tx.CommitAsync();
+
+            return new TestPayoutData(batch, attempt);
+        }
+        catch
+        {
+            await tx.RollbackAsync();
+            throw;
+        }
+    }
+
+    private Task<PayoutBatch> CreateBatchWithProfileAsync(NpgsqlConnection con, NpgsqlTransaction tx, string poolId,
+        DateTime created, PayoutProfile profile, params (string address, decimal amount)[] intents)
+    {
+        var intentRequests = intents.Select(x => new CreatePayoutIntentRequest
+        {
+            Address = x.address,
+            Amount = x.amount,
+            BalanceSnapshotAmount = x.amount,
+            BalanceSnapshotUpdated = created,
+            PaymentThreshold = 0m
+        }).ToArray();
+
+        return payoutIntentRepo.CreateReservedBatchAsync(con, tx, new CreatePayoutBatchRequest
+        {
+            PoolId = poolId,
+            Coin = profile.CoinKey,
+            CoinFamily = profile.CoinFamily,
+            Handler = profile.AdapterId,
+            SendShape = profile.SendShape,
+            RecipientSetHash = $"recipient-set-{Guid.NewGuid():N}",
+            MinimumAmount = 0m,
+            ReservedAmountSnapshot = intents.Sum(x => x.amount),
+            IntentCountSnapshot = intents.Length,
+            Created = created
+        }, intentRequests, Ct);
+    }
+
+    private Task<PayoutSendAttempt> CreateAttemptWithProfileAsync(NpgsqlConnection con, NpgsqlTransaction tx,
+        PayoutBatch batch, DateTime created, PayoutProfile profile, params long[] intentIds)
+    {
+        var selectedIntents = batch.Intents.Where(x => intentIds.Contains(x.Id)).ToArray();
+
+        return payoutIntentRepo.CreateSendAttemptAsync(con, tx, new CreatePayoutSendAttemptRequest
+        {
+            BatchId = batch.Id,
+            PoolId = batch.PoolId,
+            Coin = batch.Coin,
+            AttemptNo = 1,
+            Method = profile.SendMethod,
+            RequestHash = $"request-hash-{Guid.NewGuid():N}",
+            RequestSummary = $"test:recipients={selectedIntents.Length}",
+            RecipientCount = selectedIntents.Length,
+            AmountSnapshot = selectedIntents.Sum(x => x.Amount),
+            Created = created
+        }, intentIds, Ct);
     }
 
     private async Task<TestPayoutData> CreatePreparedAttemptAsync(NpgsqlConnection con, string poolId, DateTime created,
@@ -702,5 +1332,17 @@ public class PayoutSendExecutorServiceTests : PostgresCommittedIntegrationTestBa
 
             return resultFactory(context);
         }
+    }
+
+    private class FixedProfileResolver : IPayoutProfileResolver
+    {
+        public FixedProfileResolver(PayoutProfileResolution resolution)
+        {
+            this.resolution = resolution;
+        }
+
+        private readonly PayoutProfileResolution resolution;
+
+        public PayoutProfileResolution Resolve(string coinKey) => resolution;
     }
 }

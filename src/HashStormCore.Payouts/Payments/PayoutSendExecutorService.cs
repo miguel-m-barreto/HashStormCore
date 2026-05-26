@@ -1,4 +1,5 @@
 using HashStormCore.Extensions;
+using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Repositories;
@@ -7,17 +8,25 @@ namespace HashStormCore.Payments;
 
 public class PayoutSendExecutorService
 {
-    public PayoutSendExecutorService(IConnectionFactory cf, IPayoutIntentRepository payoutIntentRepository)
+    public PayoutSendExecutorService(IConnectionFactory cf, IPayoutIntentRepository payoutIntentRepository,
+        IPayoutProfileResolver profileResolver)
     {
         this.cf = cf ?? throw new ArgumentNullException(nameof(cf));
-        this.payoutIntentRepository = payoutIntentRepository ?? throw new ArgumentNullException(nameof(payoutIntentRepository));
+        this.payoutIntentRepository = payoutIntentRepository ??
+            throw new ArgumentNullException(nameof(payoutIntentRepository));
+        this.profileResolver = profileResolver ?? throw new ArgumentNullException(nameof(profileResolver));
+        evidenceValidator = new PayoutExecutionEvidenceValidator();
     }
 
     private readonly IConnectionFactory cf;
     private readonly IPayoutIntentRepository payoutIntentRepository;
+    private readonly IPayoutProfileResolver profileResolver;
+    private readonly PayoutExecutionEvidenceValidator evidenceValidator;
+
     private const string InvalidResultErrorCode = "sender_invalid_result_ambiguous";
     private const string InvalidEvidenceErrorCode = "sender_invalid_evidence_ambiguous";
     private const string SenderExceptionErrorCode = "sender_exception_ambiguous";
+    private const string ContextValidationErrorCode = "context_validation_failed";
 
     public async Task<PayoutSendExecutionResult> ExecutePreparedAttemptAsync(PayoutSendExecutionRequest request,
         IPayoutAttemptSender sender, CancellationToken ct)
@@ -31,13 +40,17 @@ public class PayoutSendExecutorService
         RequireText(request.PoolId, nameof(request.PoolId));
 
         if(request.AttemptId <= 0)
-            throw new ArgumentOutOfRangeException(nameof(request.AttemptId), "Payout send attempt id must be greater than zero");
+            throw new ArgumentOutOfRangeException(nameof(request.AttemptId),
+                "Payout send attempt id must be greater than zero");
 
         var claim = await ClaimAttemptAsync(request, ct);
         if(claim.Result != null)
             return claim.Result;
 
-        var context = claim.Context ?? throw new InvalidOperationException("Payout send attempt claim did not return an execution context");
+        var context = claim.Context ?? throw new InvalidOperationException(
+            "Payout send attempt claim did not return an execution context");
+        var resolvedProfile = claim.ResolvedProfile ?? throw new InvalidOperationException(
+            "Payout send attempt claim did not return a resolved payout profile");
 
         PayoutAttemptSendResult sendResult;
 
@@ -50,10 +63,11 @@ public class PayoutSendExecutorService
             return await PersistSenderExceptionAsAmbiguousAsync(request, ex);
         }
 
-        return await PersistSendResultAsync(request, context, sendResult);
+        return await PersistSendResultAsync(request, context, sendResult, resolvedProfile);
     }
 
-    private async Task<ClaimAttemptResult> ClaimAttemptAsync(PayoutSendExecutionRequest request, CancellationToken ct)
+    private async Task<ClaimAttemptResult> ClaimAttemptAsync(PayoutSendExecutionRequest request,
+        CancellationToken ct)
     {
         return await cf.RunTx(async (con, tx) =>
         {
@@ -66,11 +80,25 @@ public class PayoutSendExecutorService
             if(attempt.State != PayoutSendAttemptStates.Prepared)
                 return ClaimAttemptResult.FromResult(PayoutSendExecutionResult.AttemptNotPrepared(request.AttemptId));
 
+            // Profile check before claiming — if profile fails, attempt stays Prepared
+            var resolution = profileResolver.Resolve(attempt.Coin);
+            if(!resolution.HasProfile || !resolution.Profile.ReservationReady)
+            {
+                var reason = resolution.HasProfile
+                    ? (resolution.Profile.NotReadyReason ?? resolution.Reason)
+                    : resolution.Reason;
+                return ClaimAttemptResult.FromResult(PayoutSendExecutionResult.ProfileResolutionFailed(
+                    request.AttemptId, string.IsNullOrWhiteSpace(reason) ? "Profile resolution failed" : reason));
+            }
+
+            var resolvedProfile = resolution.Profile;
+
             var markedSending = await payoutIntentRepository.MarkAttemptSendingAsync(con, tx, request.AttemptId,
                 request.PoolId, request.Started, ct);
 
             if(!markedSending)
-                throw new InvalidOperationException("Prepared payout send attempt could not be transitioned to sending");
+                throw new InvalidOperationException(
+                    "Prepared payout send attempt could not be transitioned to sending");
 
             var context = await payoutIntentRepository.GetAttemptExecutionContextAsync(con, tx, request.AttemptId,
                 request.PoolId, ct);
@@ -79,20 +107,38 @@ public class PayoutSendExecutorService
                 throw new InvalidOperationException("Sending payout attempt execution context could not be loaded");
 
             if(context.Attempt.State != PayoutSendAttemptStates.Sending)
-                throw new InvalidOperationException("Payout send attempt execution context was not in sending state");
+                throw new InvalidOperationException(
+                    "Payout send attempt execution context was not in sending state");
 
             if(context.Intents == null || context.Intents.Count == 0)
-                throw new InvalidOperationException("Payout send attempt execution context has no mapped intents");
+                throw new InvalidOperationException(
+                    "Payout send attempt execution context has no mapped intents");
 
-            return ClaimAttemptResult.FromContext(context);
+            // Context vs profile validation — attempt is Sending, must mark ambiguous on mismatch
+            var ctxError = ValidateContextAgainstProfile(context, resolvedProfile);
+            if(ctxError != null)
+            {
+                var marked = await payoutIntentRepository.MarkAttemptAmbiguousAsync(con, tx, request.AttemptId,
+                    request.PoolId, ContextValidationErrorCode, ctxError, request.Started, ct);
+
+                if(!marked)
+                    throw new InvalidOperationException(
+                        "Context-invalid payout send attempt could not be marked ambiguous");
+
+                return ClaimAttemptResult.FromResult(
+                    PayoutSendExecutionResult.ContextValidationFailed(request.AttemptId, ctxError));
+            }
+
+            return ClaimAttemptResult.FromContext(context, resolvedProfile);
         });
     }
 
     private async Task<PayoutSendExecutionResult> PersistSendResultAsync(PayoutSendExecutionRequest request,
-        PayoutSendExecutionContext context, PayoutAttemptSendResult sendResult)
+        PayoutSendExecutionContext context, PayoutAttemptSendResult sendResult, PayoutProfile profile)
     {
         if(sendResult == null)
-            return await PersistAmbiguousAsync(request, InvalidResultErrorCode, "Sender returned a null payout send result",
+            return await PersistAmbiguousAsync(request, InvalidResultErrorCode,
+                "Sender returned a null payout send result",
                 PayoutSendExecutionStatus.SenderFailedAmbiguous, CancellationToken.None);
 
         switch(sendResult.Status)
@@ -100,6 +146,16 @@ public class PayoutSendExecutorService
             case PayoutAttemptSendStatus.Accepted:
                 if(!TryValidateEvidence(sendResult.Evidence, out var evidenceErrorMessage))
                     return await PersistAmbiguousAsync(request, InvalidEvidenceErrorCode, evidenceErrorMessage,
+                        PayoutSendExecutionStatus.SenderFailedAmbiguous, CancellationToken.None);
+
+                if(!evidenceValidator.TryValidatePrimaryEvidenceForProfile(profile, sendResult.Evidence,
+                       out var profileEvidenceError))
+                    return await PersistAmbiguousAsync(request, InvalidEvidenceErrorCode, profileEvidenceError,
+                        PayoutSendExecutionStatus.SenderFailedAmbiguous, CancellationToken.None);
+
+                if(!evidenceValidator.TryValidateAdditionalEvidence(profile, sendResult.Evidence,
+                       sendResult.AdditionalEvidence, out var additionalEvidenceError))
+                    return await PersistAmbiguousAsync(request, InvalidEvidenceErrorCode, additionalEvidenceError,
                         PayoutSendExecutionStatus.SenderFailedAmbiguous, CancellationToken.None);
 
                 return await PersistAcceptedAsync(request, context, sendResult, CancellationToken.None);
@@ -196,13 +252,30 @@ public class PayoutSendExecutorService
         });
     }
 
-    private Task<PayoutSendExecutionResult> PersistSenderExceptionAsAmbiguousAsync(PayoutSendExecutionRequest request,
-        Exception ex)
+    private Task<PayoutSendExecutionResult> PersistSenderExceptionAsAmbiguousAsync(
+        PayoutSendExecutionRequest request, Exception ex)
     {
         var errorMessage = ex.GetType().Name;
 
         return PersistAmbiguousAsync(request, SenderExceptionErrorCode, errorMessage,
             PayoutSendExecutionStatus.SenderFailedAmbiguous, CancellationToken.None);
+    }
+
+    private static string? ValidateContextAgainstProfile(PayoutSendExecutionContext context, PayoutProfile profile)
+    {
+        if(!string.Equals(context.Batch.CoinFamily, profile.CoinFamily, StringComparison.Ordinal))
+            return $"CoinFamily mismatch: batch='{context.Batch.CoinFamily}', profile='{profile.CoinFamily}'";
+
+        if(!string.Equals(context.Batch.Handler, profile.AdapterId, StringComparison.Ordinal))
+            return $"Handler mismatch: batch='{context.Batch.Handler}', profile='{profile.AdapterId}'";
+
+        if(!string.Equals(context.Batch.SendShape, profile.SendShape, StringComparison.Ordinal))
+            return $"SendShape mismatch: batch='{context.Batch.SendShape}', profile='{profile.SendShape}'";
+
+        if(!string.Equals(context.Attempt.Method, profile.SendMethod, StringComparison.Ordinal))
+            return $"Method mismatch: attempt='{context.Attempt.Method}', profile='{profile.SendMethod}'";
+
+        return null;
     }
 
     private static void RequireText(string value, string name)
@@ -271,21 +344,17 @@ public class PayoutSendExecutorService
     {
         public PayoutSendExecutionResult? Result { get; init; }
         public PayoutSendExecutionContext? Context { get; init; }
+        public PayoutProfile? ResolvedProfile { get; init; }
 
         public static ClaimAttemptResult FromResult(PayoutSendExecutionResult result)
         {
-            return new ClaimAttemptResult
-            {
-                Result = result
-            };
+            return new ClaimAttemptResult { Result = result };
         }
 
-        public static ClaimAttemptResult FromContext(PayoutSendExecutionContext context)
+        public static ClaimAttemptResult FromContext(PayoutSendExecutionContext context,
+            PayoutProfile resolvedProfile)
         {
-            return new ClaimAttemptResult
-            {
-                Context = context
-            };
+            return new ClaimAttemptResult { Context = context, ResolvedProfile = resolvedProfile };
         }
     }
 #nullable restore

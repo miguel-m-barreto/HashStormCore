@@ -33,7 +33,9 @@ public enum PayoutSendExecutionStatus
     AmbiguousRequiresReview,
     SenderFailedAmbiguous,
     AttemptNotFound,
-    AttemptNotPrepared
+    AttemptNotPrepared,
+    ProfileResolutionFailed,    // profile cannot be resolved or is not ready — attempt stays Prepared
+    ContextValidationFailed     // profile/context field mismatch after claiming Sending — attempt marked ambiguous
 }
 
 #nullable enable annotations
@@ -103,6 +105,28 @@ public record PayoutSendExecutionResult
         {
             Status = PayoutSendExecutionStatus.AttemptNotPrepared,
             AttemptId = attemptId
+        };
+    }
+
+    public static PayoutSendExecutionResult ProfileResolutionFailed(long attemptId, string errorMessage)
+    {
+        return new PayoutSendExecutionResult
+        {
+            Status = PayoutSendExecutionStatus.ProfileResolutionFailed,
+            AttemptId = attemptId,
+            ErrorCode = "profile_resolution_failed",
+            ErrorMessage = errorMessage
+        };
+    }
+
+    public static PayoutSendExecutionResult ContextValidationFailed(long attemptId, string errorMessage)
+    {
+        return new PayoutSendExecutionResult
+        {
+            Status = PayoutSendExecutionStatus.ContextValidationFailed,
+            AttemptId = attemptId,
+            ErrorCode = "context_validation_failed",
+            ErrorMessage = errorMessage
         };
     }
 }

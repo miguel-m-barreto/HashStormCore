@@ -1,4 +1,5 @@
 using HashStormCore.Extensions;
+using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Repositories;
@@ -7,14 +8,19 @@ namespace HashStormCore.Payments;
 
 public class PayoutOperationIdReconciliationService
 {
-    public PayoutOperationIdReconciliationService(IConnectionFactory cf, IPayoutIntentRepository payoutIntentRepo)
+    public PayoutOperationIdReconciliationService(IConnectionFactory cf, IPayoutIntentRepository payoutIntentRepo,
+        IPayoutProfileResolver profileResolver)
     {
         this.cf = cf ?? throw new ArgumentNullException(nameof(cf));
         this.payoutIntentRepo = payoutIntentRepo ?? throw new ArgumentNullException(nameof(payoutIntentRepo));
+        this.profileResolver = profileResolver ?? throw new ArgumentNullException(nameof(profileResolver));
+        evidenceValidator = new PayoutExecutionEvidenceValidator();
     }
 
     private readonly IConnectionFactory cf;
     private readonly IPayoutIntentRepository payoutIntentRepo;
+    private readonly IPayoutProfileResolver profileResolver;
+    private readonly PayoutExecutionEvidenceValidator evidenceValidator;
 
     public async Task<PayoutOperationIdReconciliationResult> ReconcileOperationIdsAsync(
         PayoutOperationIdReconciliationRequest request, IPayoutOperationStatusProvider provider, CancellationToken ct)
@@ -38,6 +44,12 @@ public class PayoutOperationIdReconciliationService
         {
             var operationId = await GetOperationIdAsync(candidate, ct);
             if(string.IsNullOrWhiteSpace(operationId))
+            {
+                needsReviewCount++;
+                continue;
+            }
+
+            if(!IsCandidateEligibleForOperationIdReconciliation(candidate))
             {
                 needsReviewCount++;
                 continue;
@@ -71,6 +83,13 @@ public class PayoutOperationIdReconciliationService
                     if(string.IsNullOrWhiteSpace(providerResult.TxId))
                     {
                         providerErrorCount++;
+                        break;
+                    }
+
+                    // Unsafe/fake txid guard
+                    if(evidenceValidator.IsUnsafeEvidenceValue(providerResult.TxId))
+                    {
+                        needsReviewCount++;
                         break;
                     }
 
@@ -125,6 +144,21 @@ public class PayoutOperationIdReconciliationService
             .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
     }
 
+    private bool IsCandidateEligibleForOperationIdReconciliation(PayoutReconciliationAttemptSummary candidate)
+    {
+        var resolution = profileResolver.Resolve(candidate.Coin);
+        if(!resolution.HasProfile ||
+           !evidenceValidator.IsOperationIdReconciliationEligibleByProfile(resolution.Profile))
+            return false;
+
+        var profile = resolution.Profile;
+
+        return string.Equals(candidate.CoinFamily, profile.CoinFamily, StringComparison.Ordinal) &&
+               string.Equals(candidate.Handler, profile.AdapterId, StringComparison.Ordinal) &&
+               string.Equals(candidate.SendShape, profile.SendShape, StringComparison.Ordinal) &&
+               string.Equals(candidate.Method, profile.SendMethod, StringComparison.Ordinal);
+    }
+
     private async Task<bool> AttachTxIdEvidenceIfMissingAsync(PayoutReconciliationAttemptSummary candidate,
         string txId, DateTime created, CancellationToken ct)
     {
@@ -159,7 +193,8 @@ public class PayoutOperationIdReconciliationService
         RequireText(request.PoolId, nameof(request.PoolId));
 
         if(request.Limit <= 0)
-            throw new ArgumentOutOfRangeException(nameof(request.Limit), "Operation id reconciliation limit must be greater than zero");
+            throw new ArgumentOutOfRangeException(nameof(request.Limit),
+                "Operation id reconciliation limit must be greater than zero");
     }
 
     private static void RequireText(string value, string name)

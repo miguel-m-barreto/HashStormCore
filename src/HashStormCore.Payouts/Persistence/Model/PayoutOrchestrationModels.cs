@@ -21,6 +21,7 @@ public record PayoutSettlementAttemptCandidate
     public string PoolId { get; init; }
     public string Coin { get; init; }
     public string Method { get; init; }
+    public string EvidenceKind { get; init; }
     public string TransactionConfirmationData { get; init; }
     public DateTime Created { get; init; }
     public DateTime Updated { get; init; }
