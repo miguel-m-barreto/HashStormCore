@@ -63,8 +63,8 @@ public class PayoutProcessorService : BackgroundService
         else
         {
             logger.LogWarning(
-                "PayoutProcessor DbMutating mode is enabled for reservation, planning, and no-sender-safe execution. Reconciliation, settlement, and wallet/daemon/RPC calls remain disabled");
-            logger.LogWarning("PayoutProcessor DbMutating reservation, planning, and execution process only pools with paymentProcessing.engine=intent");
+                "PayoutProcessor DbMutating mode is enabled for reservation, planning, no-sender-safe execution, and local stale sending quarantine. Operation-id reconciliation, settlement, and wallet/daemon/RPC calls remain disabled");
+            logger.LogWarning("PayoutProcessor DbMutating reservation, planning, execution, and stale sending quarantine process only pools with paymentProcessing.engine=intent");
         }
 
         logger.LogInformation("PayoutProcessor discovered {PoolCount} payout-capable pool(s)", pools.Count);
@@ -87,7 +87,7 @@ public class PayoutProcessorService : BackgroundService
         if(config.Mode == PayoutProcessorMode.DryRun)
             await RunDryRunLoopsAsync(pools, stoppingToken);
         else
-            await RunDbMutatingReservationPlanningAndExecutionLoopsAsync(pools, stoppingToken);
+            await RunDbMutatingReservationPlanningExecutionAndStaleReconciliationLoopsAsync(pools, stoppingToken);
     }
 
     private IReadOnlyCollection<PayoutProcessorPoolConfig> DiscoverPools()
@@ -279,15 +279,17 @@ public class PayoutProcessorService : BackgroundService
         }
     }
 
-    private async Task RunDbMutatingReservationPlanningAndExecutionLoopsAsync(IReadOnlyCollection<PayoutProcessorPoolConfig> pools,
+    private async Task RunDbMutatingReservationPlanningExecutionAndStaleReconciliationLoopsAsync(IReadOnlyCollection<PayoutProcessorPoolConfig> pools,
         CancellationToken ct)
     {
         var reservationInterval = GetInterval(config.ReservationIntervalSeconds);
         var planningInterval = GetInterval(config.PlanningIntervalSeconds);
         var executionInterval = GetInterval(config.ExecutionIntervalSeconds);
+        var staleReconciliationInterval = GetInterval(config.StaleReconciliationIntervalSeconds);
         var nextReservation = DateTimeOffset.MinValue;
         var nextPlanning = DateTimeOffset.MinValue;
         var nextExecution = DateTimeOffset.MinValue;
+        var nextStaleReconciliation = DateTimeOffset.MinValue;
 
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
 
@@ -317,6 +319,15 @@ public class PayoutProcessorService : BackgroundService
                         nextExecution = now + executionInterval;
                     }
 
+                    if(now >= nextStaleReconciliation)
+                    {
+                        foreach(var pool in pools)
+                            await RunPoolTickAsync(pool, () => orchestrator.RunStaleReconciliationTickAsync(pool, ct),
+                                "Payout stale sending reconciliation tick failed for pool {PoolId}", ct);
+
+                        nextStaleReconciliation = now + staleReconciliationInterval;
+                    }
+
                     continue;
                 }
 
@@ -342,6 +353,15 @@ public class PayoutProcessorService : BackgroundService
                             "Payout execution tick failed for pool {PoolId}", ct);
 
                     nextExecution = now + executionInterval;
+                }
+
+                if(now >= nextStaleReconciliation)
+                {
+                    foreach(var pool in pools)
+                        await RunPoolTickAsync(pool, () => orchestrator.RunStaleReconciliationTickAsync(pool, ct),
+                            "Payout stale sending reconciliation tick failed for pool {PoolId}", ct);
+
+                    nextStaleReconciliation = now + staleReconciliationInterval;
                 }
             }
         }

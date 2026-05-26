@@ -9,10 +9,14 @@ namespace HashStormCore.PayoutProcessor.Services;
 public class PayoutPoolOrchestrator
 {
     private const string PayoutEngineIntent = "intent";
+    private const string StaleSendingErrorCode = "stale_send_reconciliation";
+    private const string StaleSendingErrorMessage =
+        "Payout send attempt stayed in sending past stale threshold";
 
     public PayoutPoolOrchestrator(PayoutProcessorConfig config, IPayoutProfileResolver payoutProfileResolver,
         IPayoutReservationRunner payoutReservationRunner, IPayoutPlanningRunner payoutPlanningRunner,
         IPayoutExecutionRunner payoutExecutionRunner,
+        IPayoutStaleSendReconciliationRunner payoutStaleSendReconciliationRunner,
         ILogger<PayoutPoolOrchestrator> logger)
     {
         this.config = config;
@@ -20,6 +24,7 @@ public class PayoutPoolOrchestrator
         this.payoutReservationRunner = payoutReservationRunner;
         this.payoutPlanningRunner = payoutPlanningRunner;
         this.payoutExecutionRunner = payoutExecutionRunner;
+        this.payoutStaleSendReconciliationRunner = payoutStaleSendReconciliationRunner;
         this.logger = logger;
     }
 
@@ -28,6 +33,7 @@ public class PayoutPoolOrchestrator
     private readonly IPayoutReservationRunner payoutReservationRunner;
     private readonly IPayoutPlanningRunner payoutPlanningRunner;
     private readonly IPayoutExecutionRunner payoutExecutionRunner;
+    private readonly IPayoutStaleSendReconciliationRunner payoutStaleSendReconciliationRunner;
     private readonly ILogger<PayoutPoolOrchestrator> logger;
 
     public async Task RunReservationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
@@ -276,12 +282,87 @@ public class PayoutPoolOrchestrator
         }
     }
 
-    public Task RunStaleReconciliationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
+    public async Task RunStaleReconciliationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+
+        if(!config.Enabled)
+        {
+            logger.LogInformation("Skipping stale sending reconciliation for pool {PoolId}: PayoutProcessor is disabled",
+                pool.Id);
+            return;
+        }
+
+        if(config.Mode == PayoutProcessorMode.Disabled)
+        {
+            logger.LogInformation(
+                "Skipping stale sending reconciliation for pool {PoolId}: PayoutProcessor mode is Disabled",
+                pool.Id);
+            return;
+        }
+
+        if(!string.Equals(pool.Engine, PayoutEngineIntent, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogInformation(
+                "Skipping stale sending reconciliation for pool {PoolId}: paymentProcessing.engine={Engine}, only engine=intent is processed by PayoutProcessor",
+                pool.Id, pool.Engine);
+            return;
+        }
+
+        if(config.Mode == PayoutProcessorMode.DryRun)
+        {
+            logger.LogInformation(
+                "Dry-run stale sending reconciliation tick for pool {PoolId}: would quarantine stale sending batches older than {StaleSendingAgeSeconds}s, limit={Limit}",
+                pool.Id, config.StaleSendingAgeSeconds, config.ExecutionBatchSize);
+            return;
+        }
+
+        if(config.Mode != PayoutProcessorMode.DbMutating)
+        {
+            logger.LogInformation("Stale sending reconciliation tick for pool {PoolId} skipped: processor mode is {Mode}",
+                pool.Id, config.Mode);
+            return;
+        }
+
+        if(config.StaleSendingAgeSeconds <= 0)
+        {
+            logger.LogWarning(
+                "Skipping stale sending reconciliation for pool {PoolId}: StaleSendingAgeSeconds must be greater than zero for DbMutating reconciliation",
+                pool.Id);
+            return;
+        }
+
+        if(config.ExecutionBatchSize <= 0)
+        {
+            logger.LogWarning(
+                "Skipping stale sending reconciliation for pool {PoolId}: ExecutionBatchSize is used as the stale reconciliation limit and must be greater than zero",
+                pool.Id);
+            return;
+        }
+
+        var request = BuildStaleSendReconciliationRequest(pool, config);
+
         logger.LogInformation(
-            "Stale sending reconciliation tick for pool {PoolId} using engine {Engine}: reconciliation loop is not implemented and no DB mutation is performed",
-            pool.Id, pool.Engine);
-        return Task.CompletedTask;
+            "DB-mutating stale sending reconciliation tick for pool {PoolId}: olderThan={OlderThan}, updated={Updated}, limit={Limit}",
+            request.PoolId, request.OlderThan, request.Updated, request.Limit);
+
+        var result = await payoutStaleSendReconciliationRunner.ReconcileStaleSendingAsync(request, ct);
+
+        logger.LogInformation(
+            "Stale sending reconciliation tick for pool {PoolId} completed: candidateBatches={CandidateBatchCount}, markedBatches={MarkedBatchCount}, skippedBatches={SkippedBatchCount}",
+            request.PoolId, result.CandidateBatchCount, result.MarkedBatchCount, result.SkippedBatchIds.Count);
+
+        foreach(var batchId in result.MarkedBatchIds)
+        {
+            logger.LogInformation("Marked stale sending payout batch {BatchId} ambiguous for pool {PoolId}",
+                batchId, request.PoolId);
+        }
+
+        foreach(var batchId in result.SkippedBatchIds)
+        {
+            logger.LogWarning("Skipped stale sending quarantine for payout batch {BatchId} in pool {PoolId}",
+                batchId, request.PoolId);
+        }
     }
 
     public Task RunOperationIdReconciliationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
@@ -343,6 +424,21 @@ public class PayoutPoolOrchestrator
             PoolId = pool.Id,
             MaxAttempts = config.ExecutionBatchSize,
             Started = DateTime.UtcNow
+        };
+    }
+
+    public static PayoutStaleSendReconciliationRunnerRequest BuildStaleSendReconciliationRequest(
+        PayoutProcessorPoolConfig pool, PayoutProcessorConfig config)
+    {
+        var now = DateTime.UtcNow;
+        return new PayoutStaleSendReconciliationRunnerRequest
+        {
+            PoolId = pool.Id,
+            OlderThan = now.AddSeconds(-config.StaleSendingAgeSeconds),
+            Updated = now,
+            Limit = config.ExecutionBatchSize,
+            ErrorCode = StaleSendingErrorCode,
+            ErrorMessage = StaleSendingErrorMessage
         };
     }
 }

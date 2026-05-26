@@ -144,6 +144,28 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public void BuildStaleSendReconciliationRequestMapsPoolIdThresholdLimitAndStableError()
+    {
+        var pool = NewPool("bitcoin", "intent");
+        var config = new PayoutProcessorConfig
+        {
+            ExecutionBatchSize = 13,
+            StaleSendingAgeSeconds = 900
+        };
+        var before = DateTime.UtcNow;
+
+        var request = PayoutPoolOrchestrator.BuildStaleSendReconciliationRequest(pool, config);
+
+        var after = DateTime.UtcNow;
+        Assert.Equal("pool-a", request.PoolId);
+        Assert.Equal(13, request.Limit);
+        Assert.InRange(request.Updated, before, after);
+        Assert.InRange(request.OlderThan, before.AddSeconds(-900), after.AddSeconds(-900));
+        Assert.Equal("stale_send_reconciliation", request.ErrorCode);
+        Assert.Equal("Payout send attempt stayed in sending past stale threshold", request.ErrorMessage);
+    }
+
+    [Fact]
     public async Task RunPlanningTickAsync_DryRunDoesNotCallPlanningRunner()
     {
         var planningRunner = Substitute.For<IPayoutPlanningRunner>();
@@ -252,11 +274,16 @@ public class PayoutPoolOrchestratorTests
         executionRunner.ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new PayoutExecutionRunnerResult()));
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        staleRunner.ReconcileStaleSendingAsync(Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutStaleSendReconciliationResult()));
         var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
             Substitute.For<IPayoutProfileResolver>(),
             Substitute.For<IPayoutReservationRunner>(),
             planningRunner,
-            executionRunner: executionRunner);
+            executionRunner: executionRunner,
+            staleReconciliationRunner: staleRunner);
         var pool = NewPool("bitcoin", "intent");
 
         await orchestrator.RunExecutionTickAsync(pool, CancellationToken.None);
@@ -452,6 +479,171 @@ public class PayoutPoolOrchestratorTests
 
         await executionRunner.DidNotReceive().ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunStaleReconciliationTickAsync_DisabledConfigSkipsBeforeRunner()
+    {
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            enabled: false,
+            staleReconciliationRunner: staleRunner);
+
+        await orchestrator.RunStaleReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await staleRunner.DidNotReceive().ReconcileStaleSendingAsync(
+            Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunStaleReconciliationTickAsync_DisabledModeSkipsBeforeRunner()
+    {
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.Disabled,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            staleReconciliationRunner: staleRunner);
+
+        await orchestrator.RunStaleReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await staleRunner.DidNotReceive().ReconcileStaleSendingAsync(
+            Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunStaleReconciliationTickAsync_LegacyEngineSkipsBeforeRunner()
+    {
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            staleReconciliationRunner: staleRunner);
+
+        await orchestrator.RunStaleReconciliationTickAsync(NewPool("bitcoin", "legacy"), CancellationToken.None);
+
+        await staleRunner.DidNotReceive().ReconcileStaleSendingAsync(
+            Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunStaleReconciliationTickAsync_DryRunDoesNotCallRunner()
+    {
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DryRun,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            staleReconciliationRunner: staleRunner);
+
+        await orchestrator.RunStaleReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await staleRunner.DidNotReceive().ReconcileStaleSendingAsync(
+            Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunStaleReconciliationTickAsync_DbMutatingInvalidAgeSkipsBeforeRunner()
+    {
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            staleSendingAgeSeconds: 0,
+            staleReconciliationRunner: staleRunner);
+
+        await orchestrator.RunStaleReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await staleRunner.DidNotReceive().ReconcileStaleSendingAsync(
+            Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunStaleReconciliationTickAsync_DbMutatingInvalidLimitSourceSkipsBeforeRunner()
+    {
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionBatchSize: 0,
+            staleReconciliationRunner: staleRunner);
+
+        await orchestrator.RunStaleReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await staleRunner.DidNotReceive().ReconcileStaleSendingAsync(
+            Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunStaleReconciliationTickAsync_DbMutatingIntentPoolCallsRunnerWithRequest()
+    {
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        PayoutStaleSendReconciliationRunnerRequest capturedRequest = null;
+        staleRunner.ReconcileStaleSendingAsync(
+                Arg.Do<PayoutStaleSendReconciliationRunnerRequest>(x => capturedRequest = x),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutStaleSendReconciliationResult()));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionBatchSize: 21,
+            staleSendingAgeSeconds: 600,
+            staleReconciliationRunner: staleRunner);
+        var before = DateTime.UtcNow;
+
+        await orchestrator.RunStaleReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        var after = DateTime.UtcNow;
+        await staleRunner.Received(1).ReconcileStaleSendingAsync(
+            Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("pool-a", capturedRequest.PoolId);
+        Assert.Equal(21, capturedRequest.Limit);
+        Assert.InRange(capturedRequest.Updated, before, after);
+        Assert.InRange(capturedRequest.OlderThan, before.AddSeconds(-600), after.AddSeconds(-600));
+        Assert.Equal("stale_send_reconciliation", capturedRequest.ErrorCode);
+        Assert.Equal("Payout send attempt stayed in sending past stale threshold", capturedRequest.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task RunStaleReconciliationTickAsync_HandlesMarkedAndSkippedResultWithoutThrowing()
+    {
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        staleRunner.ReconcileStaleSendingAsync(Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutStaleSendReconciliationResult
+            {
+                CandidateBatchCount = 3,
+                MarkedBatchIds = new[] { 10L, 11L },
+                SkippedBatchIds = new[] { 12L }
+            }));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            staleReconciliationRunner: staleRunner);
+
+        await orchestrator.RunStaleReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await staleRunner.Received(1).ReconcileStaleSendingAsync(
+            Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunStaleReconciliationTickAsync_CancellationIsPropagated()
+    {
+        var staleRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            staleReconciliationRunner: staleRunner);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            orchestrator.RunStaleReconciliationTickAsync(NewPool("bitcoin", "intent"), cts.Token));
+
+        await staleRunner.DidNotReceive().ReconcileStaleSendingAsync(
+            Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -969,20 +1161,31 @@ public class PayoutPoolOrchestratorTests
     private static PayoutPoolOrchestrator NewOrchestrator(PayoutProcessorMode mode, IPayoutProfileResolver resolver,
         IPayoutReservationRunner runner, IPayoutPlanningRunner planningRunner = null, bool enabled = true,
         int reservationMaxCandidates = 50, int planningMaxBatches = 8, int executionBatchSize = 8,
-        IPayoutExecutionRunner executionRunner = null)
+        int staleSendingAgeSeconds = 900, IPayoutExecutionRunner executionRunner = null,
+        IPayoutStaleSendReconciliationRunner staleReconciliationRunner = null)
     {
+        if(staleReconciliationRunner == null)
+        {
+            staleReconciliationRunner = Substitute.For<IPayoutStaleSendReconciliationRunner>();
+            staleReconciliationRunner.ReconcileStaleSendingAsync(Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new PayoutStaleSendReconciliationResult()));
+        }
+
         var config = new PayoutProcessorConfig
         {
             Enabled = enabled,
             Mode = mode,
             ReservationMaxCandidates = reservationMaxCandidates,
             PlanningMaxBatches = planningMaxBatches,
-            ExecutionBatchSize = executionBatchSize
+            ExecutionBatchSize = executionBatchSize,
+            StaleSendingAgeSeconds = staleSendingAgeSeconds
         };
 
         return new PayoutPoolOrchestrator(config, resolver, runner,
             planningRunner ?? Substitute.For<IPayoutPlanningRunner>(),
             executionRunner ?? Substitute.For<IPayoutExecutionRunner>(),
+            staleReconciliationRunner,
             NullLogger<PayoutPoolOrchestrator>.Instance);
     }
 
