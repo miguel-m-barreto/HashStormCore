@@ -9,6 +9,15 @@ public class PayoutProcessorService : BackgroundService
 {
     private const string PayoutEngineLegacy = "legacy";
     private const string PayoutEngineIntent = "intent";
+    public static IReadOnlyList<string> DbMutatingPipelineStepOrder { get; } = Array.AsReadOnly(new[]
+    {
+        "reservation",
+        "planning",
+        "execution",
+        "stale_sending_reconciliation",
+        "operation_id_reconciliation",
+        "settlement"
+    });
 
     public PayoutProcessorService(PayoutProcessorConfig config, PayoutProcessorClusterConfig clusterConfig,
         PayoutPoolOrchestrator orchestrator,

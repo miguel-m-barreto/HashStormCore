@@ -202,6 +202,32 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public void PayoutProcessorService_DbMutatingPipelineOrderKeepsSafetyCriticalSequence()
+    {
+        Assert.Equal(new[]
+        {
+            "reservation",
+            "planning",
+            "execution",
+            "stale_sending_reconciliation",
+            "operation_id_reconciliation",
+            "settlement"
+        }, PayoutProcessorService.DbMutatingPipelineStepOrder);
+
+        Assert.True(IndexOf("execution") < IndexOf("stale_sending_reconciliation"));
+        Assert.True(IndexOf("stale_sending_reconciliation") < IndexOf("operation_id_reconciliation"));
+        Assert.True(IndexOf("operation_id_reconciliation") < IndexOf("settlement"));
+
+        static int IndexOf(string step)
+        {
+            return PayoutProcessorService.DbMutatingPipelineStepOrder
+                .Select((value, index) => new { value, index })
+                .Single(x => x.value == step)
+                .index;
+        }
+    }
+
+    [Fact]
     public async Task RunPlanningTickAsync_DryRunDoesNotCallPlanningRunner()
     {
         var planningRunner = Substitute.For<IPayoutPlanningRunner>();

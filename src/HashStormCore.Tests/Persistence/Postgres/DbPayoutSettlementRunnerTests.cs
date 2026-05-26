@@ -1,5 +1,6 @@
 using System;
 using System.Data;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -131,6 +132,23 @@ public class DbPayoutSettlementRunnerTests : PostgresCommittedIntegrationTestBas
         var runner = NewRunner(TxIdProfile(), repo);
 
         return AssertSkippedWithoutRepositorySettlementAsync(runner, repo);
+    }
+
+    [PostgresIntegrationFact]
+    public async Task SettleAcceptedAttemptsAsync_RepositorySettlementIsReachedThroughSettlementService()
+    {
+        var candidate = Candidate(PayoutExternalConfirmationKinds.TxId, "txid-service-mediated");
+        var repo = new FakeSettlementRepository(new[] { candidate },
+            PayoutSettlementResult.Settled(candidate.BatchId, candidate.AttemptId,
+                Array.Empty<long>(), Array.Empty<long>(), Array.Empty<long>(), candidate.TransactionConfirmationData));
+        var runner = NewRunner(TxIdProfile(), repo);
+
+        var result = await runner.SettleAcceptedAttemptsAsync(NewRequest("pool-a"), Ct);
+
+        Assert.Equal(1, result.SettledCount);
+        Assert.Equal(1, repo.SettleCallCount);
+        Assert.Contains(nameof(PayoutSettlementService), repo.SettleStackTrace);
+        Assert.Contains(nameof(PayoutSettlementService.SettleEligibleCandidateAsync), repo.SettleStackTrace);
     }
 
     [PostgresIntegrationFact]
@@ -552,6 +570,7 @@ public class DbPayoutSettlementRunnerTests : PostgresCommittedIntegrationTestBas
         private readonly PayoutSettlementResult result;
 
         public int SettleCallCount { get; private set; }
+        public string SettleStackTrace { get; private set; }
 
         public Task<PayoutSettlementAttemptCandidate[]> GetAcceptedAttemptsForSettlementAsync(IDbConnection con,
             IDbTransaction tx, string poolId, int limit, CancellationToken ct)
@@ -563,6 +582,7 @@ public class DbPayoutSettlementRunnerTests : PostgresCommittedIntegrationTestBas
             PayoutSettlementRequest request, CancellationToken ct)
         {
             SettleCallCount++;
+            SettleStackTrace = new StackTrace().ToString();
             return Task.FromResult(result);
         }
     }
