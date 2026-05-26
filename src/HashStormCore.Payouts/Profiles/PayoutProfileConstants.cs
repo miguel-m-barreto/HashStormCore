@@ -63,6 +63,7 @@ public static class PayoutProfileConstants
     {
         public const string TxId = PayoutExternalConfirmationKinds.TxId;
         public const string RawHash = PayoutExternalConfirmationKinds.RawHash;
+        public const string OperationId = PayoutExternalConfirmationKinds.OperationId;
         public const string OperationIdThenTxId = "operationid_then_txid";
         public const string UnsafePlaceholder = "unsafe_placeholder";
         public const string Unsupported = "unsupported";

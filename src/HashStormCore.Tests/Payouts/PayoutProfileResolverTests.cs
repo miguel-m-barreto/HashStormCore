@@ -78,23 +78,55 @@ public class PayoutProfileResolverTests
         Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
         Assert.Equal(PayoutProfileConstants.AdapterIds.EquihashBitcoinRpc, result.Profile.AdapterId);
         Assert.Equal("equihash", result.Profile.CoinFamily);
+        Assert.Equal(PayoutProfileConstants.SendShapes.BatchMultiRecipient, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.SendMany, result.Profile.SendMethod);
         Assert.Equal(PayoutProfileConstants.SettlementEvidenceKinds.TxId, result.Profile.SettlementEvidenceKind);
+        Assert.True(result.Profile.SupportsTransparentTxId);
         Assert.True(result.Profile.ReservationReady);
     }
 
     [Fact]
-    public void EquihashAsyncProfileIsNotReservationReady()
+    public void EquihashBitcoinOverrideBrokenSendManyResolvesPerAddressSendToAddress()
+    {
+        var resolver = NewResolver(Coin("zec-fork", "equihash", "ZF") with
+        {
+            UseBitcoinPayoutHandler = true,
+            HasBrokenSendMany = true
+        });
+
+        var result = resolver.Resolve("zec-fork");
+
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
+        Assert.Equal(PayoutProfileConstants.AdapterIds.EquihashBitcoinRpc, result.Profile.AdapterId);
+        Assert.Equal(PayoutProfileConstants.SendShapes.PerAddress, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.SendToAddress, result.Profile.SendMethod);
+        Assert.Equal(PayoutProfileConstants.SettlementEvidenceKinds.TxId, result.Profile.SettlementEvidenceKind);
+        Assert.True(result.Profile.AllowsPerAddress);
+        Assert.False(result.Profile.AllowsBatchMultiRecipient);
+        Assert.False(result.Profile.RequiresOperationIdProvider);
+        Assert.False(result.Profile.SupportsShieldedOperationTracking);
+        Assert.True(result.Profile.ReservationReady);
+    }
+
+    [Fact]
+    public void EquihashAsyncProfileIsReservationReadyWithOperationTrackingLifecycle()
     {
         var resolver = NewResolver(Coin("zec", "equihash", "ZEC"));
 
         var result = resolver.Resolve("zec");
 
-        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
         Assert.Equal(PayoutProfileConstants.AdapterIds.EquihashZAsync, result.Profile.AdapterId);
+        Assert.Equal(PayoutProfileConstants.SendShapes.AsyncOperation, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.ZSendMany, result.Profile.SendMethod);
         Assert.Equal(PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId, result.Profile.SettlementEvidenceKind);
         Assert.True(result.Profile.RequiresOperationIdProvider);
-        Assert.False(result.Profile.ReservationReady);
-        Assert.NotEmpty(result.Profile.NotReadyReason);
+        Assert.True(result.Profile.SupportsShieldedOperationTracking);
+        Assert.True(result.Profile.AllowsBatchMultiRecipient);
+        Assert.True(result.Profile.RequiresWalletDaemon);
+        Assert.Equal(50, result.Profile.MaxRecipientsPerAttempt);
+        Assert.True(result.Profile.ReservationReady);
+        Assert.Empty(result.Profile.NotReadyReason);
     }
 
     [Fact]
@@ -140,6 +172,21 @@ public class PayoutProfileResolverTests
         Assert.False(result.Profile.PlaceholderEvidenceUnsafe);
         Assert.True(result.Profile.ReservationReady);
         Assert.Empty(result.Profile.NotReadyReason);
+    }
+
+    [Theory]
+    [InlineData("handshake")]
+    [InlineData("ethereum")]
+    [InlineData("ergo")]
+    [InlineData("beam")]
+    public void NonAsyncApprovedProfilesStillResolveAfterAsyncInvariants(string family)
+    {
+        var resolver = NewResolver(Coin(family, family, "COIN"));
+
+        var result = resolver.Resolve(family);
+
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
+        Assert.True(result.Profile.ReservationReady);
     }
 
     [Fact]
@@ -375,6 +422,91 @@ public class PayoutProfileResolverTests
         Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
         Assert.False(result.Profile.ReservationReady);
         Assert.Contains("placeholder", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForReadyProfileWithOperationIdAsFinalEvidence()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-evidence", "bad-evidence", "BAD") }),
+            new[] { new BadEvidenceProvider(PayoutProfileConstants.SettlementEvidenceKinds.OperationId) });
+
+        var result = resolver.Resolve("bad-evidence");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("operation ids", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForAsyncOperationWithoutOperationIdProvider()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-async", "bad-async", "BAD") }),
+            new[] { new BadAsyncOperationProvider(requiresOperationIdProvider: false) });
+
+        var result = resolver.Resolve("bad-async");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("operation-id provider", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForAsyncOperationWithoutShieldedTracking()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-async", "bad-async", "BAD") }),
+            new[] { new BadAsyncOperationProvider(supportsShieldedOperationTracking: false) });
+
+        var result = resolver.Resolve("bad-async");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("shielded tracking", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForAsyncOperationWithTxIdOnlyEvidence()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-async", "bad-async", "BAD") }),
+            new[] { new BadAsyncOperationProvider(
+                settlementEvidenceKind: PayoutProfileConstants.SettlementEvidenceKinds.TxId) });
+
+        var result = resolver.Resolve("bad-async");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains(PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId, result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForAsyncOperationWithoutMaxRecipientLimit()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-async", "bad-async", "BAD") }),
+            new[] { new BadAsyncOperationProvider(maxRecipientsPerAttempt: 0) });
+
+        var result = resolver.Resolve("bad-async");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("MaxRecipientsPerAttempt", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForOperationIdThenTxIdOnNonAsyncSendShape()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-async", "bad-async", "BAD") }),
+            new[] { new BadAsyncOperationProvider(sendShape: PayoutProfileConstants.SendShapes.BatchMultiRecipient) });
+
+        var result = resolver.Resolve("bad-async");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("async_operation", result.Reason);
     }
 
     [Fact]
@@ -631,6 +763,52 @@ public class PayoutProfileResolverTests
                 SendMethod = "bad-send",
                 SettlementEvidenceKind = settlementEvidenceKind,
                 PlaceholderEvidenceUnsafe = placeholderEvidenceUnsafe,
+                ReservationReady = true
+            });
+        }
+    }
+
+    private class BadAsyncOperationProvider : IPayoutProfileProvider
+    {
+        private readonly bool requiresOperationIdProvider;
+        private readonly bool supportsShieldedOperationTracking;
+        private readonly string settlementEvidenceKind;
+        private readonly string sendShape;
+        private readonly int maxRecipientsPerAttempt;
+
+        public BadAsyncOperationProvider(
+            bool requiresOperationIdProvider = true,
+            bool supportsShieldedOperationTracking = true,
+            string settlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId,
+            string sendShape = PayoutProfileConstants.SendShapes.AsyncOperation,
+            int maxRecipientsPerAttempt = 50)
+        {
+            this.requiresOperationIdProvider = requiresOperationIdProvider;
+            this.supportsShieldedOperationTracking = supportsShieldedOperationTracking;
+            this.settlementEvidenceKind = settlementEvidenceKind;
+            this.sendShape = sendShape;
+            this.maxRecipientsPerAttempt = maxRecipientsPerAttempt;
+        }
+
+        public bool CanResolve(CoinDescriptor coin)
+        {
+            return string.Equals(coin.Family, "bad-async", StringComparison.Ordinal);
+        }
+
+        public PayoutProfileResolution Resolve(CoinDescriptor coin)
+        {
+            return PayoutProfileResolution.Resolved(new PayoutProfile
+            {
+                CoinKey = coin.CoinKey,
+                CoinSymbol = coin.Symbol,
+                CoinFamily = coin.Family,
+                AdapterId = "bad-async-adapter",
+                SendShape = sendShape,
+                SendMethod = PayoutProfileConstants.SendMethods.ZSendMany,
+                SettlementEvidenceKind = settlementEvidenceKind,
+                RequiresOperationIdProvider = requiresOperationIdProvider,
+                SupportsShieldedOperationTracking = supportsShieldedOperationTracking,
+                MaxRecipientsPerAttempt = maxRecipientsPerAttempt,
                 ReservationReady = true
             });
         }

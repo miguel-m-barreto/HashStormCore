@@ -106,8 +106,10 @@ public class PayoutSendAttemptPlannerService
         switch(request.SendShape)
         {
             case PayoutSendShapes.BatchMultiRecipient:
-            case PayoutSendShapes.AsyncOperation:
                 return new List<PayoutIntent[]> { orderedIntents };
+
+            case PayoutSendShapes.AsyncOperation:
+                return CreateChunkedGroups(orderedIntents, request.MaxRecipientsPerAttempt);
 
             case PayoutSendShapes.PerAddress:
                 return orderedIntents.Select(x => new[] { x }).ToList();
@@ -128,6 +130,15 @@ public class PayoutSendAttemptPlannerService
             default:
                 throw new ArgumentException($"Unsupported payout send shape '{request.SendShape}'", nameof(request));
         }
+    }
+
+    private static List<PayoutIntent[]> CreateChunkedGroups(PayoutIntent[] orderedIntents, int maxRecipientsPerAttempt)
+    {
+        return orderedIntents
+            .Select((intent, index) => new { intent, index })
+            .GroupBy(x => x.index / maxRecipientsPerAttempt)
+            .Select(x => x.Select(y => y.intent).ToArray())
+            .ToList();
     }
 
     private static List<PayoutIntent[]> CreatePaymentIdAwareGroups(CreatePayoutSendAttemptsRequest request,
@@ -205,7 +216,12 @@ public class PayoutSendAttemptPlannerService
         {
             case PayoutSendShapes.BatchMultiRecipient:
             case PayoutSendShapes.PerAddress:
+                break;
+
             case PayoutSendShapes.AsyncOperation:
+                if(request.MaxRecipientsPerAttempt <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(request.MaxRecipientsPerAttempt),
+                        "Async-operation payout planning requires a maximum recipient count greater than zero");
                 break;
 
             case PayoutSendShapes.AddressGroup:

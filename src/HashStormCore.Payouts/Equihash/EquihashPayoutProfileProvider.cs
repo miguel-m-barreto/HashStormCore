@@ -43,9 +43,14 @@ public class EquihashPayoutProfileProvider : IPayoutProfileProvider
             RequiresOperationIdProvider = true,
             SupportsShieldedOperationTracking = true,
             AllowsBatchMultiRecipient = true,
+            // Mirrors legacy z_sendmany/sendcurrency safety paging only. Execution still
+            // must submit an operation id, track it, and settle only after Success with a
+            // non-empty txid. Failed/Cancelled or empty-success results must fail closed.
+            MaxRecipientsPerAttempt = 50,
             RequiresWalletDaemon = true,
-            ReservationReady = false,
-            NotReadyReason = "Equihash shielded payout execution requires an operation-id provider to attach txid evidence before settlement"
+            // z_getoperationresult can remove completed operation state after retrieval;
+            // future reconciliation must preserve operation state before attaching txid evidence.
+            ReservationReady = true
         };
 
         return PayoutProfileResolution.Resolved(profile);

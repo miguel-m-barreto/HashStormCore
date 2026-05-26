@@ -85,6 +85,14 @@ public class DbPayoutPlanningRunner : IPayoutPlanningRunner
                     continue;
                 }
 
+                if(string.Equals(candidate.SendShape, PayoutSendShapes.AsyncOperation, StringComparison.Ordinal) &&
+                   (!profile.MaxRecipientsPerAttempt.HasValue || profile.MaxRecipientsPerAttempt.Value <= 0))
+                {
+                    skipped.Add(CreateSkippedBatch(candidate,
+                        "async_operation planning requires MaxRecipientsPerAttempt greater than zero"));
+                    continue;
+                }
+
                 var plannerRequest = new CreatePayoutSendAttemptsRequest
                 {
                     BatchId = candidate.BatchId,

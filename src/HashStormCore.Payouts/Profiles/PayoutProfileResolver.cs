@@ -66,6 +66,42 @@ public class PayoutProfileResolver : IPayoutProfileResolver
 
         if(resolution.HasProfile &&
            resolution.Profile.ReservationReady &&
+           IsOperationIdOnlyEvidenceKind(resolution.Profile.SettlementEvidenceKind))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                "Reservation-ready payout profiles must not treat operation ids as final settlement evidence");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           string.Equals(resolution.Profile.SendShape, PayoutProfileConstants.SendShapes.AsyncOperation,
+               StringComparison.Ordinal) &&
+           (!resolution.Profile.RequiresOperationIdProvider ||
+            !resolution.Profile.SupportsShieldedOperationTracking ||
+            !string.Equals(resolution.Profile.SettlementEvidenceKind,
+                PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId, StringComparison.Ordinal) ||
+            !resolution.Profile.MaxRecipientsPerAttempt.HasValue ||
+            resolution.Profile.MaxRecipientsPerAttempt.Value <= 0))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                "Async-operation payout planning requires operation-id provider, shielded tracking, " +
+                $"SettlementEvidenceKind={PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId}, " +
+                "and MaxRecipientsPerAttempt greater than zero");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           string.Equals(resolution.Profile.SettlementEvidenceKind,
+               PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId, StringComparison.Ordinal) &&
+           !string.Equals(resolution.Profile.SendShape, PayoutProfileConstants.SendShapes.AsyncOperation,
+               StringComparison.Ordinal))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                $"{PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId} evidence requires async_operation send shape");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
            string.Equals(resolution.Profile.SendShape, PayoutProfileConstants.SendShapes.AddressGroup,
                StringComparison.Ordinal) &&
            (!resolution.Profile.MaxRecipientsPerAttempt.HasValue ||
@@ -129,5 +165,11 @@ public class PayoutProfileResolver : IPayoutProfileResolver
                    StringComparison.Ordinal) ||
                evidenceKind.Contains("placeholder", StringComparison.OrdinalIgnoreCase) ||
                evidenceKind.StartsWith("send:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsOperationIdOnlyEvidenceKind(string evidenceKind)
+    {
+        return string.Equals(evidenceKind, PayoutProfileConstants.SettlementEvidenceKinds.OperationId,
+            StringComparison.Ordinal);
     }
 }

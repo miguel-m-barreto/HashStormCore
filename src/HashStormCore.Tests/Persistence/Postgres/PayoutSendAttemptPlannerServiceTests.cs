@@ -58,21 +58,27 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
     }
 
     [PostgresIntegrationFact]
-    public Task CreateSendAttemptsAsync_PlansAsyncOperationAttempt()
+    public Task CreateSendAttemptsAsync_PlansAsyncOperationAttemptsWithMaxRecipientChunksAndNoEvidence()
     {
         return WithRollbackAsync(async (con, tx) =>
         {
             var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_async"), PayoutSendShapes.AsyncOperation,
-                ("addr-a", 1m), ("addr-b", 2m));
+                ("addr-c", 3m), ("addr-a", 1m), ("addr-b", 2m));
 
             var result = await service.CreateSendAttemptsAsync(con, tx,
-                NewRequest(batch, PayoutSendShapes.AsyncOperation, maxRecipientsPerAttempt: 0), Ct);
+                NewRequest(batch, PayoutSendShapes.AsyncOperation, maxRecipientsPerAttempt: 2), Ct);
 
-            var attempt = Assert.Single(result.Attempts);
             Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
-            Assert.Equal(PayoutSendAttemptStates.Prepared, attempt.State);
-            Assert.Equal(2, attempt.RecipientCount);
-            Assert.Equal(2, await CountMappingsAsync(con, tx, batch.Id, PayoutAttemptIntentStates.Active));
+            Assert.Equal(new[] { 2, 1 }, result.Attempts.Select(x => x.RecipientCount).ToArray());
+            Assert.All(result.Attempts, attempt =>
+            {
+                Assert.Equal(PayoutSendAttemptStates.Prepared, attempt.State);
+                Assert.True(string.IsNullOrWhiteSpace(attempt.ExternalOperationId));
+                Assert.True(string.IsNullOrWhiteSpace(attempt.TransactionConfirmationData));
+            });
+            Assert.Equal(new[] { "addr-a", "addr-b" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { "addr-c" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+            Assert.Equal(3, await CountMappingsAsync(con, tx, batch.Id, PayoutAttemptIntentStates.Active));
         });
     }
 
@@ -868,6 +874,13 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
                 service.CreateSendAttemptsAsync(con, tx, valid with
                 {
                     SendShape = PayoutSendShapes.AddressGroup,
+                    MaxRecipientsPerAttempt = 0
+                }, Ct));
+
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+                service.CreateSendAttemptsAsync(con, tx, valid with
+                {
+                    SendShape = PayoutSendShapes.AsyncOperation,
                     MaxRecipientsPerAttempt = 0
                 }, Ct));
 
