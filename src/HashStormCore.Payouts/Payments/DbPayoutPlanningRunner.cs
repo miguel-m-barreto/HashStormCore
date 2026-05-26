@@ -92,7 +92,9 @@ public class DbPayoutPlanningRunner : IPayoutPlanningRunner
                     Coin = candidate.Coin,
                     SendShape = candidate.SendShape,
                     Method = profile.SendMethod,
+                    AttemptPlanningPolicy = profile.AttemptPlanningPolicy,
                     MaxRecipientsPerAttempt = profile.MaxRecipientsPerAttempt ?? 0,
+                    IntegratedAddressPrefixes = profile.IntegratedAddressPrefixes,
                     Created = request.Created
                 };
 

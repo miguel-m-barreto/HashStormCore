@@ -186,14 +186,24 @@ public class PayoutProfileResolverTests
     [Fact]
     public void ConcealAddressGroupProfileRemainsReservationReadyWithMaxRecipientLimit()
     {
-        var resolver = NewResolver(Coin("conceal", "conceal", "CCX"));
+        var resolver = NewResolver(Coin("conceal", "conceal", "CCX") with
+        {
+            RawExtensionFlags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["addressPrefixIntegrated"] = "31444",
+                ["addressPrefixIntegratedTestnet"] = "31444"
+            }
+        });
 
         var result = resolver.Resolve("conceal");
 
         Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
         Assert.Equal(PayoutProfileConstants.SendShapes.AddressGroup, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware,
+            result.Profile.AttemptPlanningPolicy);
         Assert.True(result.Profile.ReservationReady);
-        Assert.True(result.Profile.MaxRecipientsPerAttempt > 0);
+        Assert.Equal(15, result.Profile.MaxRecipientsPerAttempt);
+        Assert.Contains(31444ul, result.Profile.IntegratedAddressPrefixes);
     }
 
     [Fact]

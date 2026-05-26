@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using HashStormCore.Payments;
+using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Postgres.Repositories;
 using Npgsql;
@@ -117,6 +118,132 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
             Assert.Equal(new[] { "addr-a", "addr-b" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
             Assert.Equal(new[] { "addr-c", "addr-d" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
             Assert.Equal(new[] { "addr-e" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(2).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_ConcealPolicySplitsExplicitPaymentIds()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var paymentId = new string('a', 64);
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_conceal_paymentid"),
+                PayoutSendShapes.AddressGroup,
+                ("addr-b", 2m), ("addr-a", 1m), ($"addr-c.{paymentId}", 3m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt: 15) with
+                {
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware,
+                    IntegratedAddressPrefixes = new[] { 19ul }
+                }, Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(new[] { 2, 1 }, result.Attempts.Select(x => x.RecipientCount).ToArray());
+            Assert.Equal(new[] { "addr-a", "addr-b" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { $"addr-c.{paymentId}" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_ConcealPolicyTreatsInvalidPaymentIdSuffixAsSimple()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_conceal_invalid_pid"),
+                PayoutSendShapes.AddressGroup,
+                ("addr-b.bad", 2m), ("addr-a", 1m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt: 15) with
+                {
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware,
+                    IntegratedAddressPrefixes = new[] { 19ul }
+                }, Ct);
+
+            var attempt = Assert.Single(result.Attempts);
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(2, attempt.RecipientCount);
+            Assert.Equal(new[] { "addr-a", "addr-b.bad" }, await GetAttemptAddressesAsync(con, tx, attempt.Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_ConcealPolicySplitsIntegratedAddresses()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var integratedAddress =
+                "4BrL51JCc9NGQ71kWhnYoDRffsDZy7m1HUU7MRU4nUMXAHNFBEJhkTZV9HdaL4gfuNBxLPc3BeMkLGaPbF5vWtANQsGwTGg55Kq4p3ENE7";
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_conceal_integrated"),
+                PayoutSendShapes.AddressGroup,
+                ("addr-a", 1m), ("addr-b", 2m), (integratedAddress, 3m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt: 15) with
+                {
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware,
+                    IntegratedAddressPrefixes = new[] { 19ul }
+                }, Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(new[] { 2, 1 }, result.Attempts.Select(x => x.RecipientCount).ToArray());
+            Assert.Equal(new[] { "addr-a", "addr-b" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { integratedAddress }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_ConcealPolicyUsesPayloadLengthWhenStandardAndIntegratedSharePrefix()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            const ulong concealPrefix = 31444;
+            var standardAddress = CreateCryptoNoteAddress(concealPrefix, payloadLength: 68);
+            var integratedAddress = CreateCryptoNoteAddress(concealPrefix, payloadLength: 76);
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_conceal_same_prefix"),
+                PayoutSendShapes.AddressGroup,
+                ("addr-a", 1m), (standardAddress, 2m), (integratedAddress, 3m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt: 15) with
+                {
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware,
+                    IntegratedAddressPrefixes = new[] { concealPrefix }
+                }, Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(new[] { 2, 1 }, result.Attempts.Select(x => x.RecipientCount).ToArray());
+            Assert.Equal(new[] { "addr-a", standardAddress }.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { integratedAddress },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_ConcealPolicyDoesNotTreatUnknownPayloadLengthAsIntegrated()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            const ulong concealPrefix = 31444;
+            var unknownLengthAddress = CreateCryptoNoteAddress(concealPrefix, payloadLength: 70);
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_conceal_unknown_payload"),
+                PayoutSendShapes.AddressGroup,
+                ("addr-a", 1m), (unknownLengthAddress, 2m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt: 15) with
+                {
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware,
+                    IntegratedAddressPrefixes = new[] { concealPrefix }
+                }, Ct);
+
+            var attempt = Assert.Single(result.Attempts);
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(2, attempt.RecipientCount);
+            Assert.Equal(new[] { "addr-a", unknownLengthAddress }.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                await GetAttemptAddressesAsync(con, tx, attempt.Id));
         });
     }
 
@@ -425,6 +552,86 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
     private static string FormatDecimal(decimal value)
     {
         return value.ToString("0.############################", CultureInfo.InvariantCulture);
+    }
+
+    private static string CreateCryptoNoteAddress(ulong prefix, int payloadLength)
+    {
+        var prefixBytes = EncodeVarInt(prefix);
+        var decoded = new byte[prefixBytes.Length + payloadLength];
+        Buffer.BlockCopy(prefixBytes, 0, decoded, 0, prefixBytes.Length);
+
+        for(var i = 0; i < payloadLength; i++)
+            decoded[prefixBytes.Length + i] = (byte) (i + 1);
+
+        return EncodeCryptoNoteBase58(decoded);
+    }
+
+    private static byte[] EncodeVarInt(ulong value)
+    {
+        var bytes = new List<byte>();
+
+        while(value >= 0x80)
+        {
+            bytes.Add((byte) ((value & 0x7f) | 0x80));
+            value >>= 7;
+        }
+
+        bytes.Add((byte) value);
+        return bytes.ToArray();
+    }
+
+    private static string EncodeCryptoNoteBase58(byte[] bytes)
+    {
+        var builder = new StringBuilder();
+        var offset = 0;
+
+        while(bytes.Length - offset >= 8)
+        {
+            builder.Append(EncodeCryptoNoteBase58Block(bytes.AsSpan(offset, 8), encodedSize: 11));
+            offset += 8;
+        }
+
+        var remaining = bytes.Length - offset;
+        if(remaining > 0)
+            builder.Append(EncodeCryptoNoteBase58Block(bytes.AsSpan(offset, remaining), EncodedBlockSize(remaining)));
+
+        return builder.ToString();
+    }
+
+    private static string EncodeCryptoNoteBase58Block(ReadOnlySpan<byte> bytes, int encodedSize)
+    {
+        const string alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        ulong value = 0;
+
+        foreach(var b in bytes)
+            value = (value << 8) | b;
+
+        var chars = new char[encodedSize];
+        Array.Fill(chars, alphabet[0]);
+
+        for(var i = encodedSize - 1; i >= 0 && value > 0; i--)
+        {
+            chars[i] = alphabet[(int) (value % 58)];
+            value /= 58;
+        }
+
+        return new string(chars);
+    }
+
+    private static int EncodedBlockSize(int decodedSize)
+    {
+        return decodedSize switch
+        {
+            1 => 2,
+            2 => 3,
+            3 => 5,
+            4 => 6,
+            5 => 7,
+            6 => 9,
+            7 => 10,
+            8 => 11,
+            _ => throw new ArgumentOutOfRangeException(nameof(decodedSize))
+        };
     }
 
     private static DateTime UtcNow()

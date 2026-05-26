@@ -51,6 +51,16 @@ public class PayoutProfileResolver : IPayoutProfileResolver
                 "Address-group payout planning requires MaxRecipientsPerAttempt greater than zero before reservation is enabled");
         }
 
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           string.Equals(resolution.Profile.AttemptPlanningPolicy,
+               PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware, StringComparison.Ordinal) &&
+           resolution.Profile.IntegratedAddressPrefixes.Count == 0)
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                "Conceal payment-id-aware planning requires integrated address prefix metadata");
+        }
+
         return resolution;
     }
 }

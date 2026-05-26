@@ -9,6 +9,7 @@ public record PayoutProfile
     public string AdapterId { get; init; } = string.Empty;
     public string SendShape { get; init; } = string.Empty;
     public string SendMethod { get; init; } = string.Empty;
+    public string AttemptPlanningPolicy { get; init; } = PayoutProfileConstants.PlanningPolicies.Default;
     public string SettlementEvidenceKind { get; init; } = string.Empty;
     public bool RequiresOperationIdProvider { get; init; }
     public bool SupportsTransparentTxId { get; init; }
@@ -24,4 +25,5 @@ public record PayoutProfile
     public bool PlaceholderEvidenceUnsafe { get; init; }
     public bool ReservationReady { get; init; }
     public string NotReadyReason { get; init; } = string.Empty;
+    public IReadOnlyCollection<ulong> IntegratedAddressPrefixes { get; init; } = Array.Empty<ulong>();
 }

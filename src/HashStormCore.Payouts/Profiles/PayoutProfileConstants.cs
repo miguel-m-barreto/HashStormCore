@@ -75,4 +75,10 @@ public static class PayoutProfileConstants
         public const string AddressGroup = PayoutSendShapes.AddressGroup;
         public const string AsyncOperation = PayoutSendShapes.AsyncOperation;
     }
+
+    public static class PlanningPolicies
+    {
+        public const string Default = "default";
+        public const string ConcealPaymentIdAware = "conceal_payment_id_aware";
+    }
 }

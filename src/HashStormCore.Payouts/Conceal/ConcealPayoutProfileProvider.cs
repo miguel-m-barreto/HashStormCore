@@ -18,12 +18,30 @@ public class ConcealPayoutProfileProvider : IPayoutProfileProvider
             PayoutProfileConstants.SendMethods.SendTransaction,
             PayoutProfileConstants.SettlementEvidenceKinds.RawHash) with
         {
+            AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware,
             AllowsBatchMultiRecipient = true,
             MaxRecipientsPerAttempt = 15,
             RequiresWalletDaemon = true,
-            ReservationReady = true
+            ReservationReady = true,
+            IntegratedAddressPrefixes = ReadIntegratedAddressPrefixes(coin)
         };
 
         return PayoutProfileResolution.Resolved(profile);
+    }
+
+    private static IReadOnlyCollection<ulong> ReadIntegratedAddressPrefixes(CoinDescriptor coin)
+    {
+        var prefixes = new List<ulong>();
+        AddPrefix(prefixes, coin, "addressPrefixIntegrated");
+        AddPrefix(prefixes, coin, "addressPrefixIntegratedTestnet");
+        return prefixes;
+    }
+
+    private static void AddPrefix(ICollection<ulong> prefixes, CoinDescriptor coin, string key)
+    {
+        if(coin.RawExtensionFlags.TryGetValue(key, out var value) &&
+           ulong.TryParse(value, out var prefix) &&
+           !prefixes.Contains(prefix))
+            prefixes.Add(prefix);
     }
 }

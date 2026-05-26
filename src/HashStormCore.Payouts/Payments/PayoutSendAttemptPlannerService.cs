@@ -2,6 +2,7 @@ using System.Data;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Repositories;
 
@@ -15,6 +16,10 @@ public class PayoutSendAttemptPlannerService
     }
 
     private const string HashDomain = "HashStormCore:payout-send-attempt:v1";
+    private const string CryptoNoteBase58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    private static readonly int[] CryptoNoteEncodedBlockSizes = { 0, 2, 3, 5, 6, 7, 9, 10, 11 };
+    private const int CryptoNoteStandardPayloadLength = 32 + 32 + 4;
+    private const int CryptoNoteIntegratedPayloadLength = 8 + 32 + 32 + 4;
     private readonly IPayoutIntentRepository payoutIntentRepo;
 
     public async Task<CreatePayoutSendAttemptsResult> CreateSendAttemptsAsync(IDbConnection con, IDbTransaction tx,
@@ -93,6 +98,10 @@ public class PayoutSendAttemptPlannerService
                 return orderedIntents.Select(x => new[] { x }).ToList();
 
             case PayoutSendShapes.AddressGroup:
+                if(string.Equals(request.AttemptPlanningPolicy,
+                       PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware, StringComparison.Ordinal))
+                    return CreateConcealPaymentIdAwareGroups(request, orderedIntents);
+
                 return orderedIntents
                     .Select((intent, index) => new { intent, index })
                     .GroupBy(x => x.index / request.MaxRecipientsPerAttempt)
@@ -102,6 +111,36 @@ public class PayoutSendAttemptPlannerService
             default:
                 throw new ArgumentException($"Unsupported payout send shape '{request.SendShape}'", nameof(request));
         }
+    }
+
+    private static List<PayoutIntent[]> CreateConcealPaymentIdAwareGroups(CreatePayoutSendAttemptsRequest request,
+        PayoutIntent[] orderedIntents)
+    {
+        if(request.IntegratedAddressPrefixes == null || request.IntegratedAddressPrefixes.Count == 0)
+            throw new InvalidOperationException(
+                "Conceal payment-id-aware planning requires integrated address prefixes");
+
+        var simpleIntents = new List<PayoutIntent>();
+        var singletonIntents = new List<PayoutIntent[]>();
+
+        foreach(var intent in orderedIntents)
+        {
+            ExtractAddressAndPaymentId(intent.Address, out var address, out var paymentId);
+
+            if(paymentId != null || IsIntegratedAddress(address, request.IntegratedAddressPrefixes))
+                singletonIntents.Add(new[] { intent });
+            else
+                simpleIntents.Add(intent);
+        }
+
+        var result = simpleIntents
+            .Select((intent, index) => new { intent, index })
+            .GroupBy(x => x.index / request.MaxRecipientsPerAttempt)
+            .Select(x => x.Select(y => y.intent).ToArray())
+            .ToList();
+
+        result.AddRange(singletonIntents);
+        return result;
     }
 
     private static string CreateRequestHash(CreatePayoutSendAttemptsRequest request, int attemptNo, IReadOnlyCollection<PayoutIntent> intents)
@@ -161,7 +200,159 @@ public class PayoutSendAttemptPlannerService
             default:
                 throw new ArgumentException($"Unsupported payout send shape '{request.SendShape}'", nameof(request));
         }
+
+        switch(request.AttemptPlanningPolicy)
+        {
+            case PayoutProfileConstants.PlanningPolicies.Default:
+            case PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware:
+                break;
+
+            default:
+                throw new ArgumentException(
+                    $"Unsupported payout attempt planning policy '{request.AttemptPlanningPolicy}'", nameof(request));
+        }
     }
+
+    private static void ExtractAddressAndPaymentId(string input, out string address, out string paymentId)
+    {
+        paymentId = null;
+        var index = input.IndexOf(PayoutConstants.PayoutInfoSeperator);
+
+        if(index == -1)
+        {
+            address = input;
+            return;
+        }
+
+        address = input[..index];
+
+        if(index + 1 >= input.Length)
+            return;
+
+        var candidate = input[(index + 1)..];
+        if(candidate.Length == PayoutConstants.PaymentIdHexLength && candidate.All(IsHexCharacter))
+            paymentId = candidate;
+    }
+
+    private static bool IsHexCharacter(char value)
+    {
+        return value is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
+    }
+
+    private static bool IsIntegratedAddress(string address, IReadOnlyCollection<ulong> integratedAddressPrefixes)
+    {
+        var decoded = DecodeCryptoNoteAddress(address);
+
+        // Conceal uses the same prefix for standard and integrated addresses. The planner must
+        // distinguish them by decoded payload length instead of prefix alone.
+        if(decoded == null || !integratedAddressPrefixes.Contains(decoded.Value.Prefix))
+            return false;
+
+        return decoded.Value.PayloadLength switch
+        {
+            CryptoNoteIntegratedPayloadLength => true,
+            CryptoNoteStandardPayloadLength => false,
+            _ => false
+        };
+    }
+
+    private static CryptoNoteAddressInfo? DecodeCryptoNoteAddress(string address)
+    {
+        if(string.IsNullOrWhiteSpace(address))
+            return null;
+
+        var decoded = DecodeCryptoNoteBase58(address);
+        var prefix = decoded == null ? null : ReadVarInt(decoded);
+
+        if(prefix == null)
+            return null;
+
+        return new CryptoNoteAddressInfo(prefix.Value.Value, decoded.Length - prefix.Value.BytesConsumed);
+    }
+
+    private static byte[] DecodeCryptoNoteBase58(string input)
+    {
+        var fullBlockCount = input.Length / CryptoNoteEncodedBlockSizes[8];
+        var lastBlockSize = input.Length % CryptoNoteEncodedBlockSizes[8];
+        var lastDecodedSize = Array.IndexOf(CryptoNoteEncodedBlockSizes, lastBlockSize);
+
+        if(lastBlockSize > 0 && lastDecodedSize <= 0)
+            return null;
+
+        var resultSize = (fullBlockCount * 8) + Math.Max(lastDecodedSize, 0);
+        var result = new byte[resultSize];
+        var inputOffset = 0;
+        var outputOffset = 0;
+
+        for(var i = 0; i < fullBlockCount; i++)
+        {
+            if(!DecodeCryptoNoteBase58Block(input.AsSpan(inputOffset, CryptoNoteEncodedBlockSizes[8]), result,
+                   outputOffset, 8))
+                return null;
+
+            inputOffset += CryptoNoteEncodedBlockSizes[8];
+            outputOffset += 8;
+        }
+
+        if(lastBlockSize > 0 &&
+           !DecodeCryptoNoteBase58Block(input.AsSpan(inputOffset, lastBlockSize), result, outputOffset,
+               lastDecodedSize))
+            return null;
+
+        return result;
+    }
+
+    private static bool DecodeCryptoNoteBase58Block(ReadOnlySpan<char> input, byte[] output, int outputOffset,
+        int decodedSize)
+    {
+        ulong value = 0;
+
+        foreach(var c in input)
+        {
+            var digit = CryptoNoteBase58Alphabet.IndexOf(c);
+            if(digit < 0)
+                return false;
+
+            if(value > (ulong.MaxValue - (ulong) digit) / 58ul)
+                return false;
+
+            value = (value * 58ul) + (ulong) digit;
+        }
+
+        for(var i = decodedSize - 1; i >= 0; i--)
+        {
+            output[outputOffset + i] = (byte) (value & 0xff);
+            value >>= 8;
+        }
+
+        return value == 0;
+    }
+
+    private static CryptoNoteVarInt? ReadVarInt(byte[] bytes)
+    {
+        ulong result = 0;
+        var shift = 0;
+        var bytesConsumed = 0;
+
+        foreach(var value in bytes)
+        {
+            bytesConsumed++;
+            result |= (ulong) (value & 0x7f) << shift;
+
+            if((value & 0x80) == 0)
+                return new CryptoNoteVarInt(result, bytesConsumed);
+
+            shift += 7;
+            if(shift >= 64)
+                return null;
+        }
+
+        return null;
+    }
+
+    private readonly record struct CryptoNoteVarInt(ulong Value, int BytesConsumed);
+
+    private readonly record struct CryptoNoteAddressInfo(ulong Prefix, int PayloadLength);
 
     private static string FormatDecimal(decimal value)
     {

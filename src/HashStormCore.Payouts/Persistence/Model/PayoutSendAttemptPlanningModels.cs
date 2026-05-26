@@ -1,3 +1,5 @@
+using HashStormCore.Payouts.Profiles;
+
 namespace HashStormCore.Persistence.Model;
 
 public enum PayoutSendAttemptPlanningStatus
@@ -16,7 +18,9 @@ public record CreatePayoutSendAttemptsRequest
     public string Coin { get; init; }
     public string SendShape { get; init; }
     public string Method { get; init; }
+    public string AttemptPlanningPolicy { get; init; } = PayoutProfileConstants.PlanningPolicies.Default;
     public int MaxRecipientsPerAttempt { get; init; }
+    public IReadOnlyCollection<ulong> IntegratedAddressPrefixes { get; init; } = Array.Empty<ulong>();
     public DateTime Created { get; init; }
 }
 
