@@ -63,8 +63,8 @@ public class PayoutProcessorService : BackgroundService
         else
         {
             logger.LogWarning(
-                "PayoutProcessor DbMutating mode is enabled for reservation and planning only. Execution, reconciliation, settlement, and wallet/daemon/RPC calls remain disabled");
-            logger.LogWarning("PayoutProcessor DbMutating reservation and planning process only pools with paymentProcessing.engine=intent");
+                "PayoutProcessor DbMutating mode is enabled for reservation, planning, and no-sender-safe execution. Reconciliation, settlement, and wallet/daemon/RPC calls remain disabled");
+            logger.LogWarning("PayoutProcessor DbMutating reservation, planning, and execution process only pools with paymentProcessing.engine=intent");
         }
 
         logger.LogInformation("PayoutProcessor discovered {PoolCount} payout-capable pool(s)", pools.Count);
@@ -87,7 +87,7 @@ public class PayoutProcessorService : BackgroundService
         if(config.Mode == PayoutProcessorMode.DryRun)
             await RunDryRunLoopsAsync(pools, stoppingToken);
         else
-            await RunDbMutatingReservationAndPlanningLoopsAsync(pools, stoppingToken);
+            await RunDbMutatingReservationPlanningAndExecutionLoopsAsync(pools, stoppingToken);
     }
 
     private IReadOnlyCollection<PayoutProcessorPoolConfig> DiscoverPools()
@@ -279,13 +279,15 @@ public class PayoutProcessorService : BackgroundService
         }
     }
 
-    private async Task RunDbMutatingReservationAndPlanningLoopsAsync(IReadOnlyCollection<PayoutProcessorPoolConfig> pools,
+    private async Task RunDbMutatingReservationPlanningAndExecutionLoopsAsync(IReadOnlyCollection<PayoutProcessorPoolConfig> pools,
         CancellationToken ct)
     {
         var reservationInterval = GetInterval(config.ReservationIntervalSeconds);
         var planningInterval = GetInterval(config.PlanningIntervalSeconds);
+        var executionInterval = GetInterval(config.ExecutionIntervalSeconds);
         var nextReservation = DateTimeOffset.MinValue;
         var nextPlanning = DateTimeOffset.MinValue;
+        var nextExecution = DateTimeOffset.MinValue;
 
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
 
@@ -306,6 +308,15 @@ public class PayoutProcessorService : BackgroundService
                         nextPlanning = now + planningInterval;
                     }
 
+                    if(now >= nextExecution)
+                    {
+                        foreach(var pool in pools)
+                            await RunPoolTickAsync(pool, () => orchestrator.RunExecutionTickAsync(pool, ct),
+                                "Payout execution tick failed for pool {PoolId}", ct);
+
+                        nextExecution = now + executionInterval;
+                    }
+
                     continue;
                 }
 
@@ -322,6 +333,15 @@ public class PayoutProcessorService : BackgroundService
                             "Payout planning tick failed for pool {PoolId}", ct);
 
                     nextPlanning = now + planningInterval;
+                }
+
+                if(now >= nextExecution)
+                {
+                    foreach(var pool in pools)
+                        await RunPoolTickAsync(pool, () => orchestrator.RunExecutionTickAsync(pool, ct),
+                            "Payout execution tick failed for pool {PoolId}", ct);
+
+                    nextExecution = now + executionInterval;
                 }
             }
         }

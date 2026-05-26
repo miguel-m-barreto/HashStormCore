@@ -109,6 +109,7 @@ public class DbPayoutExecutionRunner : IPayoutExecutionRunner
             BatchId = attempt.BatchId,
             PoolId = attempt.PoolId,
             Coin = attempt.Coin,
+            Method = attempt.Method,
             Reason = reason
         };
     }
@@ -121,6 +122,7 @@ public class DbPayoutExecutionRunner : IPayoutExecutionRunner
             BatchId = attempt.BatchId,
             PoolId = attempt.PoolId,
             Coin = attempt.Coin,
+            Method = attempt.Method,
             ErrorType = ex.GetType().Name
         };
     }

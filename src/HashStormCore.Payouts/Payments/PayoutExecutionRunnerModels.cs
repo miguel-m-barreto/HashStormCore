@@ -29,6 +29,7 @@ public record PayoutExecutionSkippedAttempt
     public long BatchId { get; init; }
     public string PoolId { get; init; }
     public string Coin { get; init; }
+    public string Method { get; init; }
     public string Reason { get; init; }
 }
 
@@ -38,5 +39,6 @@ public record PayoutExecutionAttemptFailure
     public long BatchId { get; init; }
     public string PoolId { get; init; }
     public string Coin { get; init; }
+    public string Method { get; init; }
     public string ErrorType { get; init; }
 }

@@ -12,12 +12,14 @@ public class PayoutPoolOrchestrator
 
     public PayoutPoolOrchestrator(PayoutProcessorConfig config, IPayoutProfileResolver payoutProfileResolver,
         IPayoutReservationRunner payoutReservationRunner, IPayoutPlanningRunner payoutPlanningRunner,
+        IPayoutExecutionRunner payoutExecutionRunner,
         ILogger<PayoutPoolOrchestrator> logger)
     {
         this.config = config;
         this.payoutProfileResolver = payoutProfileResolver;
         this.payoutReservationRunner = payoutReservationRunner;
         this.payoutPlanningRunner = payoutPlanningRunner;
+        this.payoutExecutionRunner = payoutExecutionRunner;
         this.logger = logger;
     }
 
@@ -25,6 +27,7 @@ public class PayoutPoolOrchestrator
     private readonly IPayoutProfileResolver payoutProfileResolver;
     private readonly IPayoutReservationRunner payoutReservationRunner;
     private readonly IPayoutPlanningRunner payoutPlanningRunner;
+    private readonly IPayoutExecutionRunner payoutExecutionRunner;
     private readonly ILogger<PayoutPoolOrchestrator> logger;
 
     public async Task RunReservationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
@@ -197,12 +200,80 @@ public class PayoutPoolOrchestrator
         }
     }
 
-    public Task RunExecutionTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
+    public async Task RunExecutionTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+
+        if(!config.Enabled)
+        {
+            logger.LogInformation("Skipping payout execution for pool {PoolId}: PayoutProcessor is disabled", pool.Id);
+            return;
+        }
+
+        if(config.Mode == PayoutProcessorMode.Disabled)
+        {
+            logger.LogInformation("Skipping payout execution for pool {PoolId}: PayoutProcessor mode is Disabled",
+                pool.Id);
+            return;
+        }
+
+        if(!string.Equals(pool.Engine, PayoutEngineIntent, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogInformation(
+                "Skipping payout execution for pool {PoolId}: paymentProcessing.engine={Engine}, only engine=intent is processed by PayoutProcessor",
+                pool.Id, pool.Engine);
+            return;
+        }
+
+        if(config.Mode == PayoutProcessorMode.DryRun)
+        {
+            logger.LogInformation(
+                "Dry-run payout execution tick for pool {PoolId}: would enumerate prepared attempts, maxAttempts={MaxAttempts}",
+                pool.Id, config.ExecutionBatchSize);
+            return;
+        }
+
+        if(config.Mode != PayoutProcessorMode.DbMutating)
+        {
+            logger.LogInformation("Payout execution tick for pool {PoolId} skipped: processor mode is {Mode}", pool.Id,
+                config.Mode);
+            return;
+        }
+
+        if(config.ExecutionBatchSize <= 0)
+        {
+            logger.LogWarning(
+                "Skipping payout execution for pool {PoolId}: ExecutionBatchSize must be greater than zero for DbMutating execution",
+                pool.Id);
+            return;
+        }
+
+        var request = BuildExecutionRequest(pool, config);
+
         logger.LogInformation(
-            "Payout execution tick for pool {PoolId} using engine {Engine}: execution loop is not implemented and no sender/RPC/DB mutation is performed",
-            pool.Id, pool.Engine);
-        return Task.CompletedTask;
+            "DB-mutating payout execution tick for pool {PoolId}: maxAttempts={MaxAttempts}",
+            request.PoolId, request.MaxAttempts);
+
+        var result = await payoutExecutionRunner.ExecutePreparedAttemptsAsync(request, ct);
+
+        logger.LogInformation(
+            "Payout execution tick for pool {PoolId} completed: candidateAttempts={CandidateAttemptCount}, executedAttempts={ExecutedAttemptCount}, skippedAttempts={SkippedAttemptCount}, failedAttempts={FailureCount}",
+            request.PoolId, result.CandidateAttemptCount, result.ExecutedAttemptCount, result.SkippedAttemptCount,
+            result.FailureCount);
+
+        foreach(var skipped in result.SkippedAttempts)
+        {
+            logger.LogInformation(
+                "Skipped payout execution for attempt {AttemptId} in pool {PoolId}: coin={Coin}, method={Method}, reason={Reason}",
+                skipped.AttemptId, skipped.PoolId, skipped.Coin, skipped.Method, skipped.Reason);
+        }
+
+        foreach(var failure in result.Failures)
+        {
+            logger.LogWarning(
+                "Payout execution attempt {AttemptId} in pool {PoolId} failed before completion: coin={Coin}, method={Method}, errorType={ErrorType}",
+                failure.AttemptId, failure.PoolId, failure.Coin, failure.Method, failure.ErrorType);
+        }
     }
 
     public Task RunStaleReconciliationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
@@ -261,6 +332,17 @@ public class PayoutPoolOrchestrator
             PoolId = pool.Id,
             MaxBatches = config.PlanningMaxBatches,
             Created = DateTime.UtcNow
+        };
+    }
+
+    public static PayoutExecutionRunnerRequest BuildExecutionRequest(PayoutProcessorPoolConfig pool,
+        PayoutProcessorConfig config)
+    {
+        return new PayoutExecutionRunnerRequest
+        {
+            PoolId = pool.Id,
+            MaxAttempts = config.ExecutionBatchSize,
+            Started = DateTime.UtcNow
         };
     }
 }

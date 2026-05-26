@@ -126,6 +126,24 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public void BuildExecutionRequestMapsPoolIdAndConfiguredLimit()
+    {
+        var pool = NewPool("bitcoin", "intent");
+        var config = new PayoutProcessorConfig
+        {
+            ExecutionBatchSize = 31
+        };
+        var before = DateTime.UtcNow;
+
+        var request = PayoutPoolOrchestrator.BuildExecutionRequest(pool, config);
+
+        var after = DateTime.UtcNow;
+        Assert.Equal("pool-a", request.PoolId);
+        Assert.Equal(31, request.MaxAttempts);
+        Assert.InRange(request.Started, before, after);
+    }
+
+    [Fact]
     public async Task RunPlanningTickAsync_DryRunDoesNotCallPlanningRunner()
     {
         var planningRunner = Substitute.For<IPayoutPlanningRunner>();
@@ -230,10 +248,15 @@ public class PayoutPoolOrchestratorTests
     public async Task NonPlanningTicksDoNotCallPlanningRunner()
     {
         var planningRunner = Substitute.For<IPayoutPlanningRunner>();
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        executionRunner.ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutExecutionRunnerResult()));
         var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
             Substitute.For<IPayoutProfileResolver>(),
             Substitute.For<IPayoutReservationRunner>(),
-            planningRunner);
+            planningRunner,
+            executionRunner: executionRunner);
         var pool = NewPool("bitcoin", "intent");
 
         await orchestrator.RunExecutionTickAsync(pool, CancellationToken.None);
@@ -242,6 +265,192 @@ public class PayoutPoolOrchestratorTests
         await orchestrator.RunSettlementTickAsync(pool, CancellationToken.None);
 
         await planningRunner.DidNotReceive().CreateSendAttemptsAsync(Arg.Any<PayoutPlanningRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunExecutionTickAsync_DisabledConfigSkipsBeforeRunner()
+    {
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionRunner: executionRunner,
+            enabled: false);
+
+        await orchestrator.RunExecutionTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await executionRunner.DidNotReceive().ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunExecutionTickAsync_DisabledModeSkipsBeforeRunner()
+    {
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.Disabled,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionRunner: executionRunner);
+
+        await orchestrator.RunExecutionTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await executionRunner.DidNotReceive().ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunExecutionTickAsync_LegacyEngineSkipsBeforeRunner()
+    {
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionRunner: executionRunner);
+
+        await orchestrator.RunExecutionTickAsync(NewPool("bitcoin", "legacy"), CancellationToken.None);
+
+        await executionRunner.DidNotReceive().ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunExecutionTickAsync_DryRunDoesNotCallRunner()
+    {
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DryRun,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionRunner: executionRunner);
+
+        await orchestrator.RunExecutionTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await executionRunner.DidNotReceive().ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunExecutionTickAsync_DbMutatingInvalidBatchSizeSkipsBeforeRunner()
+    {
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionRunner: executionRunner,
+            executionBatchSize: 0);
+
+        await orchestrator.RunExecutionTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await executionRunner.DidNotReceive().ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunExecutionTickAsync_DbMutatingIntentPoolCallsRunnerWithRequest()
+    {
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        PayoutExecutionRunnerRequest capturedRequest = null;
+        executionRunner.ExecutePreparedAttemptsAsync(Arg.Do<PayoutExecutionRunnerRequest>(x => capturedRequest = x),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutExecutionRunnerResult()));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionRunner: executionRunner,
+            executionBatchSize: 37);
+
+        await orchestrator.RunExecutionTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await executionRunner.Received(1).ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("pool-a", capturedRequest.PoolId);
+        Assert.Equal(37, capturedRequest.MaxAttempts);
+    }
+
+    [Fact]
+    public async Task RunExecutionTickAsync_HandlesNoSenderSkippedResultWithoutThrowing()
+    {
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        executionRunner.ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutExecutionRunnerResult
+            {
+                CandidateAttemptCount = 1,
+                SkippedAttemptCount = 1,
+                SkippedAttempts = new[]
+                {
+                    new PayoutExecutionSkippedAttempt
+                    {
+                        AttemptId = 42,
+                        BatchId = 7,
+                        PoolId = "pool-a",
+                        Coin = "bitcoin",
+                        Method = "sendmany",
+                        Reason = "no registered payout sender for exact profile key"
+                    }
+                }
+            }));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionRunner: executionRunner);
+
+        await orchestrator.RunExecutionTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await executionRunner.Received(1).ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunExecutionTickAsync_HandlesRunnerFailureResultWithoutThrowing()
+    {
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        executionRunner.ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutExecutionRunnerResult
+            {
+                CandidateAttemptCount = 1,
+                FailureCount = 1,
+                Failures = new[]
+                {
+                    new PayoutExecutionAttemptFailure
+                    {
+                        AttemptId = 42,
+                        BatchId = 7,
+                        PoolId = "pool-a",
+                        Coin = "bitcoin",
+                        Method = "sendmany",
+                        ErrorType = nameof(InvalidOperationException)
+                    }
+                }
+            }));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionRunner: executionRunner);
+
+        await orchestrator.RunExecutionTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await executionRunner.Received(1).ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunExecutionTickAsync_CancellationIsPropagated()
+    {
+        var executionRunner = Substitute.For<IPayoutExecutionRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionRunner: executionRunner);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            orchestrator.RunExecutionTickAsync(NewPool("bitcoin", "intent"), cts.Token));
+
+        await executionRunner.DidNotReceive().ExecutePreparedAttemptsAsync(Arg.Any<PayoutExecutionRunnerRequest>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -759,7 +968,8 @@ public class PayoutPoolOrchestratorTests
 
     private static PayoutPoolOrchestrator NewOrchestrator(PayoutProcessorMode mode, IPayoutProfileResolver resolver,
         IPayoutReservationRunner runner, IPayoutPlanningRunner planningRunner = null, bool enabled = true,
-        int reservationMaxCandidates = 50, int planningMaxBatches = 8, int executionBatchSize = 8)
+        int reservationMaxCandidates = 50, int planningMaxBatches = 8, int executionBatchSize = 8,
+        IPayoutExecutionRunner executionRunner = null)
     {
         var config = new PayoutProcessorConfig
         {
@@ -772,6 +982,7 @@ public class PayoutPoolOrchestratorTests
 
         return new PayoutPoolOrchestrator(config, resolver, runner,
             planningRunner ?? Substitute.For<IPayoutPlanningRunner>(),
+            executionRunner ?? Substitute.For<IPayoutExecutionRunner>(),
             NullLogger<PayoutPoolOrchestrator>.Instance);
     }
 

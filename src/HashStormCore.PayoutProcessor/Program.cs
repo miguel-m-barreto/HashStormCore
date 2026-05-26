@@ -75,6 +75,9 @@ builder.Services.AddSingleton<IPayoutReservationRunner, DbPayoutReservationRunne
 builder.Services.AddSingleton<PayoutSendAttemptPlannerService>();
 builder.Services.AddSingleton<IPayoutPlanningRunner, DbPayoutPlanningRunner>();
 builder.Services.AddSingleton<PayoutSendExecutorService>();
+builder.Services.AddSingleton<IPayoutAttemptSenderRegistry>(_ =>
+    new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>()));
+builder.Services.AddSingleton<IPayoutExecutionRunner, DbPayoutExecutionRunner>();
 builder.Services.AddSingleton<PayoutStaleSendReconciliationService>();
 builder.Services.AddSingleton<PayoutOperationIdReconciliationService>();
 builder.Services.AddSingleton<PayoutAmbiguousReviewService>();
