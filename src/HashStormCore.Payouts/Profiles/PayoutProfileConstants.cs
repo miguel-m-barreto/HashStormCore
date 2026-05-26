@@ -54,7 +54,7 @@ public static class PayoutProfileConstants
         public const string WalletPaymentTransactionGenerateAndSend = "walletPaymentTransactionGenerateAndSend";
         public const string BeamSendTransaction = "send_transaction";
         public const string BuildSignSubmit = "build_sign_submit";
-        public const string KaspaSend = "/send";
+        public const string KaspaSend = "kaspa_send";
         public const string BuildTransaction = "build_transaction";
         public const string TransactionAdd = "transaction/add";
     }

@@ -16,13 +16,13 @@ public class KaspaPayoutProfileProvider : IPayoutProfileProvider
             PayoutProfileConstants.AdapterIds.KaspaWalletWrapper,
             PayoutProfileConstants.SendShapes.PerAddress,
             PayoutProfileConstants.SendMethods.KaspaSend,
-            PayoutProfileConstants.SettlementEvidenceKinds.UnsafePlaceholder) with
+            PayoutProfileConstants.SettlementEvidenceKinds.TxId) with
         {
             AllowsPerAddress = true,
             RequiresExternalWalletWrapper = true,
-            PlaceholderEvidenceUnsafe = true,
-            ReservationReady = false,
-            NotReadyReason = "Kaspa legacy wrapper may persist placeholder evidence when no real txid is returned"
+            // Future sidecar execution must fail closed if the wrapper/daemon does not return
+            // a real non-empty transaction id; never synthesize legacy address/amount evidence.
+            ReservationReady = true
         };
 
         return PayoutProfileResolution.Resolved(profile);

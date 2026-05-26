@@ -503,6 +503,124 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public async Task DbPayoutPlanningRunnerPlansKaspaPerAddressSingletonAttempts()
+    {
+        var connectionFactory = Substitute.For<IConnectionFactory>();
+        var con = Substitute.For<IDbConnection>();
+        var tx = Substitute.For<IDbTransaction>();
+        connectionFactory.OpenConnectionAsync().Returns(Task.FromResult(con));
+        con.BeginTransaction(IsolationLevel.ReadCommitted).Returns(tx);
+
+        var intentRepo = Substitute.For<IPayoutIntentRepository>();
+        intentRepo.GetReservedBatchesForPlanningAsync(con, tx, "pool-kas", 5, Arg.Any<CancellationToken>())
+            .Returns(new[]
+            {
+                new PayoutPlanningBatchCandidate
+                {
+                    BatchId = 88,
+                    PoolId = "pool-kas",
+                    Coin = "kaspa",
+                    CoinFamily = "kaspa",
+                    Handler = PayoutProfileConstants.AdapterIds.KaspaWalletWrapper,
+                    SendShape = PayoutProfileConstants.SendShapes.PerAddress
+                }
+            });
+        intentRepo.GetBatchForUpdateAsync(con, tx, 88, "pool-kas", "kaspa", Arg.Any<CancellationToken>())
+            .Returns(new PayoutBatch
+            {
+                Id = 88,
+                PoolId = "pool-kas",
+                Coin = "kaspa",
+                State = PayoutBatchStates.Reserved,
+                SendShape = PayoutProfileConstants.SendShapes.PerAddress
+            });
+        intentRepo.GetSendAttemptCountForBatchAsync(con, tx, 88, "pool-kas", "kaspa",
+                Arg.Any<CancellationToken>())
+            .Returns(0);
+        intentRepo.GetReservedIntentsForBatchAsync(con, tx, 88, "pool-kas", "kaspa",
+                Arg.Any<CancellationToken>())
+            .Returns(new[]
+            {
+                new PayoutIntent
+                {
+                    Id = 9,
+                    BatchId = 88,
+                    PoolId = "pool-kas",
+                    Coin = "kaspa",
+                    Address = "kaspa:qqb",
+                    Amount = 1.5m
+                },
+                new PayoutIntent
+                {
+                    Id = 8,
+                    BatchId = 88,
+                    PoolId = "pool-kas",
+                    Coin = "kaspa",
+                    Address = "kaspa:qqa",
+                    Amount = 2.5m
+                }
+            });
+
+        var capturedAttempts = new List<CreatePayoutSendAttemptRequest>();
+        var capturedIntentIds = new List<IReadOnlyCollection<long>>();
+        intentRepo.CreateSendAttemptAsync(con, tx,
+                Arg.Do<CreatePayoutSendAttemptRequest>(x => capturedAttempts.Add(x)),
+                Arg.Do<IReadOnlyCollection<long>>(x => capturedIntentIds.Add(x)),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var attempt = callInfo.Arg<CreatePayoutSendAttemptRequest>();
+                return Task.FromResult(new PayoutSendAttempt
+                {
+                    Id = 300 + attempt.AttemptNo,
+                    BatchId = attempt.BatchId,
+                    PoolId = attempt.PoolId,
+                    Coin = attempt.Coin,
+                    Method = attempt.Method,
+                    AttemptNo = attempt.AttemptNo,
+                    RecipientCount = attempt.RecipientCount,
+                    AmountSnapshot = attempt.AmountSnapshot
+                });
+            });
+
+        var resolver = Substitute.For<IPayoutProfileResolver>();
+        resolver.Resolve("kaspa").Returns(PayoutProfileResolution.Resolved(new PayoutProfile
+        {
+            CoinKey = "kaspa",
+            CoinSymbol = "KAS",
+            CoinFamily = "kaspa",
+            AdapterId = PayoutProfileConstants.AdapterIds.KaspaWalletWrapper,
+            SendShape = PayoutProfileConstants.SendShapes.PerAddress,
+            SendMethod = PayoutProfileConstants.SendMethods.KaspaSend,
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+            AllowsPerAddress = true,
+            RequiresExternalWalletWrapper = true,
+            ReservationReady = true
+        }));
+        var runner = new DbPayoutPlanningRunner(connectionFactory, intentRepo,
+            new PayoutSendAttemptPlannerService(intentRepo), resolver);
+
+        var result = await runner.CreateSendAttemptsAsync(new PayoutPlanningRunnerRequest
+        {
+            PoolId = "pool-kas",
+            MaxBatches = 5,
+            Created = DateTime.UtcNow
+        }, CancellationToken.None);
+
+        Assert.Equal(1, result.PlannedBatchCount);
+        Assert.Equal(0, result.SkippedBatchCount);
+        Assert.Equal(2, capturedAttempts.Count);
+        Assert.All(capturedAttempts, x =>
+        {
+            Assert.Equal(PayoutProfileConstants.SendMethods.KaspaSend, x.Method);
+            Assert.Equal(1, x.RecipientCount);
+        });
+        Assert.Equal(new[] { 8L }, capturedIntentIds.ElementAt(0));
+        Assert.Equal(new[] { 9L }, capturedIntentIds.ElementAt(1));
+        Assert.All(result.Results.SelectMany(x => x.Attempts), x => Assert.Equal(1, x.RecipientCount));
+    }
+
+    [Fact]
     public async Task RunReservationTickAsync_DisabledConfigSkipsBeforeProfileResolution()
     {
         var runner = Substitute.For<IPayoutReservationRunner>();

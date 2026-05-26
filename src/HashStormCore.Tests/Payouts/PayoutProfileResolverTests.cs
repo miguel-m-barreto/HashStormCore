@@ -122,18 +122,24 @@ public class PayoutProfileResolverTests
     }
 
     [Fact]
-    public void KaspaProfileIsNotReservationReadyWhenPlaceholderEvidenceIsUnsafe()
+    public void KaspaProfileIsReservationReadyWithPerAddressRealTxIdEvidence()
     {
         var resolver = NewResolver(Coin("kaspa", "kaspa", "KAS"));
 
         var result = resolver.Resolve("kaspa");
 
-        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
+        Assert.Equal("kaspa", result.Profile.CoinFamily);
         Assert.Equal(PayoutProfileConstants.AdapterIds.KaspaWalletWrapper, result.Profile.AdapterId);
-        Assert.Equal(PayoutProfileConstants.SettlementEvidenceKinds.UnsafePlaceholder,
-            result.Profile.SettlementEvidenceKind);
-        Assert.True(result.Profile.PlaceholderEvidenceUnsafe);
-        Assert.False(result.Profile.ReservationReady);
+        Assert.Equal(PayoutProfileConstants.SendShapes.PerAddress, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.KaspaSend, result.Profile.SendMethod);
+        Assert.Equal(PayoutProfileConstants.SettlementEvidenceKinds.TxId, result.Profile.SettlementEvidenceKind);
+        Assert.True(result.Profile.AllowsPerAddress);
+        Assert.False(result.Profile.AllowsBatchMultiRecipient);
+        Assert.True(result.Profile.RequiresExternalWalletWrapper);
+        Assert.False(result.Profile.PlaceholderEvidenceUnsafe);
+        Assert.True(result.Profile.ReservationReady);
+        Assert.Empty(result.Profile.NotReadyReason);
     }
 
     [Fact]
@@ -312,6 +318,63 @@ public class PayoutProfileResolverTests
         Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
         Assert.False(result.Profile.ReservationReady);
         Assert.Contains("MultiHashEvidencePolicy", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForReadyProfileWithUnsafePlaceholderEvidenceKind()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-evidence", "bad-evidence", "BAD") }),
+            new[] { new BadEvidenceProvider(PayoutProfileConstants.SettlementEvidenceKinds.UnsafePlaceholder) });
+
+        var result = resolver.Resolve("bad-evidence");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("placeholder", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForReadyProfileWithPlaceholderEvidenceUnsafeFlag()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-evidence", "bad-evidence", "BAD") }),
+            new[] { new BadEvidenceProvider(PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+                placeholderEvidenceUnsafe: true) });
+
+        var result = resolver.Resolve("bad-evidence");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("placeholder", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForReadyProfileWithMissingSettlementEvidenceKind()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-evidence", "bad-evidence", "BAD") }),
+            new[] { new BadEvidenceProvider(" ") });
+
+        var result = resolver.Resolve("bad-evidence");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("settlement evidence", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForReadyProfileWithFakePlaceholderEvidenceSemantics()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-evidence", "bad-evidence", "BAD") }),
+            new[] { new BadEvidenceProvider("send:{to}:{amount}") });
+
+        var result = resolver.Resolve("bad-evidence");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("placeholder", result.Reason);
     }
 
     [Fact]
@@ -535,6 +598,39 @@ public class PayoutProfileResolverTests
                 MayReturnMultipleTransactionHashes = true,
                 RequiresSingleEvidencePerAttempt = requiresSingleEvidence,
                 MultiHashEvidencePolicy = multiHashPolicy,
+                ReservationReady = true
+            });
+        }
+    }
+
+    private class BadEvidenceProvider : IPayoutProfileProvider
+    {
+        private readonly string settlementEvidenceKind;
+        private readonly bool placeholderEvidenceUnsafe;
+
+        public BadEvidenceProvider(string settlementEvidenceKind, bool placeholderEvidenceUnsafe = false)
+        {
+            this.settlementEvidenceKind = settlementEvidenceKind;
+            this.placeholderEvidenceUnsafe = placeholderEvidenceUnsafe;
+        }
+
+        public bool CanResolve(CoinDescriptor coin)
+        {
+            return string.Equals(coin.Family, "bad-evidence", StringComparison.Ordinal);
+        }
+
+        public PayoutProfileResolution Resolve(CoinDescriptor coin)
+        {
+            return PayoutProfileResolution.Resolved(new PayoutProfile
+            {
+                CoinKey = coin.CoinKey,
+                CoinSymbol = coin.Symbol,
+                CoinFamily = coin.Family,
+                AdapterId = "bad-evidence-adapter",
+                SendShape = PayoutProfileConstants.SendShapes.PerAddress,
+                SendMethod = "bad-send",
+                SettlementEvidenceKind = settlementEvidenceKind,
+                PlaceholderEvidenceUnsafe = placeholderEvidenceUnsafe,
                 ReservationReady = true
             });
         }

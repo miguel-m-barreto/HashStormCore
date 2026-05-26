@@ -42,6 +42,30 @@ public class PayoutProfileResolver : IPayoutProfileResolver
 
         if(resolution.HasProfile &&
            resolution.Profile.ReservationReady &&
+           string.IsNullOrWhiteSpace(resolution.Profile.SettlementEvidenceKind))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                "Reservation-ready payout profiles require a real settlement evidence kind");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           resolution.Profile.PlaceholderEvidenceUnsafe)
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                "Reservation-ready payout profiles must not use unsafe placeholder settlement evidence");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           IsUnsafePlaceholderEvidenceKind(resolution.Profile.SettlementEvidenceKind))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                "Reservation-ready payout profiles must use real settlement evidence, not placeholder evidence");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
            string.Equals(resolution.Profile.SendShape, PayoutProfileConstants.SendShapes.AddressGroup,
                StringComparison.Ordinal) &&
            (!resolution.Profile.MaxRecipientsPerAttempt.HasValue ||
@@ -94,5 +118,16 @@ public class PayoutProfileResolver : IPayoutProfileResolver
                    StringComparison.Ordinal) ||
                string.Equals(policy, PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware,
                    StringComparison.Ordinal);
+    }
+
+    private static bool IsUnsafePlaceholderEvidenceKind(string evidenceKind)
+    {
+        if(string.IsNullOrWhiteSpace(evidenceKind))
+            return true;
+
+        return string.Equals(evidenceKind, PayoutProfileConstants.SettlementEvidenceKinds.UnsafePlaceholder,
+                   StringComparison.Ordinal) ||
+               evidenceKind.Contains("placeholder", StringComparison.OrdinalIgnoreCase) ||
+               evidenceKind.StartsWith("send:", StringComparison.OrdinalIgnoreCase);
     }
 }
