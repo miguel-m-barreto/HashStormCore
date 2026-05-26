@@ -143,6 +143,48 @@ public class PayoutProfileResolver : IPayoutProfileResolver
                 $"Alephium group-aware planning requires AddressGroupCount=4 before reservation is enabled");
         }
 
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           string.Equals(resolution.Profile.AdapterId, PayoutProfileConstants.AdapterIds.WarthogRestSigned,
+               StringComparison.Ordinal) &&
+           !string.Equals(resolution.Profile.SendShape, PayoutProfileConstants.SendShapes.PerAddress,
+               StringComparison.Ordinal))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                $"WarthogRestSigned requires per_address send shape before reservation is enabled");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           string.Equals(resolution.Profile.AdapterId, PayoutProfileConstants.AdapterIds.WarthogRestSigned,
+               StringComparison.Ordinal) &&
+           !string.Equals(resolution.Profile.SendMethod, PayoutProfileConstants.SendMethods.TransactionAdd,
+               StringComparison.Ordinal))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                $"WarthogRestSigned requires transaction/add send method before reservation is enabled");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           string.Equals(resolution.Profile.AdapterId, PayoutProfileConstants.AdapterIds.WarthogRestSigned,
+               StringComparison.Ordinal) &&
+           !resolution.Profile.RequiresPrivateKeyMaterial)
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                "WarthogRestSigned requires RequiresPrivateKeyMaterial=true as execution boundary metadata before reservation is enabled");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           string.Equals(resolution.Profile.AdapterId, PayoutProfileConstants.AdapterIds.WarthogRestSigned,
+               StringComparison.Ordinal) &&
+           resolution.Profile.AllowsBatchMultiRecipient)
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                "WarthogRestSigned must not use batch multi-recipient before reservation is enabled");
+        }
+
         return resolution;
     }
 

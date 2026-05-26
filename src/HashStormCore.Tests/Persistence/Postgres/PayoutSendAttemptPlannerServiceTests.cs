@@ -713,6 +713,32 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
     }
 
     [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_WarthogPerAddressCreatesOneAttemptPerIntent()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_warthog_per_address"),
+                PayoutSendShapes.PerAddress, ("addr-a", 1m), ("addr-b", 2m), ("addr-c", 3m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.PerAddress, maxRecipientsPerAttempt: 0), Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(3, result.Attempts.Count);
+            Assert.All(result.Attempts, attempt =>
+            {
+                Assert.Equal(PayoutSendAttemptStates.Prepared, attempt.State);
+                Assert.Equal(1, attempt.RecipientCount);
+            });
+            Assert.Equal(new[] { "addr-a" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { "addr-b" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+            Assert.Equal(new[] { "addr-c" }, await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(2).Id));
+            Assert.Equal(PayoutBatchStates.Reserved, await GetBatchStateAsync(con, tx, batch.Id));
+            Assert.Equal(3, await CountMappingsAsync(con, tx, batch.Id, PayoutAttemptIntentStates.Active));
+        });
+    }
+
+    [PostgresIntegrationFact]
     public Task CreateSendAttemptsAsync_ExistingAttemptsReturnNoOp()
     {
         return WithRollbackAsync(async (con, tx) =>

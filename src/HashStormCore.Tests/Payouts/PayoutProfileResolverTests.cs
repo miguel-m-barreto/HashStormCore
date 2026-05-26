@@ -196,10 +196,81 @@ public class PayoutProfileResolverTests
 
         var result = resolver.Resolve("warthog");
 
-        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
         Assert.Equal(PayoutProfileConstants.AdapterIds.WarthogRestSigned, result.Profile.AdapterId);
         Assert.True(result.Profile.RequiresPrivateKeyMaterial);
-        Assert.False(result.Profile.ReservationReady);
+        Assert.True(result.Profile.ReservationReady);
+    }
+
+    [Fact]
+    public void WarthogProfileIsReservationReadyWithPrivateKeyBoundaryMetadata()
+    {
+        var resolver = NewResolver(Coin("warthog", "warthog", "WART"));
+
+        var result = resolver.Resolve("warthog");
+
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
+        Assert.True(result.HasProfile);
+        Assert.Equal(PayoutProfileConstants.AdapterIds.WarthogRestSigned, result.Profile.AdapterId);
+        Assert.Equal(PayoutProfileConstants.SendShapes.PerAddress, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.TransactionAdd, result.Profile.SendMethod);
+        Assert.Equal(PayoutProfileConstants.SettlementEvidenceKinds.RawHash, result.Profile.SettlementEvidenceKind);
+        Assert.True(result.Profile.ReservationReady);
+        Assert.True(result.Profile.RequiresPrivateKeyMaterial);
+        Assert.True(result.Profile.RequiresExternalWalletWrapper);
+        Assert.True(result.Profile.AllowsPerAddress);
+        Assert.False(result.Profile.AllowsBatchMultiRecipient);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForWarthogRestSignedWithNonPerAddressSendShape()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-wart", "bad-wart", "WART") }),
+            new IPayoutProfileProvider[] { new BadWarthogProvider(sendShape: PayoutProfileConstants.SendShapes.BatchMultiRecipient) });
+
+        var result = resolver.Resolve("bad-wart");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.Contains("per_address", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForWarthogRestSignedWithoutTransactionAddMethod()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-wart", "bad-wart", "WART") }),
+            new IPayoutProfileProvider[] { new BadWarthogProvider(sendMethod: "wrong-method") });
+
+        var result = resolver.Resolve("bad-wart");
+
+        Assert.Contains("transaction/add", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForWarthogRestSignedWithoutPrivateKeyMaterialFlag()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-wart", "bad-wart", "WART") }),
+            new IPayoutProfileProvider[] { new BadWarthogProvider(requiresPrivateKeyMaterial: false) });
+
+        var result = resolver.Resolve("bad-wart");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.Contains("RequiresPrivateKeyMaterial", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForWarthogRestSignedWithBatchMultiRecipient()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-wart", "bad-wart", "WART") }),
+            new IPayoutProfileProvider[] { new BadWarthogProvider(allowsBatchMultiRecipient: true) });
+
+        var result = resolver.Resolve("bad-wart");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.Contains("batch multi-recipient", result.Reason);
     }
 
     [Fact]
@@ -694,6 +765,50 @@ public class PayoutProfileResolverTests
                 AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.AlephiumGroupAware,
                 MaxRecipientsPerAttempt = maxRecipientsPerAttempt,
                 AddressGroupCount = addressGroupCount,
+                ReservationReady = true
+            });
+        }
+    }
+
+    private class BadWarthogProvider : IPayoutProfileProvider
+    {
+        private readonly string sendShape;
+        private readonly string sendMethod;
+        private readonly bool requiresPrivateKeyMaterial;
+        private readonly bool allowsBatchMultiRecipient;
+
+        public BadWarthogProvider(
+            string sendShape = PayoutProfileConstants.SendShapes.PerAddress,
+            string sendMethod = PayoutProfileConstants.SendMethods.TransactionAdd,
+            bool requiresPrivateKeyMaterial = true,
+            bool allowsBatchMultiRecipient = false)
+        {
+            this.sendShape = sendShape;
+            this.sendMethod = sendMethod;
+            this.requiresPrivateKeyMaterial = requiresPrivateKeyMaterial;
+            this.allowsBatchMultiRecipient = allowsBatchMultiRecipient;
+        }
+
+        public bool CanResolve(CoinDescriptor coin)
+        {
+            return string.Equals(coin.Family, "bad-wart", StringComparison.Ordinal);
+        }
+
+        public PayoutProfileResolution Resolve(CoinDescriptor coin)
+        {
+            return PayoutProfileResolution.Resolved(new PayoutProfile
+            {
+                CoinKey = coin.CoinKey,
+                CoinSymbol = coin.Symbol,
+                CoinFamily = coin.Family,
+                AdapterId = PayoutProfileConstants.AdapterIds.WarthogRestSigned,
+                SendShape = sendShape,
+                SendMethod = sendMethod,
+                SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.RawHash,
+                AllowsPerAddress = true,
+                AllowsBatchMultiRecipient = allowsBatchMultiRecipient,
+                RequiresPrivateKeyMaterial = requiresPrivateKeyMaterial,
+                RequiresExternalWalletWrapper = true,
                 ReservationReady = true
             });
         }

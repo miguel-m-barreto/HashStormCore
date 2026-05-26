@@ -21,8 +21,7 @@ public class WarthogPayoutProfileProvider : IPayoutProfileProvider
             AllowsPerAddress = true,
             RequiresExternalWalletWrapper = true,
             RequiresPrivateKeyMaterial = true,
-            ReservationReady = false,
-            NotReadyReason = "Warthog adapter private-key handling is not implemented in the sidecar"
+            ReservationReady = true
         };
 
         return PayoutProfileResolution.Resolved(profile);
