@@ -58,6 +58,10 @@ public class PayoutSendExecutorService
         {
             sendResult = await sender.SendAsync(context, ct);
         }
+        catch(OperationCanceledException) when(ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch(Exception ex)
         {
             return await PersistSenderExceptionAsAmbiguousAsync(request, ex);
