@@ -63,8 +63,8 @@ public class PayoutProcessorService : BackgroundService
         else
         {
             logger.LogWarning(
-                "PayoutProcessor DbMutating mode is enabled for reservation, planning, no-sender-safe execution, local stale sending quarantine, and profile-validated settlement. Operation-id reconciliation and wallet/daemon/RPC calls remain disabled");
-            logger.LogWarning("PayoutProcessor DbMutating reservation, planning, execution, stale sending quarantine, and settlement process only pools with paymentProcessing.engine=intent");
+                "PayoutProcessor DbMutating mode is enabled for reservation, planning, no-sender-safe execution, local stale sending quarantine, no-provider-safe operation-id reconciliation, and profile-validated settlement. Wallet/daemon/RPC calls remain disabled");
+            logger.LogWarning("PayoutProcessor DbMutating reservation, planning, execution, stale sending quarantine, operation-id reconciliation, and settlement process only pools with paymentProcessing.engine=intent");
         }
 
         logger.LogInformation("PayoutProcessor discovered {PoolCount} payout-capable pool(s)", pools.Count);
@@ -87,7 +87,7 @@ public class PayoutProcessorService : BackgroundService
         if(config.Mode == PayoutProcessorMode.DryRun)
             await RunDryRunLoopsAsync(pools, stoppingToken);
         else
-            await RunDbMutatingReservationPlanningExecutionStaleReconciliationAndSettlementLoopsAsync(pools,
+            await RunDbMutatingReservationPlanningExecutionStaleReconciliationOperationIdAndSettlementLoopsAsync(pools,
                 stoppingToken);
     }
 
@@ -280,18 +280,20 @@ public class PayoutProcessorService : BackgroundService
         }
     }
 
-    private async Task RunDbMutatingReservationPlanningExecutionStaleReconciliationAndSettlementLoopsAsync(IReadOnlyCollection<PayoutProcessorPoolConfig> pools,
+    private async Task RunDbMutatingReservationPlanningExecutionStaleReconciliationOperationIdAndSettlementLoopsAsync(IReadOnlyCollection<PayoutProcessorPoolConfig> pools,
         CancellationToken ct)
     {
         var reservationInterval = GetInterval(config.ReservationIntervalSeconds);
         var planningInterval = GetInterval(config.PlanningIntervalSeconds);
         var executionInterval = GetInterval(config.ExecutionIntervalSeconds);
         var staleReconciliationInterval = GetInterval(config.StaleReconciliationIntervalSeconds);
+        var operationIdReconciliationInterval = GetInterval(config.OperationIdReconciliationIntervalSeconds);
         var settlementInterval = GetInterval(config.SettlementIntervalSeconds);
         var nextReservation = DateTimeOffset.MinValue;
         var nextPlanning = DateTimeOffset.MinValue;
         var nextExecution = DateTimeOffset.MinValue;
         var nextStaleReconciliation = DateTimeOffset.MinValue;
+        var nextOperationIdReconciliation = DateTimeOffset.MinValue;
         var nextSettlement = DateTimeOffset.MinValue;
 
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
@@ -329,6 +331,16 @@ public class PayoutProcessorService : BackgroundService
                                 "Payout stale sending reconciliation tick failed for pool {PoolId}", ct);
 
                         nextStaleReconciliation = now + staleReconciliationInterval;
+                    }
+
+                    if(now >= nextOperationIdReconciliation)
+                    {
+                        foreach(var pool in pools)
+                            await RunPoolTickAsync(pool,
+                                () => orchestrator.RunOperationIdReconciliationTickAsync(pool, ct),
+                                "Payout operation-id reconciliation tick failed for pool {PoolId}", ct);
+
+                        nextOperationIdReconciliation = now + operationIdReconciliationInterval;
                     }
 
                     if(now >= nextSettlement)
@@ -374,6 +386,15 @@ public class PayoutProcessorService : BackgroundService
                             "Payout stale sending reconciliation tick failed for pool {PoolId}", ct);
 
                     nextStaleReconciliation = now + staleReconciliationInterval;
+                }
+
+                if(now >= nextOperationIdReconciliation)
+                {
+                    foreach(var pool in pools)
+                        await RunPoolTickAsync(pool, () => orchestrator.RunOperationIdReconciliationTickAsync(pool, ct),
+                            "Payout operation-id reconciliation tick failed for pool {PoolId}", ct);
+
+                    nextOperationIdReconciliation = now + operationIdReconciliationInterval;
                 }
 
                 if(now >= nextSettlement)

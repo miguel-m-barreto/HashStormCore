@@ -22,111 +22,68 @@ public class PayoutOperationIdReconciliationService
     private readonly IPayoutProfileResolver profileResolver;
     private readonly PayoutExecutionEvidenceValidator evidenceValidator;
 
-    public async Task<PayoutOperationIdReconciliationResult> ReconcileOperationIdsAsync(
-        PayoutOperationIdReconciliationRequest request, IPayoutOperationStatusProvider provider, CancellationToken ct)
+    public async Task<PayoutOperationIdReconciliationResult> ReconcileOperationIdCandidateAsync(
+        PayoutReconciliationAttemptSummary candidate, DateTime checkedAt, IPayoutOperationStatusProvider provider,
+        CancellationToken ct)
     {
-        ValidateRequest(request);
+        if(candidate == null)
+            throw new ArgumentNullException(nameof(candidate));
 
         if(provider == null)
             throw new ArgumentNullException(nameof(provider));
 
-        var candidates = await cf.RunTx((con, tx) =>
-            payoutIntentRepo.GetAttemptsWithOperationIdAsync(con, tx, request.PoolId, request.Limit, ct));
+        var operationId = await GetOperationIdAsync(candidate, ct);
+        if(string.IsNullOrWhiteSpace(operationId))
+            return SingleResult(needsReviewCount: 1);
 
-        var pendingCount = 0;
-        var attachedCount = 0;
-        var alreadyAttachedCount = 0;
-        var needsReviewCount = 0;
-        var providerErrorCount = 0;
-        var attachedAttemptIds = new List<long>();
+        if(!IsCandidateEligibleForOperationIdReconciliation(candidate))
+            return SingleResult(needsReviewCount: 1);
 
-        foreach(var candidate in candidates)
+        PayoutOperationStatusResult providerResult;
+
+        try
         {
-            var operationId = await GetOperationIdAsync(candidate, ct);
-            if(string.IsNullOrWhiteSpace(operationId))
-            {
-                needsReviewCount++;
-                continue;
-            }
-
-            if(!IsCandidateEligibleForOperationIdReconciliation(candidate))
-            {
-                needsReviewCount++;
-                continue;
-            }
-
-            PayoutOperationStatusResult providerResult;
-
-            try
-            {
-                providerResult = await provider.GetOperationStatusAsync(candidate, operationId, ct);
-            }
-            catch
-            {
-                providerErrorCount++;
-                continue;
-            }
-
-            if(providerResult == null)
-            {
-                providerErrorCount++;
-                continue;
-            }
-
-            switch(providerResult.Status)
-            {
-                case PayoutOperationStatus.Pending:
-                    pendingCount++;
-                    break;
-
-                case PayoutOperationStatus.ResolvedTxId:
-                    if(string.IsNullOrWhiteSpace(providerResult.TxId))
-                    {
-                        providerErrorCount++;
-                        break;
-                    }
-
-                    // Unsafe/fake txid guard
-                    if(evidenceValidator.IsUnsafeEvidenceValue(providerResult.TxId))
-                    {
-                        needsReviewCount++;
-                        break;
-                    }
-
-                    var attached = await AttachTxIdEvidenceIfMissingAsync(candidate, providerResult.TxId,
-                        request.CheckedAt, ct);
-
-                    if(attached)
-                    {
-                        attachedCount++;
-                        attachedAttemptIds.Add(candidate.AttemptId);
-                    }
-                    else
-                        alreadyAttachedCount++;
-
-                    break;
-
-                case PayoutOperationStatus.ProvenNoAccept:
-                case PayoutOperationStatus.Unknown:
-                    needsReviewCount++;
-                    break;
-
-                default:
-                    providerErrorCount++;
-                    break;
-            }
+            providerResult = await provider.GetOperationStatusAsync(candidate, operationId, ct);
+        }
+        catch(OperationCanceledException) when(ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return SingleResult(providerErrorCount: 1);
         }
 
-        return new PayoutOperationIdReconciliationResult
+        if(providerResult == null)
+            return SingleResult(providerErrorCount: 1);
+
+        switch(providerResult.Status)
         {
-            CandidateCount = candidates.Length,
-            ProviderPendingCount = pendingCount,
-            EvidenceAttachedCount = attachedCount,
-            AlreadyAttachedCount = alreadyAttachedCount,
-            NeedsReviewCount = needsReviewCount,
-            ProviderErrorCount = providerErrorCount,
-            EvidenceAttachedAttemptIds = attachedAttemptIds
-        };
+            case PayoutOperationStatus.Pending:
+                return SingleResult(pendingCount: 1);
+
+            case PayoutOperationStatus.ResolvedTxId:
+                if(string.IsNullOrWhiteSpace(providerResult.TxId))
+                    return SingleResult(providerErrorCount: 1);
+
+                // Unsafe/fake txid guard
+                if(evidenceValidator.IsUnsafeEvidenceValue(providerResult.TxId))
+                    return SingleResult(needsReviewCount: 1);
+
+                var attached = await AttachTxIdEvidenceIfMissingAsync(candidate, providerResult.TxId,
+                    checkedAt, ct);
+
+                return attached
+                    ? SingleResult(attachedCount: 1, attachedAttemptIds: new[] { candidate.AttemptId })
+                    : SingleResult(alreadyAttachedCount: 1);
+
+            case PayoutOperationStatus.ProvenNoAccept:
+            case PayoutOperationStatus.Unknown:
+                return SingleResult(needsReviewCount: 1);
+
+            default:
+                return SingleResult(providerErrorCount: 1);
+        }
     }
 
     private async Task<string> GetOperationIdAsync(PayoutReconciliationAttemptSummary candidate, CancellationToken ct)
@@ -185,21 +142,19 @@ public class PayoutOperationIdReconciliationService
         });
     }
 
-    private static void ValidateRequest(PayoutOperationIdReconciliationRequest request)
+    private static PayoutOperationIdReconciliationResult SingleResult(int pendingCount = 0, int attachedCount = 0,
+        int alreadyAttachedCount = 0, int needsReviewCount = 0, int providerErrorCount = 0,
+        IReadOnlyCollection<long> attachedAttemptIds = null)
     {
-        if(request == null)
-            throw new ArgumentNullException(nameof(request));
-
-        RequireText(request.PoolId, nameof(request.PoolId));
-
-        if(request.Limit <= 0)
-            throw new ArgumentOutOfRangeException(nameof(request.Limit),
-                "Operation id reconciliation limit must be greater than zero");
-    }
-
-    private static void RequireText(string value, string name)
-    {
-        if(string.IsNullOrWhiteSpace(value))
-            throw new ArgumentException($"{name} is required", name);
+        return new PayoutOperationIdReconciliationResult
+        {
+            CandidateCount = 1,
+            ProviderPendingCount = pendingCount,
+            EvidenceAttachedCount = attachedCount,
+            AlreadyAttachedCount = alreadyAttachedCount,
+            NeedsReviewCount = needsReviewCount,
+            ProviderErrorCount = providerErrorCount,
+            EvidenceAttachedAttemptIds = attachedAttemptIds ?? Array.Empty<long>()
+        };
     }
 }

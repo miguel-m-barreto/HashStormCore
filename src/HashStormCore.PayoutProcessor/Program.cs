@@ -81,6 +81,9 @@ builder.Services.AddSingleton<IPayoutExecutionRunner, DbPayoutExecutionRunner>()
 builder.Services.AddSingleton<PayoutStaleSendReconciliationService>();
 builder.Services.AddSingleton<IPayoutStaleSendReconciliationRunner, DbPayoutStaleSendReconciliationRunner>();
 builder.Services.AddSingleton<PayoutOperationIdReconciliationService>();
+builder.Services.AddSingleton<IPayoutOperationStatusProviderRegistry>(_ =>
+    new PayoutOperationStatusProviderRegistry(Array.Empty<PayoutOperationStatusProviderRegistration>()));
+builder.Services.AddSingleton<IPayoutOperationIdReconciliationRunner, DbPayoutOperationIdReconciliationRunner>();
 builder.Services.AddSingleton<PayoutAmbiguousReviewService>();
 builder.Services.AddSingleton<PayoutSettlementService>();
 builder.Services.AddSingleton<IPayoutSettlementRunner, DbPayoutSettlementRunner>();

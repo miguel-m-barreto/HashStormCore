@@ -17,6 +17,7 @@ public class PayoutPoolOrchestrator
         IPayoutReservationRunner payoutReservationRunner, IPayoutPlanningRunner payoutPlanningRunner,
         IPayoutExecutionRunner payoutExecutionRunner,
         IPayoutStaleSendReconciliationRunner payoutStaleSendReconciliationRunner,
+        IPayoutOperationIdReconciliationRunner payoutOperationIdReconciliationRunner,
         IPayoutSettlementRunner payoutSettlementRunner,
         ILogger<PayoutPoolOrchestrator> logger)
     {
@@ -26,6 +27,7 @@ public class PayoutPoolOrchestrator
         this.payoutPlanningRunner = payoutPlanningRunner;
         this.payoutExecutionRunner = payoutExecutionRunner;
         this.payoutStaleSendReconciliationRunner = payoutStaleSendReconciliationRunner;
+        this.payoutOperationIdReconciliationRunner = payoutOperationIdReconciliationRunner;
         this.payoutSettlementRunner = payoutSettlementRunner;
         this.logger = logger;
     }
@@ -36,6 +38,7 @@ public class PayoutPoolOrchestrator
     private readonly IPayoutPlanningRunner payoutPlanningRunner;
     private readonly IPayoutExecutionRunner payoutExecutionRunner;
     private readonly IPayoutStaleSendReconciliationRunner payoutStaleSendReconciliationRunner;
+    private readonly IPayoutOperationIdReconciliationRunner payoutOperationIdReconciliationRunner;
     private readonly IPayoutSettlementRunner payoutSettlementRunner;
     private readonly ILogger<PayoutPoolOrchestrator> logger;
 
@@ -368,12 +371,85 @@ public class PayoutPoolOrchestrator
         }
     }
 
-    public Task RunOperationIdReconciliationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
+    public async Task RunOperationIdReconciliationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+
+        if(!config.Enabled)
+        {
+            logger.LogInformation("Skipping operation-id reconciliation for pool {PoolId}: PayoutProcessor is disabled",
+                pool.Id);
+            return;
+        }
+
+        if(config.Mode == PayoutProcessorMode.Disabled)
+        {
+            logger.LogInformation(
+                "Skipping operation-id reconciliation for pool {PoolId}: PayoutProcessor mode is Disabled",
+                pool.Id);
+            return;
+        }
+
+        if(!string.Equals(pool.Engine, PayoutEngineIntent, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogInformation(
+                "Skipping operation-id reconciliation for pool {PoolId}: paymentProcessing.engine={Engine}, only engine=intent is processed by PayoutProcessor",
+                pool.Id, pool.Engine);
+            return;
+        }
+
+        if(config.Mode == PayoutProcessorMode.DryRun)
+        {
+            logger.LogInformation(
+                "Dry-run operation-id reconciliation tick for pool {PoolId}: would enumerate operation-id candidates, limit={Limit}",
+                pool.Id, config.ExecutionBatchSize);
+            return;
+        }
+
+        if(config.Mode != PayoutProcessorMode.DbMutating)
+        {
+            logger.LogInformation(
+                "Operation-id reconciliation tick for pool {PoolId} skipped: processor mode is {Mode}",
+                pool.Id, config.Mode);
+            return;
+        }
+
+        if(config.ExecutionBatchSize <= 0)
+        {
+            logger.LogWarning(
+                "Skipping operation-id reconciliation for pool {PoolId}: ExecutionBatchSize is used as the reconciliation limit and must be greater than zero",
+                pool.Id);
+            return;
+        }
+
+        var request = BuildOperationIdReconciliationRequest(pool, config);
+
+        logger.LogInformation("DB-mutating operation-id reconciliation tick for pool {PoolId}: limit={Limit}",
+            request.PoolId, request.Limit);
+
+        var result = await payoutOperationIdReconciliationRunner.ReconcileOperationIdsAsync(request, ct);
+
         logger.LogInformation(
-            "Operation-id reconciliation tick for pool {PoolId} using engine {Engine}: provider loop is not implemented and no provider/RPC/DB mutation is performed",
-            pool.Id, pool.Engine);
-        return Task.CompletedTask;
+            "Operation-id reconciliation tick for pool {PoolId} completed: candidateAttempts={CandidateCount}, evidenceAttached={EvidenceAttachedCount}, providerPending={ProviderPendingCount}, alreadyAttached={AlreadyAttachedCount}, needsReview={NeedsReviewCount}, providerErrors={ProviderErrorCount}, skippedAttempts={SkippedCount}, failedAttempts={FailureCount}",
+            request.PoolId, result.CandidateCount, result.EvidenceAttachedCount, result.ProviderPendingCount,
+            result.AlreadyAttachedCount, result.NeedsReviewCount, result.ProviderErrorCount, result.SkippedCount,
+            result.FailureCount);
+
+        foreach(var skipped in result.SkippedAttempts)
+        {
+            logger.LogInformation(
+                "Skipped operation-id reconciliation for attempt {AttemptId} in pool {PoolId}: coin={Coin}, coinFamily={CoinFamily}, handler={Handler}, sendShape={SendShape}, method={Method}, reason={Reason}",
+                skipped.AttemptId, skipped.PoolId, skipped.Coin, skipped.CoinFamily, skipped.Handler,
+                skipped.SendShape, skipped.Method, skipped.Reason);
+        }
+
+        foreach(var failure in result.Failures)
+        {
+            logger.LogWarning(
+                "Operation-id reconciliation attempt {AttemptId} in pool {PoolId} failed before completion: coin={Coin}, coinFamily={CoinFamily}, handler={Handler}, sendShape={SendShape}, method={Method}, errorType={ErrorType}",
+                failure.AttemptId, failure.PoolId, failure.Coin, failure.CoinFamily, failure.Handler,
+                failure.SendShape, failure.Method, failure.ErrorType);
+        }
     }
 
     public async Task RunSettlementTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
@@ -511,6 +587,17 @@ public class PayoutPoolOrchestrator
             Limit = config.ExecutionBatchSize,
             ErrorCode = StaleSendingErrorCode,
             ErrorMessage = StaleSendingErrorMessage
+        };
+    }
+
+    public static PayoutOperationIdReconciliationRunnerRequest BuildOperationIdReconciliationRequest(
+        PayoutProcessorPoolConfig pool, PayoutProcessorConfig config)
+    {
+        return new PayoutOperationIdReconciliationRunnerRequest
+        {
+            PoolId = pool.Id,
+            Limit = config.ExecutionBatchSize,
+            CheckedAt = DateTime.UtcNow
         };
     }
 

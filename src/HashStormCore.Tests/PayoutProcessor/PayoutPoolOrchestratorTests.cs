@@ -184,6 +184,24 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public void BuildOperationIdReconciliationRequestMapsPoolIdLimitAndCheckedAt()
+    {
+        var pool = NewPool("bitcoin", "intent");
+        var config = new PayoutProcessorConfig
+        {
+            ExecutionBatchSize = 19
+        };
+        var before = DateTime.UtcNow;
+
+        var request = PayoutPoolOrchestrator.BuildOperationIdReconciliationRequest(pool, config);
+
+        var after = DateTime.UtcNow;
+        Assert.Equal("pool-a", request.PoolId);
+        Assert.Equal(19, request.Limit);
+        Assert.InRange(request.CheckedAt, before, after);
+    }
+
+    [Fact]
     public async Task RunPlanningTickAsync_DryRunDoesNotCallPlanningRunner()
     {
         var planningRunner = Substitute.For<IPayoutPlanningRunner>();
@@ -662,6 +680,203 @@ public class PayoutPoolOrchestratorTests
 
         await staleRunner.DidNotReceive().ReconcileStaleSendingAsync(
             Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOperationIdReconciliationTickAsync_DisabledConfigSkipsBeforeRunner()
+    {
+        var operationIdRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            enabled: false,
+            operationIdReconciliationRunner: operationIdRunner);
+
+        await orchestrator.RunOperationIdReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await operationIdRunner.DidNotReceive().ReconcileOperationIdsAsync(
+            Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOperationIdReconciliationTickAsync_DisabledModeSkipsBeforeRunner()
+    {
+        var operationIdRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.Disabled,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            operationIdReconciliationRunner: operationIdRunner);
+
+        await orchestrator.RunOperationIdReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await operationIdRunner.DidNotReceive().ReconcileOperationIdsAsync(
+            Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOperationIdReconciliationTickAsync_LegacyEngineSkipsBeforeRunner()
+    {
+        var operationIdRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            operationIdReconciliationRunner: operationIdRunner);
+
+        await orchestrator.RunOperationIdReconciliationTickAsync(NewPool("bitcoin", "legacy"), CancellationToken.None);
+
+        await operationIdRunner.DidNotReceive().ReconcileOperationIdsAsync(
+            Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOperationIdReconciliationTickAsync_DryRunDoesNotCallRunner()
+    {
+        var operationIdRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DryRun,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            operationIdReconciliationRunner: operationIdRunner);
+
+        await orchestrator.RunOperationIdReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await operationIdRunner.DidNotReceive().ReconcileOperationIdsAsync(
+            Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOperationIdReconciliationTickAsync_DbMutatingInvalidLimitSourceSkipsBeforeRunner()
+    {
+        var operationIdRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionBatchSize: 0,
+            operationIdReconciliationRunner: operationIdRunner);
+
+        await orchestrator.RunOperationIdReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await operationIdRunner.DidNotReceive().ReconcileOperationIdsAsync(
+            Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOperationIdReconciliationTickAsync_DbMutatingIntentPoolCallsRunnerWithRequest()
+    {
+        var operationIdRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+        PayoutOperationIdReconciliationRunnerRequest capturedRequest = null;
+        operationIdRunner.ReconcileOperationIdsAsync(
+                Arg.Do<PayoutOperationIdReconciliationRunnerRequest>(x => capturedRequest = x),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutOperationIdReconciliationRunnerResult()));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            executionBatchSize: 29,
+            operationIdReconciliationRunner: operationIdRunner);
+        var before = DateTime.UtcNow;
+
+        await orchestrator.RunOperationIdReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        var after = DateTime.UtcNow;
+        await operationIdRunner.Received(1).ReconcileOperationIdsAsync(
+            Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("pool-a", capturedRequest.PoolId);
+        Assert.Equal(29, capturedRequest.Limit);
+        Assert.InRange(capturedRequest.CheckedAt, before, after);
+    }
+
+    [Fact]
+    public async Task RunOperationIdReconciliationTickAsync_HandlesSkippedNoProviderResultWithoutThrowing()
+    {
+        var operationIdRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+        operationIdRunner.ReconcileOperationIdsAsync(Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutOperationIdReconciliationRunnerResult
+            {
+                CandidateCount = 1,
+                SkippedCount = 1,
+                SkippedAttempts = new[]
+                {
+                    new PayoutOperationIdReconciliationSkippedAttempt
+                    {
+                        BatchId = 10,
+                        AttemptId = 20,
+                        PoolId = "pool-a",
+                        Coin = "zcash",
+                        CoinFamily = "equihash",
+                        Handler = "equihash-bitcoin-rpc",
+                        SendShape = PayoutSendShapes.AsyncOperation,
+                        Method = "z_sendmany",
+                        Reason = "no registered operation status provider for exact profile key"
+                    }
+                }
+            }));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            operationIdReconciliationRunner: operationIdRunner);
+
+        await orchestrator.RunOperationIdReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await operationIdRunner.Received(1).ReconcileOperationIdsAsync(
+            Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOperationIdReconciliationTickAsync_HandlesProviderErrorAndFailureResultWithoutThrowing()
+    {
+        var operationIdRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+        operationIdRunner.ReconcileOperationIdsAsync(Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new PayoutOperationIdReconciliationRunnerResult
+            {
+                CandidateCount = 2,
+                ProviderErrorCount = 1,
+                FailureCount = 1,
+                Failures = new[]
+                {
+                    new PayoutOperationIdReconciliationAttemptFailure
+                    {
+                        BatchId = 11,
+                        AttemptId = 21,
+                        PoolId = "pool-a",
+                        Coin = "zcash",
+                        CoinFamily = "equihash",
+                        Handler = "equihash-bitcoin-rpc",
+                        SendShape = PayoutSendShapes.AsyncOperation,
+                        Method = "z_sendmany",
+                        ErrorType = nameof(InvalidOperationException)
+                    }
+                }
+            }));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            operationIdReconciliationRunner: operationIdRunner);
+
+        await orchestrator.RunOperationIdReconciliationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await operationIdRunner.Received(1).ReconcileOperationIdsAsync(
+            Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOperationIdReconciliationTickAsync_CancellationIsPropagated()
+    {
+        var operationIdRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            Substitute.For<IPayoutProfileResolver>(),
+            Substitute.For<IPayoutReservationRunner>(),
+            operationIdReconciliationRunner: operationIdRunner);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            orchestrator.RunOperationIdReconciliationTickAsync(NewPool("bitcoin", "intent"), cts.Token));
+
+        await operationIdRunner.DidNotReceive().ReconcileOperationIdsAsync(
+            Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1358,6 +1573,7 @@ public class PayoutPoolOrchestratorTests
         int reservationMaxCandidates = 50, int planningMaxBatches = 8, int executionBatchSize = 8,
         int staleSendingAgeSeconds = 900, IPayoutExecutionRunner executionRunner = null,
         IPayoutStaleSendReconciliationRunner staleReconciliationRunner = null,
+        IPayoutOperationIdReconciliationRunner operationIdReconciliationRunner = null,
         IPayoutSettlementRunner settlementRunner = null)
     {
         if(staleReconciliationRunner == null)
@@ -1366,6 +1582,14 @@ public class PayoutPoolOrchestratorTests
             staleReconciliationRunner.ReconcileStaleSendingAsync(Arg.Any<PayoutStaleSendReconciliationRunnerRequest>(),
                     Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(new PayoutStaleSendReconciliationResult()));
+        }
+
+        if(operationIdReconciliationRunner == null)
+        {
+            operationIdReconciliationRunner = Substitute.For<IPayoutOperationIdReconciliationRunner>();
+            operationIdReconciliationRunner.ReconcileOperationIdsAsync(
+                    Arg.Any<PayoutOperationIdReconciliationRunnerRequest>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new PayoutOperationIdReconciliationRunnerResult()));
         }
 
         if(settlementRunner == null)
@@ -1390,6 +1614,7 @@ public class PayoutPoolOrchestratorTests
             planningRunner ?? Substitute.For<IPayoutPlanningRunner>(),
             executionRunner ?? Substitute.For<IPayoutExecutionRunner>(),
             staleReconciliationRunner,
+            operationIdReconciliationRunner,
             settlementRunner,
             NullLogger<PayoutPoolOrchestrator>.Instance);
     }
