@@ -80,5 +80,13 @@ public static class PayoutProfileConstants
     {
         public const string Default = "default";
         public const string ConcealPaymentIdAware = "conceal_payment_id_aware";
+        public const string CryptonotePaymentIdAware = "cryptonote_payment_id_aware";
+        public const string ZanoPaymentIdAware = "zano_payment_id_aware";
+    }
+
+    public static class MultiHashEvidencePolicies
+    {
+        public const string NotApplicable = "not_applicable";
+        public const string Unsupported = "unsupported";
     }
 }

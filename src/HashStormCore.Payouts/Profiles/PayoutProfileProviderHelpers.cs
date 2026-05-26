@@ -28,4 +28,19 @@ internal static class PayoutProfileProviderHelpers
             SettlementEvidenceKind = settlementEvidenceKind
         };
     }
+
+    public static IReadOnlyCollection<ulong> ReadPrefixes(CoinDescriptor coin, params string[] keys)
+    {
+        var prefixes = new List<ulong>();
+
+        foreach(var key in keys)
+        {
+            if(coin.RawExtensionFlags.TryGetValue(key, out var value) &&
+               ulong.TryParse(value, out var prefix) &&
+               !prefixes.Contains(prefix))
+                prefixes.Add(prefix);
+        }
+
+        return prefixes;
+    }
 }

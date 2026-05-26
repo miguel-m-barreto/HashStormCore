@@ -149,20 +149,82 @@ public class PayoutProfileResolverTests
         Assert.False(result.Profile.ReservationReady);
     }
 
+    [Fact]
+    public void CryptonoteProfileIsReservationReadyWithPaymentIdAwarePlanningAndSingleEvidencePolicy()
+    {
+        var resolver = NewResolver(Coin("cryptonote", "cryptonote", "XMR") with
+        {
+            RawExtensionFlags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["addressPrefixIntegrated"] = "19",
+                ["addressPrefixIntegratedTestnet"] = "54",
+                ["addressPrefixIntegratedStagenet"] = "25"
+            }
+        });
+
+        var result = resolver.Resolve("cryptonote");
+
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
+        Assert.Equal(PayoutProfileConstants.AdapterIds.CryptonoteWalletRpc, result.Profile.AdapterId);
+        Assert.Equal(PayoutProfileConstants.SendShapes.AddressGroup, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.Transfer, result.Profile.SendMethod);
+        Assert.Equal(PayoutProfileConstants.PlanningPolicies.CryptonotePaymentIdAware,
+            result.Profile.AttemptPlanningPolicy);
+        Assert.Equal(15, result.Profile.MaxRecipientsPerAttempt);
+        Assert.True(result.Profile.ReservationReady);
+        Assert.True(result.Profile.MayReturnMultipleTransactionHashes);
+        Assert.True(result.Profile.RequiresSingleEvidencePerAttempt);
+        Assert.Equal(PayoutProfileConstants.MultiHashEvidencePolicies.Unsupported,
+            result.Profile.MultiHashEvidencePolicy);
+        Assert.Contains(19ul, result.Profile.IntegratedAddressPrefixes);
+    }
+
+    [Fact]
+    public void ZanoProfileIsReservationReadyWithPaymentIdAwarePlanningAndSingleEvidencePolicy()
+    {
+        var resolver = NewResolver(Coin("zano", "zano", "ZANO") with
+        {
+            RawExtensionFlags = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["addressPrefixIntegrated"] = "13944",
+                ["addressPrefixIntegratedTestnet"] = "13944",
+                ["addressV2PrefixIntegrated"] = "14072",
+                ["addressV2PrefixIntegratedTestnet"] = "14072",
+                ["auditableAddressIntegratedPrefix"] = "35401",
+                ["auditableAddressIntegratedPrefixTestnet"] = "35401"
+            }
+        });
+
+        var result = resolver.Resolve("zano");
+
+        Assert.Equal(PayoutProfileResolutionStatus.Resolved, result.Status);
+        Assert.Equal(PayoutProfileConstants.AdapterIds.ZanoWalletRpc, result.Profile.AdapterId);
+        Assert.Equal(PayoutProfileConstants.SendShapes.AddressGroup, result.Profile.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.Transfer, result.Profile.SendMethod);
+        Assert.Equal(PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware,
+            result.Profile.AttemptPlanningPolicy);
+        Assert.Equal(256, result.Profile.MaxRecipientsPerAttempt);
+        Assert.True(result.Profile.ReservationReady);
+        Assert.True(result.Profile.MayReturnMultipleTransactionHashes);
+        Assert.True(result.Profile.RequiresSingleEvidencePerAttempt);
+        Assert.Equal(PayoutProfileConstants.MultiHashEvidencePolicies.Unsupported,
+            result.Profile.MultiHashEvidencePolicy);
+        Assert.Contains(13944ul, result.Profile.IntegratedAddressPrefixes);
+        Assert.Contains(35401ul, result.Profile.IntegratedAddressPrefixes);
+    }
+
     [Theory]
-    [InlineData("cryptonote", PayoutProfileConstants.AdapterIds.CryptonoteWalletRpc)]
-    [InlineData("zano", PayoutProfileConstants.AdapterIds.ZanoWalletRpc)]
-    public void SplitRiskProfilesRequirePerIntentEvidenceMapping(string family, string adapterId)
+    [InlineData("cryptonote")]
+    [InlineData("zano")]
+    public void PaymentIdAwareProfilesFailClosedWithoutIntegratedPrefixMetadata(string family)
     {
         var resolver = NewResolver(Coin(family, family, "COIN"));
 
         var result = resolver.Resolve(family);
 
         Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
-        Assert.Equal(adapterId, result.Profile.AdapterId);
-        Assert.True(result.Profile.MayReturnMultipleTransactionHashes);
-        Assert.True(result.Profile.RequiresPerIntentEvidenceMapping);
         Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("integrated address prefix", result.Reason);
     }
 
     [Fact]
@@ -218,6 +280,38 @@ public class PayoutProfileResolverTests
         Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
         Assert.False(result.Profile.ReservationReady);
         Assert.Contains("MaxRecipientsPerAttempt", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForReadyMultiHashProfileMissingRequiresSingleEvidence()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-multihash", "bad-multihash", "BAD") }),
+            new[] { new BadMultiHashProvider(
+                requiresSingleEvidence: false,
+                multiHashPolicy: PayoutProfileConstants.MultiHashEvidencePolicies.Unsupported) });
+
+        var result = resolver.Resolve("bad-multihash");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("RequiresSingleEvidencePerAttempt", result.Reason);
+    }
+
+    [Fact]
+    public void ResolverFailsClosedForReadyMultiHashProfileWithNotApplicableEvidencePolicy()
+    {
+        var resolver = new PayoutProfileResolver(
+            new TestCoinMetadataRegistry(new[] { Coin("bad-multihash", "bad-multihash", "BAD") }),
+            new[] { new BadMultiHashProvider(
+                requiresSingleEvidence: true,
+                multiHashPolicy: PayoutProfileConstants.MultiHashEvidencePolicies.NotApplicable) });
+
+        var result = resolver.Resolve("bad-multihash");
+
+        Assert.Equal(PayoutProfileResolutionStatus.NotReady, result.Status);
+        Assert.False(result.Profile.ReservationReady);
+        Assert.Contains("MultiHashEvidencePolicy", result.Reason);
     }
 
     [Fact]
@@ -305,6 +399,42 @@ public class PayoutProfileResolverTests
                 SendShape = PayoutProfileConstants.SendShapes.AddressGroup,
                 SendMethod = "bad-send",
                 SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+                ReservationReady = true
+            });
+        }
+    }
+
+    private class BadMultiHashProvider : IPayoutProfileProvider
+    {
+        private readonly bool requiresSingleEvidence;
+        private readonly string multiHashPolicy;
+
+        public BadMultiHashProvider(bool requiresSingleEvidence, string multiHashPolicy)
+        {
+            this.requiresSingleEvidence = requiresSingleEvidence;
+            this.multiHashPolicy = multiHashPolicy;
+        }
+
+        public bool CanResolve(CoinDescriptor coin)
+        {
+            return string.Equals(coin.Family, "bad-multihash", StringComparison.Ordinal);
+        }
+
+        public PayoutProfileResolution Resolve(CoinDescriptor coin)
+        {
+            return PayoutProfileResolution.Resolved(new PayoutProfile
+            {
+                CoinKey = coin.CoinKey,
+                CoinSymbol = coin.Symbol,
+                CoinFamily = coin.Family,
+                AdapterId = "bad-multihash-adapter",
+                SendShape = PayoutProfileConstants.SendShapes.AddressGroup,
+                SendMethod = PayoutProfileConstants.SendMethods.Transfer,
+                SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.RawHash,
+                MaxRecipientsPerAttempt = 15,
+                MayReturnMultipleTransactionHashes = true,
+                RequiresSingleEvidencePerAttempt = requiresSingleEvidence,
+                MultiHashEvidencePolicy = multiHashPolicy,
                 ReservationReady = true
             });
         }

@@ -19,6 +19,9 @@ public record PayoutProfile
     public int? MaxRecipientsPerAttempt { get; init; }
     public bool MayReturnMultipleTransactionHashes { get; init; }
     public bool RequiresPerIntentEvidenceMapping { get; init; }
+    public bool RequiresSingleEvidencePerAttempt { get; init; }
+    public string MultiHashEvidencePolicy { get; init; } =
+        PayoutProfileConstants.MultiHashEvidencePolicies.NotApplicable;
     public bool RequiresWalletDaemon { get; init; }
     public bool RequiresExternalWalletWrapper { get; init; }
     public bool RequiresPrivateKeyMaterial { get; init; }

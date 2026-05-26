@@ -98,9 +98,8 @@ public class PayoutSendAttemptPlannerService
                 return orderedIntents.Select(x => new[] { x }).ToList();
 
             case PayoutSendShapes.AddressGroup:
-                if(string.Equals(request.AttemptPlanningPolicy,
-                       PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware, StringComparison.Ordinal))
-                    return CreateConcealPaymentIdAwareGroups(request, orderedIntents);
+                if(IsPaymentIdAwarePlanningPolicy(request.AttemptPlanningPolicy))
+                    return CreatePaymentIdAwareGroups(request, orderedIntents);
 
                 return orderedIntents
                     .Select((intent, index) => new { intent, index })
@@ -113,12 +112,12 @@ public class PayoutSendAttemptPlannerService
         }
     }
 
-    private static List<PayoutIntent[]> CreateConcealPaymentIdAwareGroups(CreatePayoutSendAttemptsRequest request,
+    private static List<PayoutIntent[]> CreatePaymentIdAwareGroups(CreatePayoutSendAttemptsRequest request,
         PayoutIntent[] orderedIntents)
     {
         if(request.IntegratedAddressPrefixes == null || request.IntegratedAddressPrefixes.Count == 0)
             throw new InvalidOperationException(
-                "Conceal payment-id-aware planning requires integrated address prefixes");
+                "Payment-id-aware planning requires integrated address prefixes");
 
         var simpleIntents = new List<PayoutIntent>();
         var singletonIntents = new List<PayoutIntent[]>();
@@ -205,12 +204,24 @@ public class PayoutSendAttemptPlannerService
         {
             case PayoutProfileConstants.PlanningPolicies.Default:
             case PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware:
+            case PayoutProfileConstants.PlanningPolicies.CryptonotePaymentIdAware:
+            case PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware:
                 break;
 
             default:
                 throw new ArgumentException(
                     $"Unsupported payout attempt planning policy '{request.AttemptPlanningPolicy}'", nameof(request));
         }
+    }
+
+    private static bool IsPaymentIdAwarePlanningPolicy(string policy)
+    {
+        return string.Equals(policy, PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware,
+                   StringComparison.Ordinal) ||
+               string.Equals(policy, PayoutProfileConstants.PlanningPolicies.CryptonotePaymentIdAware,
+                   StringComparison.Ordinal) ||
+               string.Equals(policy, PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware,
+                   StringComparison.Ordinal);
     }
 
     private static void ExtractAddressAndPaymentId(string input, out string address, out string paymentId)
@@ -243,8 +254,15 @@ public class PayoutSendAttemptPlannerService
     {
         var decoded = DecodeCryptoNoteAddress(address);
 
-        // Conceal uses the same prefix for standard and integrated addresses. The planner must
-        // distinguish them by decoded payload length instead of prefix alone.
+        // Some CryptoNote-family coins use the same prefix for standard and integrated
+        // addresses. The planner must distinguish them by decoded payload length instead
+        // of prefix alone.
+        // Zano registers three integrated prefix families (addressPrefixIntegrated 13944,
+        // addressV2PrefixIntegrated 14072, auditableAddressIntegratedPrefix 35401). All three
+        // follow the standard CryptoNote integrated layout: 8-byte payment_id + 32-byte spend key
+        // + 32-byte view key + 4-byte checksum = CryptoNoteIntegratedPayloadLength (76).
+        // Standard Zano addresses (prefix 197) and auditable non-integrated addresses (prefix 39112)
+        // use CryptoNoteStandardPayloadLength (68) and are not listed in IntegratedAddressPrefixes.
         if(decoded == null || !integratedAddressPrefixes.Contains(decoded.Value.Prefix))
             return false;
 

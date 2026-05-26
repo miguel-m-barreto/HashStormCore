@@ -23,25 +23,11 @@ public class ConcealPayoutProfileProvider : IPayoutProfileProvider
             MaxRecipientsPerAttempt = 15,
             RequiresWalletDaemon = true,
             ReservationReady = true,
-            IntegratedAddressPrefixes = ReadIntegratedAddressPrefixes(coin)
+            IntegratedAddressPrefixes = PayoutProfileProviderHelpers.ReadPrefixes(coin,
+                "addressPrefixIntegrated",
+                "addressPrefixIntegratedTestnet")
         };
 
         return PayoutProfileResolution.Resolved(profile);
-    }
-
-    private static IReadOnlyCollection<ulong> ReadIntegratedAddressPrefixes(CoinDescriptor coin)
-    {
-        var prefixes = new List<ulong>();
-        AddPrefix(prefixes, coin, "addressPrefixIntegrated");
-        AddPrefix(prefixes, coin, "addressPrefixIntegratedTestnet");
-        return prefixes;
-    }
-
-    private static void AddPrefix(ICollection<ulong> prefixes, CoinDescriptor coin, string key)
-    {
-        if(coin.RawExtensionFlags.TryGetValue(key, out var value) &&
-           ulong.TryParse(value, out var prefix) &&
-           !prefixes.Contains(prefix))
-            prefixes.Add(prefix);
     }
 }

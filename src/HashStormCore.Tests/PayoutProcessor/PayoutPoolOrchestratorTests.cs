@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using HashStormCore.PayoutProcessor.Configuration;
@@ -290,6 +292,111 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public async Task DbPayoutPlanningRunnerPassesProfilePlanningPolicyAndIntegratedPrefixesToPlanner()
+    {
+        var connectionFactory = Substitute.For<IConnectionFactory>();
+        var con = Substitute.For<IDbConnection>();
+        var tx = Substitute.For<IDbTransaction>();
+        connectionFactory.OpenConnectionAsync().Returns(Task.FromResult(con));
+        con.BeginTransaction(IsolationLevel.ReadCommitted).Returns(tx);
+
+        const ulong integratedPrefix = 31444;
+        var integratedAddress = CreateCryptoNoteAddress(integratedPrefix, payloadLength: 76);
+        var intentRepo = Substitute.For<IPayoutIntentRepository>();
+        intentRepo.GetReservedBatchesForPlanningAsync(con, tx, "pool-a", 5, Arg.Any<CancellationToken>())
+            .Returns(new[]
+            {
+                new PayoutPlanningBatchCandidate
+                {
+                    BatchId = 42,
+                    PoolId = "pool-a",
+                    Coin = "cryptonote",
+                    CoinFamily = "cryptonote",
+                    Handler = PayoutProfileConstants.AdapterIds.CryptonoteWalletRpc,
+                    SendShape = PayoutProfileConstants.SendShapes.AddressGroup
+                }
+            });
+        intentRepo.GetBatchForUpdateAsync(con, tx, 42, "pool-a", "cryptonote", Arg.Any<CancellationToken>())
+            .Returns(new PayoutBatch
+            {
+                Id = 42,
+                PoolId = "pool-a",
+                Coin = "cryptonote",
+                State = PayoutBatchStates.Reserved,
+                SendShape = PayoutProfileConstants.SendShapes.AddressGroup
+            });
+        intentRepo.GetSendAttemptCountForBatchAsync(con, tx, 42, "pool-a", "cryptonote",
+                Arg.Any<CancellationToken>())
+            .Returns(0);
+        intentRepo.GetReservedIntentsForBatchAsync(con, tx, 42, "pool-a", "cryptonote",
+                Arg.Any<CancellationToken>())
+            .Returns(new[]
+            {
+                new PayoutIntent
+                {
+                    Id = 7,
+                    BatchId = 42,
+                    PoolId = "pool-a",
+                    Coin = "cryptonote",
+                    Address = integratedAddress,
+                    Amount = 1.25m
+                }
+            });
+        CreatePayoutSendAttemptRequest capturedAttempt = null;
+        IReadOnlyCollection<long> capturedIntentIds = null;
+        intentRepo.CreateSendAttemptAsync(con, tx,
+                Arg.Do<CreatePayoutSendAttemptRequest>(x => capturedAttempt = x),
+                Arg.Do<IReadOnlyCollection<long>>(x => capturedIntentIds = x),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var attempt = callInfo.Arg<CreatePayoutSendAttemptRequest>();
+                return Task.FromResult(new PayoutSendAttempt
+                {
+                    Id = 100,
+                    BatchId = attempt.BatchId,
+                    PoolId = attempt.PoolId,
+                    Coin = attempt.Coin,
+                    Method = attempt.Method,
+                    AttemptNo = attempt.AttemptNo,
+                    RecipientCount = attempt.RecipientCount,
+                    AmountSnapshot = attempt.AmountSnapshot
+                });
+            });
+
+        var resolver = Substitute.For<IPayoutProfileResolver>();
+        resolver.Resolve("cryptonote").Returns(PayoutProfileResolution.Resolved(new PayoutProfile
+        {
+            CoinKey = "cryptonote",
+            CoinSymbol = "XMR",
+            CoinFamily = "cryptonote",
+            AdapterId = PayoutProfileConstants.AdapterIds.CryptonoteWalletRpc,
+            SendShape = PayoutProfileConstants.SendShapes.AddressGroup,
+            SendMethod = PayoutProfileConstants.SendMethods.Transfer,
+            AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.CryptonotePaymentIdAware,
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.RawHash,
+            MaxRecipientsPerAttempt = 15,
+            IntegratedAddressPrefixes = new[] { integratedPrefix },
+            ReservationReady = true
+        }));
+        var runner = new DbPayoutPlanningRunner(connectionFactory, intentRepo,
+            new PayoutSendAttemptPlannerService(intentRepo), resolver);
+
+        var result = await runner.CreateSendAttemptsAsync(new PayoutPlanningRunnerRequest
+        {
+            PoolId = "pool-a",
+            MaxBatches = 5,
+            Created = DateTime.UtcNow
+        }, CancellationToken.None);
+
+        Assert.Equal(1, result.PlannedBatchCount);
+        Assert.NotNull(capturedAttempt);
+        Assert.Equal(PayoutProfileConstants.SendMethods.Transfer, capturedAttempt.Method);
+        Assert.Equal(1, capturedAttempt.RecipientCount);
+        Assert.Equal(new[] { 7L }, capturedIntentIds);
+    }
+
+    [Fact]
     public async Task RunReservationTickAsync_DisabledConfigSkipsBeforeProfileResolution()
     {
         var runner = Substitute.For<IPayoutReservationRunner>();
@@ -462,6 +569,86 @@ public class PayoutPoolOrchestratorTests
             SendMethod = PayoutProfileConstants.SendMethods.SendMany,
             SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
             ReservationReady = true
+        };
+    }
+
+    private static string CreateCryptoNoteAddress(ulong prefix, int payloadLength)
+    {
+        var prefixBytes = EncodeVarInt(prefix);
+        var decoded = new byte[prefixBytes.Length + payloadLength];
+        Buffer.BlockCopy(prefixBytes, 0, decoded, 0, prefixBytes.Length);
+
+        for(var i = 0; i < payloadLength; i++)
+            decoded[prefixBytes.Length + i] = (byte) (i + 1);
+
+        return EncodeCryptoNoteBase58(decoded);
+    }
+
+    private static byte[] EncodeVarInt(ulong value)
+    {
+        var bytes = new List<byte>();
+
+        while(value >= 0x80)
+        {
+            bytes.Add((byte) ((value & 0x7f) | 0x80));
+            value >>= 7;
+        }
+
+        bytes.Add((byte) value);
+        return bytes.ToArray();
+    }
+
+    private static string EncodeCryptoNoteBase58(byte[] bytes)
+    {
+        var builder = new StringBuilder();
+        var offset = 0;
+
+        while(bytes.Length - offset >= 8)
+        {
+            builder.Append(EncodeCryptoNoteBase58Block(bytes.AsSpan(offset, 8), encodedSize: 11));
+            offset += 8;
+        }
+
+        var remaining = bytes.Length - offset;
+        if(remaining > 0)
+            builder.Append(EncodeCryptoNoteBase58Block(bytes.AsSpan(offset, remaining), EncodedBlockSize(remaining)));
+
+        return builder.ToString();
+    }
+
+    private static string EncodeCryptoNoteBase58Block(ReadOnlySpan<byte> bytes, int encodedSize)
+    {
+        const string alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        ulong value = 0;
+
+        foreach(var b in bytes)
+            value = (value << 8) | b;
+
+        var chars = new char[encodedSize];
+        Array.Fill(chars, alphabet[0]);
+
+        for(var i = encodedSize - 1; i >= 0 && value > 0; i--)
+        {
+            chars[i] = alphabet[(int) (value % 58)];
+            value /= 58;
+        }
+
+        return new string(chars);
+    }
+
+    private static int EncodedBlockSize(int decodedSize)
+    {
+        return decodedSize switch
+        {
+            1 => 2,
+            2 => 3,
+            3 => 5,
+            4 => 6,
+            5 => 7,
+            6 => 9,
+            7 => 10,
+            8 => 11,
+            _ => throw new ArgumentOutOfRangeException(nameof(decodedSize))
         };
     }
 }

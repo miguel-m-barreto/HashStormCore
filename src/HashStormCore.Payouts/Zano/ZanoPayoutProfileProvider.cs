@@ -15,16 +15,24 @@ public class ZanoPayoutProfileProvider : IPayoutProfileProvider
         var profile = PayoutProfileProviderHelpers.WithCommon(coin,
             PayoutProfileConstants.AdapterIds.ZanoWalletRpc,
             PayoutProfileConstants.SendShapes.AddressGroup,
-            PayoutProfileConstants.SendMethods.TransferSplit,
+            PayoutProfileConstants.SendMethods.Transfer,
             PayoutProfileConstants.SettlementEvidenceKinds.RawHash) with
         {
+            AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware,
             AllowsBatchMultiRecipient = true,
             MaxRecipientsPerAttempt = 256,
             MayReturnMultipleTransactionHashes = true,
-            RequiresPerIntentEvidenceMapping = true,
+            RequiresSingleEvidencePerAttempt = true,
+            MultiHashEvidencePolicy = PayoutProfileConstants.MultiHashEvidencePolicies.Unsupported,
             RequiresWalletDaemon = true,
-            ReservationReady = false,
-            NotReadyReason = "Zano transfer_split can return multiple transaction hashes; per-intent evidence mapping must be explicit before reservation is enabled"
+            ReservationReady = true,
+            IntegratedAddressPrefixes = PayoutProfileProviderHelpers.ReadPrefixes(coin,
+                "addressPrefixIntegrated",
+                "addressPrefixIntegratedTestnet",
+                "addressV2PrefixIntegrated",
+                "addressV2PrefixIntegratedTestnet",
+                "auditableAddressIntegratedPrefix",
+                "auditableAddressIntegratedPrefixTestnet")
         };
 
         return PayoutProfileResolution.Resolved(profile);

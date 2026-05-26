@@ -53,14 +53,36 @@ public class PayoutProfileResolver : IPayoutProfileResolver
 
         if(resolution.HasProfile &&
            resolution.Profile.ReservationReady &&
-           string.Equals(resolution.Profile.AttemptPlanningPolicy,
-               PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware, StringComparison.Ordinal) &&
+           IsPaymentIdAwarePolicy(resolution.Profile.AttemptPlanningPolicy) &&
            resolution.Profile.IntegratedAddressPrefixes.Count == 0)
         {
             return PayoutProfileResolution.NotReady(resolution.Profile,
-                "Conceal payment-id-aware planning requires integrated address prefix metadata");
+                $"{resolution.Profile.AttemptPlanningPolicy} planning requires integrated address prefix metadata");
+        }
+
+        if(resolution.HasProfile &&
+           resolution.Profile.ReservationReady &&
+           resolution.Profile.MayReturnMultipleTransactionHashes &&
+           (!resolution.Profile.RequiresSingleEvidencePerAttempt ||
+            !string.Equals(resolution.Profile.MultiHashEvidencePolicy,
+                PayoutProfileConstants.MultiHashEvidencePolicies.Unsupported, StringComparison.Ordinal)))
+        {
+            return PayoutProfileResolution.NotReady(resolution.Profile,
+                $"Multi-hash profile requires RequiresSingleEvidencePerAttempt=true and " +
+                $"MultiHashEvidencePolicy={PayoutProfileConstants.MultiHashEvidencePolicies.Unsupported} " +
+                $"before reservation is enabled; transfer_split multi-hash is not supported for attempt-level settlement");
         }
 
         return resolution;
+    }
+
+    private static bool IsPaymentIdAwarePolicy(string policy)
+    {
+        return string.Equals(policy, PayoutProfileConstants.PlanningPolicies.ConcealPaymentIdAware,
+                   StringComparison.Ordinal) ||
+               string.Equals(policy, PayoutProfileConstants.PlanningPolicies.CryptonotePaymentIdAware,
+                   StringComparison.Ordinal) ||
+               string.Equals(policy, PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware,
+                   StringComparison.Ordinal);
     }
 }

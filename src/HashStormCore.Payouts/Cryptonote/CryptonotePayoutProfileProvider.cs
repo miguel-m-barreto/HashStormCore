@@ -15,16 +15,21 @@ public class CryptonotePayoutProfileProvider : IPayoutProfileProvider
         var profile = PayoutProfileProviderHelpers.WithCommon(coin,
             PayoutProfileConstants.AdapterIds.CryptonoteWalletRpc,
             PayoutProfileConstants.SendShapes.AddressGroup,
-            PayoutProfileConstants.SendMethods.TransferSplit,
+            PayoutProfileConstants.SendMethods.Transfer,
             PayoutProfileConstants.SettlementEvidenceKinds.RawHash) with
         {
+            AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.CryptonotePaymentIdAware,
             AllowsBatchMultiRecipient = true,
             MaxRecipientsPerAttempt = 15,
             MayReturnMultipleTransactionHashes = true,
-            RequiresPerIntentEvidenceMapping = true,
+            RequiresSingleEvidencePerAttempt = true,
+            MultiHashEvidencePolicy = PayoutProfileConstants.MultiHashEvidencePolicies.Unsupported,
             RequiresWalletDaemon = true,
-            ReservationReady = false,
-            NotReadyReason = "Cryptonote transfer_split can return multiple transaction hashes; per-intent evidence mapping must be explicit before reservation is enabled"
+            ReservationReady = true,
+            IntegratedAddressPrefixes = PayoutProfileProviderHelpers.ReadPrefixes(coin,
+                "addressPrefixIntegrated",
+                "addressPrefixIntegratedTestnet",
+                "addressPrefixIntegratedStagenet")
         };
 
         return PayoutProfileResolution.Resolved(profile);

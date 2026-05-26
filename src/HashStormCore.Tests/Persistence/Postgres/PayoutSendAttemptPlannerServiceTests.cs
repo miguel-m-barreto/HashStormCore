@@ -248,6 +248,128 @@ public class PayoutSendAttemptPlannerServiceTests : PostgresIntegrationTestBase
     }
 
     [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_CryptonotePolicySplitsPaymentIdAndIntegratedIntents()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            const ulong integratedPrefix = 19;
+            var paymentId = new string('b', 64);
+            var standardAddress = CreateCryptoNoteAddress(integratedPrefix, payloadLength: 68);
+            var integratedAddress = CreateCryptoNoteAddress(integratedPrefix, payloadLength: 76);
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_cn_policy"),
+                PayoutSendShapes.AddressGroup,
+                ("addr-a", 1m), ("addr-b.bad", 2m), (standardAddress, 3m),
+                ($"addr-c.{paymentId}", 4m), (integratedAddress, 5m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt: 15) with
+                {
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.CryptonotePaymentIdAware,
+                    IntegratedAddressPrefixes = new[] { integratedPrefix }
+                }, Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(new[] { 3, 1, 1 }, result.Attempts.Select(x => x.RecipientCount).ToArray());
+            Assert.Equal(new[] { "addr-a", "addr-b.bad", standardAddress }.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { $"addr-c.{paymentId}" },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+            Assert.Equal(new[] { integratedAddress },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(2).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_ZanoPolicySplitsPaymentIdAndIntegratedIntents()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            const ulong integratedPrefix = 13944;
+            var paymentId = new string('c', 64);
+            var standardAddress = CreateCryptoNoteAddress(integratedPrefix, payloadLength: 68);
+            var integratedAddress = CreateCryptoNoteAddress(integratedPrefix, payloadLength: 76);
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_zano_policy"),
+                PayoutSendShapes.AddressGroup,
+                ("addr-a", 1m), ("addr-b.bad", 2m), (standardAddress, 3m),
+                ($"addr-c.{paymentId}", 4m), (integratedAddress, 5m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt: 256) with
+                {
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware,
+                    IntegratedAddressPrefixes = new[] { integratedPrefix }
+                }, Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(new[] { 3, 1, 1 }, result.Attempts.Select(x => x.RecipientCount).ToArray());
+            Assert.Equal(new[] { "addr-a", "addr-b.bad", standardAddress }.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { $"addr-c.{paymentId}" },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+            Assert.Equal(new[] { integratedAddress },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(2).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_ZanoPolicyClassifiesAddressV2IntegratedPrefixByPayloadLength()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            const ulong v2IntegratedPrefix = 14072;
+            var integratedAddress = CreateCryptoNoteAddress(v2IntegratedPrefix, payloadLength: 76);
+            var standardLengthAddress = CreateCryptoNoteAddress(v2IntegratedPrefix, payloadLength: 68);
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_zano_v2_integrated"),
+                PayoutSendShapes.AddressGroup,
+                ("addr-a", 1m), (integratedAddress, 2m), (standardLengthAddress, 3m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt: 256) with
+                {
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware,
+                    IntegratedAddressPrefixes = new[] { 13944ul, v2IntegratedPrefix, 35401ul }
+                }, Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(new[] { 2, 1 }, result.Attempts.Select(x => x.RecipientCount).ToArray());
+            Assert.Equal(
+                new[] { "addr-a", standardLengthAddress }.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { integratedAddress },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task CreateSendAttemptsAsync_ZanoPolicyClassifiesAuditableIntegratedPrefixByPayloadLength()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            const ulong auditableIntegratedPrefix = 35401;
+            var integratedAddress = CreateCryptoNoteAddress(auditableIntegratedPrefix, payloadLength: 76);
+            var standardLengthAddress = CreateCryptoNoteAddress(auditableIntegratedPrefix, payloadLength: 68);
+            var batch = await CreateBatchAsync(con, tx, NewPoolId("planner_zano_auditable_integrated"),
+                PayoutSendShapes.AddressGroup,
+                ("addr-a", 1m), (integratedAddress, 2m), (standardLengthAddress, 3m));
+
+            var result = await service.CreateSendAttemptsAsync(con, tx,
+                NewRequest(batch, PayoutSendShapes.AddressGroup, maxRecipientsPerAttempt: 256) with
+                {
+                    AttemptPlanningPolicy = PayoutProfileConstants.PlanningPolicies.ZanoPaymentIdAware,
+                    IntegratedAddressPrefixes = new[] { 13944ul, 14072ul, auditableIntegratedPrefix }
+                }, Ct);
+
+            Assert.Equal(PayoutSendAttemptPlanningStatus.Created, result.Status);
+            Assert.Equal(new[] { 2, 1 }, result.Attempts.Select(x => x.RecipientCount).ToArray());
+            Assert.Equal(
+                new[] { "addr-a", standardLengthAddress }.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(0).Id));
+            Assert.Equal(new[] { integratedAddress },
+                await GetAttemptAddressesAsync(con, tx, result.Attempts.ElementAt(1).Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
     public Task CreateSendAttemptsAsync_ExistingAttemptsReturnNoOp()
     {
         return WithRollbackAsync(async (con, tx) =>
