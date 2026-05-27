@@ -6,14 +6,22 @@ namespace HashStormCore.PayoutProcessor.Configuration;
 
 public record BitcoinRpcPayoutSenderRegistrationPlan
 {
-    public int ConfigIndex { get; init; }
-    public string PoolId { get; init; } = string.Empty;
-    public string Coin { get; init; } = string.Empty;
     public PayoutAttemptSenderKey Key { get; init; }
     public string CoinFamily { get; init; } = string.Empty;
     public string AdapterId { get; init; } = string.Empty;
     public string SendShape { get; init; } = string.Empty;
     public string SendMethod { get; init; } = string.Empty;
+    public IReadOnlyCollection<BitcoinRpcPayoutSenderRoutePlan> Routes { get; init; } =
+        Array.Empty<BitcoinRpcPayoutSenderRoutePlan>();
+}
+
+public record BitcoinRpcPayoutSenderRoutePlan
+{
+    public int ConfigIndex { get; init; }
+    public string PoolId { get; init; } = string.Empty;
+    public string Coin { get; init; } = string.Empty;
+    public bool AllowSendMany { get; init; }
+    public bool AllowSendToAddress { get; init; }
     public string SafeSummary { get; init; } = string.Empty;
 }
 
@@ -52,8 +60,7 @@ public static class BitcoinRpcPayoutSenderRegistrationPlanner
             return new BitcoinRpcPayoutSenderRegistrationPlanResult(
                 Array.Empty<BitcoinRpcPayoutSenderRegistrationPlan>(), errors);
 
-        var plans = new List<BitcoinRpcPayoutSenderRegistrationPlan>();
-        var plannedKeys = new Dictionary<PayoutAttemptSenderKey, int>();
+        var planBuilders = new Dictionary<PayoutAttemptSenderKey, BitcoinRpcPayoutSenderRegistrationPlanBuilder>();
 
         for(var i = 0; i < configArray.Length; i++)
         {
@@ -92,25 +99,19 @@ public static class BitcoinRpcPayoutSenderRegistrationPlanner
                 SendMethod = profile.SendMethod
             };
 
-            if(plannedKeys.TryGetValue(key, out var firstIndex))
+            if(!planBuilders.TryGetValue(key, out var builder))
             {
-                errors.Add(Error(i, config.PoolId, config.Coin,
-                    "bitcoin_rpc_adapter_duplicate_registry_key",
-                    $"Enabled Bitcoin RPC adapter config resolves to a registry key already planned by entry {firstIndex}"));
-                continue;
+                builder = new BitcoinRpcPayoutSenderRegistrationPlanBuilder(key, profile);
+                planBuilders.Add(key, builder);
             }
 
-            plannedKeys.Add(key, i);
-            plans.Add(new BitcoinRpcPayoutSenderRegistrationPlan
+            builder.Routes.Add(new BitcoinRpcPayoutSenderRoutePlan
             {
                 ConfigIndex = i,
                 PoolId = config.PoolId,
                 Coin = config.Coin,
-                Key = key,
-                CoinFamily = profile.CoinFamily,
-                AdapterId = profile.AdapterId,
-                SendShape = profile.SendShape,
-                SendMethod = profile.SendMethod,
+                AllowSendMany = config.AllowSendMany,
+                AllowSendToAddress = config.AllowSendToAddress,
                 SafeSummary = config.ToSafeSummary()
             });
         }
@@ -119,6 +120,7 @@ public static class BitcoinRpcPayoutSenderRegistrationPlanner
             return new BitcoinRpcPayoutSenderRegistrationPlanResult(
                 Array.Empty<BitcoinRpcPayoutSenderRegistrationPlan>(), errors);
 
+        var plans = planBuilders.Values.Select(x => x.ToPlan()).ToArray();
         return new BitcoinRpcPayoutSenderRegistrationPlanResult(plans, Array.Empty<BitcoinRpcPayoutSenderRegistrationPlanError>());
     }
 
@@ -208,19 +210,82 @@ public static class BitcoinRpcPayoutSenderRegistrationFactory
 {
     public static IReadOnlyCollection<PayoutAttemptSenderRegistration> CreateRegistrations(
         IEnumerable<BitcoinRpcPayoutSenderRegistrationPlan> plans,
-        IBitcoinPayoutRpcClient rpcClient)
+        IReadOnlyDictionary<BitcoinPayoutRpcRouteKey, IBitcoinPayoutRpcClient> routeClients)
     {
         if(plans == null)
             throw new ArgumentNullException(nameof(plans));
 
-        if(rpcClient == null)
-            throw new ArgumentNullException(nameof(rpcClient));
+        if(routeClients == null)
+            throw new ArgumentNullException(nameof(routeClients));
 
         return plans.Select(x => new PayoutAttemptSenderRegistration
             {
                 Key = x.Key,
-                Sender = new BitcoinRpcPayoutSender(rpcClient)
+                Sender = new BitcoinRpcPayoutSender(new BitcoinPayoutRpcRoutingClient(CreateRouteRegistrations(x,
+                    routeClients)))
             })
             .ToArray();
+    }
+
+    private static IReadOnlyCollection<BitcoinPayoutRpcRouteRegistration> CreateRouteRegistrations(
+        BitcoinRpcPayoutSenderRegistrationPlan plan,
+        IReadOnlyDictionary<BitcoinPayoutRpcRouteKey, IBitcoinPayoutRpcClient> routeClients)
+    {
+        if(plan == null)
+            throw new ArgumentNullException(nameof(plan));
+
+        return plan.Routes.Select(route =>
+            {
+                var routeKey = new BitcoinPayoutRpcRouteKey
+                {
+                    PoolId = route.PoolId,
+                    Coin = route.Coin
+                };
+
+                if(!routeClients.TryGetValue(routeKey, out var client))
+                    throw new InvalidOperationException("Bitcoin RPC route client is missing for a planned route");
+
+                return new BitcoinPayoutRpcRouteRegistration
+                {
+                    RouteKey = routeKey,
+                    Client = client,
+                    AllowSendMany = route.AllowSendMany,
+                    AllowSendToAddress = route.AllowSendToAddress,
+                    SafeSummary = route.SafeSummary
+                };
+            })
+            .ToArray();
+    }
+}
+
+internal sealed class BitcoinRpcPayoutSenderRegistrationPlanBuilder
+{
+    public BitcoinRpcPayoutSenderRegistrationPlanBuilder(PayoutAttemptSenderKey key, PayoutProfile profile)
+    {
+        Key = key;
+        CoinFamily = profile.CoinFamily;
+        AdapterId = profile.AdapterId;
+        SendShape = profile.SendShape;
+        SendMethod = profile.SendMethod;
+    }
+
+    public PayoutAttemptSenderKey Key { get; }
+    public string CoinFamily { get; }
+    public string AdapterId { get; }
+    public string SendShape { get; }
+    public string SendMethod { get; }
+    public List<BitcoinRpcPayoutSenderRoutePlan> Routes { get; } = new();
+
+    public BitcoinRpcPayoutSenderRegistrationPlan ToPlan()
+    {
+        return new BitcoinRpcPayoutSenderRegistrationPlan
+        {
+            Key = Key,
+            CoinFamily = CoinFamily,
+            AdapterId = AdapterId,
+            SendShape = SendShape,
+            SendMethod = SendMethod,
+            Routes = Routes.ToArray()
+        };
     }
 }

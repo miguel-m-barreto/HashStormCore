@@ -35,14 +35,16 @@ public class PayoutProductionAdapterSafetyTests
     }
 
     [Fact]
-    public void PayoutsAssemblyContainsNoProductionBitcoinRpcClientImplementations()
+    public void PayoutsAssemblyContainsOnlyKnownUnregisteredBitcoinRpcClientImplementations()
     {
         var implementations = typeof(IBitcoinPayoutRpcClient).Assembly.GetTypes()
             .Where(x => !x.IsAbstract && !x.IsInterface)
             .Where(x => typeof(IBitcoinPayoutRpcClient).IsAssignableFrom(x))
+            .Select(x => x.FullName)
+            .OrderBy(x => x, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Empty(implementations);
+        Assert.Equal(new[] { typeof(BitcoinPayoutRpcRoutingClient).FullName }, implementations);
     }
 
     [Fact]

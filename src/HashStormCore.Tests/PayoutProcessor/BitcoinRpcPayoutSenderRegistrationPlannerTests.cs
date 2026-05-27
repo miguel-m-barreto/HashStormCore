@@ -38,8 +38,6 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
 
         Assert.True(result.IsValid);
         var plan = Assert.Single(result.Plans);
-        Assert.Equal("pool-a", plan.PoolId);
-        Assert.Equal("bitcoin", plan.Coin);
         Assert.Equal(PayoutProfileConstants.Families.Bitcoin, plan.CoinFamily);
         Assert.Equal(PayoutProfileConstants.AdapterIds.BitcoinRpc, plan.AdapterId);
         Assert.Equal(PayoutProfileConstants.SendShapes.BatchMultiRecipient, plan.SendShape);
@@ -48,6 +46,11 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
         Assert.Equal(PayoutProfileConstants.AdapterIds.BitcoinRpc, plan.Key.AdapterId);
         Assert.Equal(PayoutProfileConstants.SendShapes.BatchMultiRecipient, plan.Key.SendShape);
         Assert.Equal(PayoutProfileConstants.SendMethods.SendMany, plan.Key.SendMethod);
+        var route = Assert.Single(plan.Routes);
+        Assert.Equal("pool-a", route.PoolId);
+        Assert.Equal("bitcoin", route.Coin);
+        Assert.True(route.AllowSendMany);
+        Assert.True(route.AllowSendToAddress);
     }
 
     [Fact]
@@ -166,7 +169,7 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
     }
 
     [Fact]
-    public void CreatePlans_DuplicatePlannedRegistryKeyFailsClosed()
+    public void CreatePlans_MultipleRoutesWithSameRegistryKeyAreGrouped()
     {
         var first = EnabledConfig(poolId: "pool-a", coin: "bitcoin");
         var second = EnabledConfig(poolId: "pool-b", coin: "bitcoin");
@@ -174,9 +177,14 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
         var result = BitcoinRpcPayoutSenderRegistrationPlanner.CreatePlans(
             new[] { first, second }, Resolver(("bitcoin", BitcoinSendManyProfile())));
 
-        Assert.False(result.IsValid);
-        Assert.Empty(result.Plans);
-        Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_duplicate_registry_key");
+        Assert.True(result.IsValid);
+        var plan = Assert.Single(result.Plans);
+        Assert.Equal(PayoutProfileConstants.AdapterIds.BitcoinRpc, plan.Key.AdapterId);
+        Assert.Equal(PayoutProfileConstants.SendShapes.BatchMultiRecipient, plan.Key.SendShape);
+        Assert.Equal(PayoutProfileConstants.SendMethods.SendMany, plan.Key.SendMethod);
+        Assert.Equal(2, plan.Routes.Count);
+        Assert.Contains(plan.Routes, x => x.PoolId == "pool-a" && x.Coin == "bitcoin");
+        Assert.Contains(plan.Routes, x => x.PoolId == "pool-b" && x.Coin == "bitcoin");
     }
 
     [Fact]
@@ -195,15 +203,16 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
 
         Assert.True(result.IsValid);
         var plan = Assert.Single(result.Plans);
-        Assert.DoesNotContain(password, plan.SafeSummary, StringComparison.Ordinal);
-        Assert.DoesNotContain(username, plan.SafeSummary, StringComparison.Ordinal);
-        Assert.DoesNotContain(endpoint, plan.SafeSummary, StringComparison.Ordinal);
-        Assert.DoesNotContain("127.0.0.1", plan.SafeSummary, StringComparison.Ordinal);
-        Assert.DoesNotContain("userinfo", plan.SafeSummary, StringComparison.OrdinalIgnoreCase);
+        var route = Assert.Single(plan.Routes);
+        Assert.DoesNotContain(password, route.SafeSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain(username, route.SafeSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain(endpoint, route.SafeSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain("127.0.0.1", route.SafeSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain("userinfo", route.SafeSummary, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task CreateRegistrations_UsesInjectedClientAndPlanKey()
+    public async Task CreateRegistrations_CreatesOneRegistrationPerGroupedPlanAndRoutesByPool()
     {
         var plan = new BitcoinRpcPayoutSenderRegistrationPlan
         {
@@ -213,20 +222,82 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
                 AdapterId = PayoutProfileConstants.AdapterIds.BitcoinRpc,
                 SendShape = PayoutProfileConstants.SendShapes.BatchMultiRecipient,
                 SendMethod = PayoutProfileConstants.SendMethods.SendMany
+            },
+            Routes = new[]
+            {
+                RoutePlan("pool-a", "bitcoin"),
+                RoutePlan("pool-b", "bitcoin")
             }
         };
-        var client = new FakeBitcoinPayoutRpcClient();
+        var poolAClient = new FakeBitcoinPayoutRpcClient();
+        var poolBClient = new FakeBitcoinPayoutRpcClient();
+        var routeClients = new Dictionary<BitcoinPayoutRpcRouteKey, IBitcoinPayoutRpcClient>
+        {
+            [RouteKey("pool-a", "bitcoin")] = poolAClient,
+            [RouteKey("pool-b", "bitcoin")] = poolBClient
+        };
 
-        var registrations = BitcoinRpcPayoutSenderRegistrationFactory.CreateRegistrations(new[] { plan }, client);
+        var registrations = BitcoinRpcPayoutSenderRegistrationFactory.CreateRegistrations(new[] { plan }, routeClients);
 
         var registration = Assert.Single(registrations);
         Assert.Equal(plan.Key, registration.Key);
         var sender = Assert.IsType<BitcoinRpcPayoutSender>(registration.Sender);
 
-        var result = await sender.SendAsync(SendManyContext(), CancellationToken.None);
+        var result = await sender.SendAsync(SendManyContext("pool-b", "bitcoin"), CancellationToken.None);
 
         Assert.Equal(PayoutAttemptSendStatus.Accepted, result.Status);
-        Assert.Equal(1, client.SendManyCallCount);
+        Assert.Equal(0, poolAClient.SendManyCallCount);
+        Assert.Equal(1, poolBClient.SendManyCallCount);
+    }
+
+    [Fact]
+    public void CreateRegistrations_MissingRouteClientFails()
+    {
+        var plan = new BitcoinRpcPayoutSenderRegistrationPlan
+        {
+            Key = new PayoutAttemptSenderKey
+            {
+                CoinFamily = PayoutProfileConstants.Families.Bitcoin,
+                AdapterId = PayoutProfileConstants.AdapterIds.BitcoinRpc,
+                SendShape = PayoutProfileConstants.SendShapes.BatchMultiRecipient,
+                SendMethod = PayoutProfileConstants.SendMethods.SendMany
+            },
+            Routes = new[]
+            {
+                RoutePlan("pool-a", "bitcoin")
+            }
+        };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            BitcoinRpcPayoutSenderRegistrationFactory.CreateRegistrations(new[] { plan },
+                new Dictionary<BitcoinPayoutRpcRouteKey, IBitcoinPayoutRpcClient>()));
+    }
+
+    [Fact]
+    public void CreateRegistrations_DuplicatePlannedRoutesFail()
+    {
+        var plan = new BitcoinRpcPayoutSenderRegistrationPlan
+        {
+            Key = new PayoutAttemptSenderKey
+            {
+                CoinFamily = PayoutProfileConstants.Families.Bitcoin,
+                AdapterId = PayoutProfileConstants.AdapterIds.BitcoinRpc,
+                SendShape = PayoutProfileConstants.SendShapes.BatchMultiRecipient,
+                SendMethod = PayoutProfileConstants.SendMethods.SendMany
+            },
+            Routes = new[]
+            {
+                RoutePlan("pool-a", "bitcoin"),
+                RoutePlan("pool-a", "bitcoin")
+            }
+        };
+        var routeClients = new Dictionary<BitcoinPayoutRpcRouteKey, IBitcoinPayoutRpcClient>
+        {
+            [RouteKey("pool-a", "bitcoin")] = new FakeBitcoinPayoutRpcClient()
+        };
+
+        Assert.Throws<ArgumentException>(() =>
+            BitcoinRpcPayoutSenderRegistrationFactory.CreateRegistrations(new[] { plan }, routeClients));
     }
 
     private static PayoutProcessorBitcoinRpcAdapterConfig EnabledConfig(
@@ -281,15 +352,36 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
         return new TestProfileResolver(profiles);
     }
 
-    private static PayoutSendExecutionContext SendManyContext()
+    private static BitcoinRpcPayoutSenderRoutePlan RoutePlan(string poolId, string coin)
+    {
+        return new BitcoinRpcPayoutSenderRoutePlan
+        {
+            PoolId = poolId,
+            Coin = coin,
+            AllowSendMany = true,
+            AllowSendToAddress = true,
+            SafeSummary = "EndpointSet=True; UsernameSet=True"
+        };
+    }
+
+    private static BitcoinPayoutRpcRouteKey RouteKey(string poolId, string coin)
+    {
+        return new BitcoinPayoutRpcRouteKey
+        {
+            PoolId = poolId,
+            Coin = coin
+        };
+    }
+
+    private static PayoutSendExecutionContext SendManyContext(string poolId, string coin)
     {
         return new PayoutSendExecutionContext
         {
             Batch = new PayoutBatch
             {
                 Id = 10,
-                PoolId = "pool-a",
-                Coin = "bitcoin",
+                PoolId = poolId,
+                Coin = coin,
                 Handler = PayoutProfileConstants.AdapterIds.BitcoinRpc,
                 SendShape = PayoutProfileConstants.SendShapes.BatchMultiRecipient
             },
@@ -297,8 +389,8 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
             {
                 Id = 20,
                 BatchId = 10,
-                PoolId = "pool-a",
-                Coin = "bitcoin",
+                PoolId = poolId,
+                Coin = coin,
                 Method = PayoutProfileConstants.SendMethods.SendMany
             },
             Intents = new[]
@@ -307,8 +399,8 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
                 {
                     IntentId = 30,
                     AttemptId = 20,
-                    PoolId = "pool-a",
-                    Coin = "bitcoin",
+                    PoolId = poolId,
+                    Coin = coin,
                     Address = "addr-a",
                     Amount = 1m,
                     IntentState = PayoutIntentStates.Reserved,
