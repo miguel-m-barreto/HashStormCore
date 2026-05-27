@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using HashStormCore.Payments;
+using HashStormCore.Payouts.Bitcoin;
 using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence.Model;
 using Xunit;
@@ -10,14 +11,16 @@ namespace HashStormCore.Tests.Payouts;
 public class PayoutProductionAdapterSafetyTests
 {
     [Fact]
-    public void PayoutsAssemblyContainsNoProductionAttemptSenderImplementations()
+    public void PayoutsAssemblyContainsOnlyKnownUnregisteredAttemptSenderImplementations()
     {
         var implementations = typeof(IPayoutAttemptSender).Assembly.GetTypes()
             .Where(x => !x.IsAbstract && !x.IsInterface)
             .Where(x => typeof(IPayoutAttemptSender).IsAssignableFrom(x))
+            .Select(x => x.FullName)
+            .OrderBy(x => x, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Empty(implementations);
+        Assert.Equal(new[] { typeof(BitcoinRpcPayoutSender).FullName }, implementations);
     }
 
     [Fact]
@@ -36,10 +39,10 @@ public class PayoutProductionAdapterSafetyTests
     {
         var profile = new PayoutProfile
         {
-            CoinFamily = "test-family",
-            AdapterId = "test-adapter",
-            SendShape = PayoutSendShapes.BatchMultiRecipient,
-            SendMethod = "test-method",
+            CoinFamily = PayoutProfileConstants.Families.Bitcoin,
+            AdapterId = PayoutProfileConstants.AdapterIds.BitcoinRpc,
+            SendShape = PayoutProfileConstants.SendShapes.BatchMultiRecipient,
+            SendMethod = PayoutProfileConstants.SendMethods.SendMany,
             ReservationReady = true
         };
         var senderRegistry = new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>());
