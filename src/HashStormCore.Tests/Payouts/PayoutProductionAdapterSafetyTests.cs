@@ -35,6 +35,17 @@ public class PayoutProductionAdapterSafetyTests
     }
 
     [Fact]
+    public void PayoutsAssemblyContainsNoProductionBitcoinRpcClientImplementations()
+    {
+        var implementations = typeof(IBitcoinPayoutRpcClient).Assembly.GetTypes()
+            .Where(x => !x.IsAbstract && !x.IsInterface)
+            .Where(x => typeof(IBitcoinPayoutRpcClient).IsAssignableFrom(x))
+            .ToArray();
+
+        Assert.Empty(implementations);
+    }
+
+    [Fact]
     public void EmptyProductionStyleRegistriesDoNotResolveReadyProfiles()
     {
         var profile = new PayoutProfile

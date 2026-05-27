@@ -4,12 +4,22 @@ namespace HashStormCore.Payouts.Bitcoin;
 
 public record BitcoinPayoutSendManyRequest
 {
+    public string PoolId { get; init; } = string.Empty;
+    public string Coin { get; init; } = string.Empty;
+    public long BatchId { get; init; }
+    public long AttemptId { get; init; }
+    public string Method { get; init; } = string.Empty;
     public IReadOnlyDictionary<string, decimal> Recipients { get; init; } =
         new ReadOnlyDictionary<string, decimal>(new Dictionary<string, decimal>());
 }
 
 public record BitcoinPayoutSendToAddressRequest
 {
+    public string PoolId { get; init; } = string.Empty;
+    public string Coin { get; init; } = string.Empty;
+    public long BatchId { get; init; }
+    public long AttemptId { get; init; }
+    public string Method { get; init; } = string.Empty;
     public string Address { get; init; } = string.Empty;
     public decimal Amount { get; init; }
 }

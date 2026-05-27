@@ -32,7 +32,7 @@ public class BitcoinRpcPayoutSender : IPayoutAttemptSender
             return contextValidation;
 
         if(IsSendManyContext(context))
-            return MapRpcResult(await rpcClient.SendManyAsync(CreateSendManyRequest(context.Intents), ct));
+            return MapRpcResult(await rpcClient.SendManyAsync(CreateSendManyRequest(context), ct));
 
         if(IsSendToAddressContext(context))
         {
@@ -40,7 +40,7 @@ public class BitcoinRpcPayoutSender : IPayoutAttemptSender
                 return PayoutAttemptSendResult.FailedPreAccept(InvalidRecipientErrorCode,
                     "Bitcoin sendtoaddress requires exactly one payout recipient");
 
-            return MapRpcResult(await rpcClient.SendToAddressAsync(CreateSendToAddressRequest(context.Intents), ct));
+            return MapRpcResult(await rpcClient.SendToAddressAsync(CreateSendToAddressRequest(context), ct));
         }
 
         return PayoutAttemptSendResult.FailedPreAccept(UnsupportedShapeErrorCode,
@@ -57,13 +57,30 @@ public class BitcoinRpcPayoutSender : IPayoutAttemptSender
             return PayoutAttemptSendResult.FailedPreAccept(UnsupportedShapeErrorCode,
                 "Bitcoin RPC sender requires bitcoin-rpc batch handler");
 
+        if(!MatchingNonEmptyValues(context.Batch.PoolId, context.Attempt.PoolId) ||
+           !MatchingNonEmptyValues(context.Batch.Coin, context.Attempt.Coin))
+            return PayoutAttemptSendResult.FailedPreAccept(InvalidContextErrorCode,
+                "Bitcoin RPC sender requires matching batch and attempt routing context");
+
         if(context.Intents.Count == 0)
             return PayoutAttemptSendResult.FailedPreAccept(InvalidRecipientErrorCode,
                 "Bitcoin RPC sender requires at least one payout recipient");
 
         foreach(var intent in context.Intents)
         {
-            if(intent == null || string.IsNullOrWhiteSpace(intent.Address))
+            if(intent == null)
+                return PayoutAttemptSendResult.FailedPreAccept(InvalidContextErrorCode,
+                    "Bitcoin RPC sender requires non-null payout intent context");
+
+            if(!string.Equals(intent.PoolId, context.Attempt.PoolId, StringComparison.Ordinal) ||
+               !string.Equals(intent.Coin, context.Attempt.Coin, StringComparison.Ordinal) ||
+               intent.AttemptId != context.Attempt.Id ||
+               !IsCompatibleIntentState(intent.IntentState) ||
+               !string.Equals(intent.AttemptIntentState, PayoutAttemptIntentStates.Active, StringComparison.Ordinal))
+                return PayoutAttemptSendResult.FailedPreAccept(InvalidContextErrorCode,
+                    "Bitcoin RPC sender requires active executable intents matching the attempt routing context");
+
+            if(string.IsNullOrWhiteSpace(intent.Address))
                 return PayoutAttemptSendResult.FailedPreAccept(InvalidRecipientErrorCode,
                     "Bitcoin RPC sender requires non-empty payout recipient addresses");
 
@@ -73,6 +90,19 @@ public class BitcoinRpcPayoutSender : IPayoutAttemptSender
         }
 
         return null;
+    }
+
+    private static bool MatchingNonEmptyValues(string left, string right)
+    {
+        return !string.IsNullOrWhiteSpace(left) &&
+               !string.IsNullOrWhiteSpace(right) &&
+               string.Equals(left, right, StringComparison.Ordinal);
+    }
+
+    private static bool IsCompatibleIntentState(string state)
+    {
+        return string.Equals(state, PayoutIntentStates.Reserved, StringComparison.Ordinal) ||
+               string.Equals(state, PayoutIntentStates.Sending, StringComparison.Ordinal);
     }
 
     private static bool IsSendManyContext(PayoutSendExecutionContext context)
@@ -91,25 +121,33 @@ public class BitcoinRpcPayoutSender : IPayoutAttemptSender
                    StringComparison.Ordinal);
     }
 
-    private static BitcoinPayoutSendManyRequest CreateSendManyRequest(
-        IReadOnlyCollection<PayoutSendExecutionIntent> intents)
+    private static BitcoinPayoutSendManyRequest CreateSendManyRequest(PayoutSendExecutionContext context)
     {
-        var recipients = intents
+        var recipients = context.Intents
             .GroupBy(x => x.Address, StringComparer.Ordinal)
             .ToDictionary(x => x.Key, x => x.Sum(y => y.Amount), StringComparer.Ordinal);
 
         return new BitcoinPayoutSendManyRequest
         {
+            PoolId = context.Attempt.PoolId,
+            Coin = context.Attempt.Coin,
+            BatchId = context.Attempt.BatchId,
+            AttemptId = context.Attempt.Id,
+            Method = context.Attempt.Method,
             Recipients = new ReadOnlyDictionary<string, decimal>(recipients)
         };
     }
 
-    private static BitcoinPayoutSendToAddressRequest CreateSendToAddressRequest(
-        IReadOnlyCollection<PayoutSendExecutionIntent> intents)
+    private static BitcoinPayoutSendToAddressRequest CreateSendToAddressRequest(PayoutSendExecutionContext context)
     {
-        var intent = intents.Single();
+        var intent = context.Intents.Single();
         return new BitcoinPayoutSendToAddressRequest
         {
+            PoolId = context.Attempt.PoolId,
+            Coin = context.Attempt.Coin,
+            BatchId = context.Attempt.BatchId,
+            AttemptId = context.Attempt.Id,
+            Method = context.Attempt.Method,
             Address = intent.Address,
             Amount = intent.Amount
         };

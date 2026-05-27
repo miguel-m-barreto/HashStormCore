@@ -63,6 +63,11 @@ public class BitcoinRpcPayoutSenderTests
         Assert.Equal(PayoutAttemptSendStatus.Accepted, result.Status);
         Assert.Equal(1, client.SendManyCallCount);
         Assert.Equal(0, client.SendToAddressCallCount);
+        Assert.Equal("pool-a", client.LastSendManyRequest.PoolId);
+        Assert.Equal("bitcoin", client.LastSendManyRequest.Coin);
+        Assert.Equal(10, client.LastSendManyRequest.BatchId);
+        Assert.Equal(20, client.LastSendManyRequest.AttemptId);
+        Assert.Equal(PayoutProfileConstants.SendMethods.SendMany, client.LastSendManyRequest.Method);
         Assert.Equal(2, client.LastSendManyRequest.Recipients.Count);
         Assert.Equal(1m, client.LastSendManyRequest.Recipients["addr-a"]);
         Assert.Equal(2m, client.LastSendManyRequest.Recipients["addr-b"]);
@@ -212,6 +217,88 @@ public class BitcoinRpcPayoutSenderTests
     }
 
     [Fact]
+    public async Task SendAsync_PoolIdMismatchFailsPreAcceptWithoutClientCall()
+    {
+        var client = new FakeBitcoinPayoutRpcClient();
+        var sender = new BitcoinRpcPayoutSender(client);
+
+        var batchMismatch = await sender.SendAsync(SendManyContext(Intent("addr-a", 1m)) with
+        {
+            Batch = Batch(PayoutProfileConstants.SendShapes.BatchMultiRecipient) with { PoolId = "pool-b" }
+        }, CancellationToken.None);
+        var intentMismatch = await sender.SendAsync(SendManyContext(Intent("addr-a", 1m) with
+        {
+            PoolId = "pool-b"
+        }), CancellationToken.None);
+
+        Assert.Equal(PayoutAttemptSendStatus.FailedPreAccept, batchMismatch.Status);
+        Assert.Equal(PayoutAttemptSendStatus.FailedPreAccept, intentMismatch.Status);
+        Assert.Equal(BitcoinRpcPayoutSender.InvalidContextErrorCode, batchMismatch.ErrorCode);
+        Assert.Equal(BitcoinRpcPayoutSender.InvalidContextErrorCode, intentMismatch.ErrorCode);
+        Assert.Equal(0, client.TotalCallCount);
+    }
+
+    [Fact]
+    public async Task SendAsync_CoinMismatchFailsPreAcceptWithoutClientCall()
+    {
+        var client = new FakeBitcoinPayoutRpcClient();
+        var sender = new BitcoinRpcPayoutSender(client);
+
+        var batchMismatch = await sender.SendAsync(SendManyContext(Intent("addr-a", 1m)) with
+        {
+            Batch = Batch(PayoutProfileConstants.SendShapes.BatchMultiRecipient) with { Coin = "litecoin" }
+        }, CancellationToken.None);
+        var intentMismatch = await sender.SendAsync(SendManyContext(Intent("addr-a", 1m) with
+        {
+            Coin = "litecoin"
+        }), CancellationToken.None);
+
+        Assert.Equal(PayoutAttemptSendStatus.FailedPreAccept, batchMismatch.Status);
+        Assert.Equal(PayoutAttemptSendStatus.FailedPreAccept, intentMismatch.Status);
+        Assert.Equal(BitcoinRpcPayoutSender.InvalidContextErrorCode, batchMismatch.ErrorCode);
+        Assert.Equal(BitcoinRpcPayoutSender.InvalidContextErrorCode, intentMismatch.ErrorCode);
+        Assert.Equal(0, client.TotalCallCount);
+    }
+
+    [Fact]
+    public async Task SendAsync_AttemptIdMismatchFailsPreAcceptWithoutClientCall()
+    {
+        var client = new FakeBitcoinPayoutRpcClient();
+        var sender = new BitcoinRpcPayoutSender(client);
+
+        var result = await sender.SendAsync(SendManyContext(Intent("addr-a", 1m) with
+        {
+            AttemptId = 21
+        }), CancellationToken.None);
+
+        Assert.Equal(PayoutAttemptSendStatus.FailedPreAccept, result.Status);
+        Assert.Equal(BitcoinRpcPayoutSender.InvalidContextErrorCode, result.ErrorCode);
+        Assert.Equal(0, client.TotalCallCount);
+    }
+
+    [Fact]
+    public async Task SendAsync_IncompatibleIntentStateFailsPreAcceptWithoutClientCall()
+    {
+        var client = new FakeBitcoinPayoutRpcClient();
+        var sender = new BitcoinRpcPayoutSender(client);
+
+        var settledIntent = await sender.SendAsync(SendManyContext(Intent("addr-a", 1m) with
+        {
+            IntentState = PayoutIntentStates.Settled
+        }), CancellationToken.None);
+        var supersededMapping = await sender.SendAsync(SendManyContext(Intent("addr-a", 1m) with
+        {
+            AttemptIntentState = PayoutAttemptIntentStates.Superseded
+        }), CancellationToken.None);
+
+        Assert.Equal(PayoutAttemptSendStatus.FailedPreAccept, settledIntent.Status);
+        Assert.Equal(PayoutAttemptSendStatus.FailedPreAccept, supersededMapping.Status);
+        Assert.Equal(BitcoinRpcPayoutSender.InvalidContextErrorCode, settledIntent.ErrorCode);
+        Assert.Equal(BitcoinRpcPayoutSender.InvalidContextErrorCode, supersededMapping.ErrorCode);
+        Assert.Equal(0, client.TotalCallCount);
+    }
+
+    [Fact]
     public async Task SendAsync_SendToAddressValidPerAddressCallsClientOnce()
     {
         var client = new FakeBitcoinPayoutRpcClient
@@ -225,6 +312,11 @@ public class BitcoinRpcPayoutSenderTests
         Assert.Equal(PayoutAttemptSendStatus.Accepted, result.Status);
         Assert.Equal(0, client.SendManyCallCount);
         Assert.Equal(1, client.SendToAddressCallCount);
+        Assert.Equal("pool-a", client.LastSendToAddressRequest.PoolId);
+        Assert.Equal("bitcoin", client.LastSendToAddressRequest.Coin);
+        Assert.Equal(10, client.LastSendToAddressRequest.BatchId);
+        Assert.Equal(20, client.LastSendToAddressRequest.AttemptId);
+        Assert.Equal(PayoutProfileConstants.SendMethods.SendToAddress, client.LastSendToAddressRequest.Method);
         Assert.Equal("addr-a", client.LastSendToAddressRequest.Address);
         Assert.Equal(1.5m, client.LastSendToAddressRequest.Amount);
     }
