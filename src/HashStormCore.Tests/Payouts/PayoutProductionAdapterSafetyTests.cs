@@ -44,7 +44,22 @@ public class PayoutProductionAdapterSafetyTests
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(new[] { typeof(BitcoinPayoutRpcRoutingClient).FullName }, implementations);
+        Assert.Equal(new[]
+        {
+            typeof(BitcoinJsonRpcPayoutClient).FullName,
+            typeof(BitcoinPayoutRpcRoutingClient).FullName
+        }.OrderBy(x => x, StringComparer.Ordinal).ToArray(), implementations);
+    }
+
+    [Fact]
+    public void PayoutsAssemblyContainsNoProductionBitcoinJsonRpcTransportImplementations()
+    {
+        var implementations = typeof(IBitcoinJsonRpcTransport).Assembly.GetTypes()
+            .Where(x => !x.IsAbstract && !x.IsInterface)
+            .Where(x => typeof(IBitcoinJsonRpcTransport).IsAssignableFrom(x))
+            .ToArray();
+
+        Assert.Empty(implementations);
     }
 
     [Fact]
