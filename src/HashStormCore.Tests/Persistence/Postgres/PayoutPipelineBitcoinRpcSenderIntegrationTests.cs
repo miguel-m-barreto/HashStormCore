@@ -211,6 +211,186 @@ public class PayoutPipelineBitcoinRpcSenderIntegrationTests : PostgresCommittedI
         });
     }
 
+    [PostgresIntegrationFact]
+    public Task BitcoinRpcHttp500EmptyBodyMarksAmbiguousAndDoesNotSettleOrDebit()
+    {
+        return RunAmbiguousFailureCaseAsync("bitcoin_rpc_pipeline_500_empty",
+            new FakeBitcoinRpcHttpHandler(string.Empty, HttpStatusCode.InternalServerError),
+            PayoutSendExecutionStatus.AmbiguousRequiresReview,
+            "bitcoin_jsonrpc_invalid_response",
+            "could not be safely interpreted");
+    }
+
+    [PostgresIntegrationFact]
+    public Task BitcoinRpcInvalidJsonMarksAmbiguousAndDoesNotSettleOrDebit()
+    {
+        return RunAmbiguousFailureCaseAsync("bitcoin_rpc_pipeline_invalid_json",
+            new FakeBitcoinRpcHttpHandler("not-json"),
+            PayoutSendExecutionStatus.AmbiguousRequiresReview,
+            "bitcoin_jsonrpc_invalid_response",
+            "could not be safely interpreted");
+    }
+
+    [PostgresIntegrationFact]
+    public Task BitcoinRpcNullResultMarksAmbiguousAndDoesNotSettleOrDebit()
+    {
+        return RunAmbiguousFailureCaseAsync("bitcoin_rpc_pipeline_null_result",
+            new FakeBitcoinRpcHttpHandler("{\"result\":null,\"error\":null,\"id\":\"1\"}"),
+            PayoutSendExecutionStatus.AmbiguousRequiresReview,
+            "bitcoin_jsonrpc_invalid_response",
+            "could not be safely interpreted");
+    }
+
+    [PostgresIntegrationFact]
+    public Task BitcoinRpcMissingResultMarksAmbiguousAndDoesNotSettleOrDebit()
+    {
+        return RunAmbiguousFailureCaseAsync("bitcoin_rpc_pipeline_missing_result",
+            new FakeBitcoinRpcHttpHandler("{\"error\":null,\"id\":\"1\"}"),
+            PayoutSendExecutionStatus.AmbiguousRequiresReview,
+            "bitcoin_jsonrpc_invalid_response",
+            "could not be safely interpreted");
+    }
+
+    [PostgresIntegrationFact]
+    public Task BitcoinRpcNonStringResultMarksAmbiguousAndDoesNotSettleOrDebit()
+    {
+        return RunAmbiguousFailureCaseAsync("bitcoin_rpc_pipeline_object_result",
+            new FakeBitcoinRpcHttpHandler("{\"result\":{\"txid\":\"abc\"},\"error\":null,\"id\":\"1\"}"),
+            PayoutSendExecutionStatus.AmbiguousRequiresReview,
+            "bitcoin_jsonrpc_invalid_response",
+            "could not be safely interpreted");
+    }
+
+    [PostgresIntegrationFact]
+    public Task BitcoinRpcTransportExceptionMarksAmbiguousAndDoesNotSettleOrDebit()
+    {
+        return RunAmbiguousFailureCaseAsync("bitcoin_rpc_pipeline_transport_exception",
+            new FakeBitcoinRpcHttpHandler(new HttpRequestException("transport failed SECRET_ENDPOINT_TOKEN")),
+            PayoutSendExecutionStatus.SenderFailedAmbiguous,
+            "sender_exception_ambiguous",
+            nameof(HttpRequestException));
+    }
+
+    [PostgresIntegrationFact]
+    public Task BitcoinRpcTransportTaskCanceledMarksAmbiguousAndDoesNotSettleOrDebit()
+    {
+        return RunAmbiguousFailureCaseAsync("bitcoin_rpc_pipeline_task_canceled",
+            new FakeBitcoinRpcHttpHandler(new TaskCanceledException("timeout SECRET_ENDPOINT_TOKEN")),
+            PayoutSendExecutionStatus.SenderFailedAmbiguous,
+            "sender_exception_ambiguous",
+            nameof(TaskCanceledException));
+    }
+
+    private Task RunAmbiguousFailureCaseAsync(
+        string poolPrefix,
+        FakeBitcoinRpcHttpHandler httpHandler,
+        PayoutSendExecutionStatus expectedExecutionStatus,
+        string expectedErrorCode,
+        string expectedErrorMessageToken)
+    {
+        var poolId = NewCommittedPoolId(poolPrefix);
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            const string endpoint = "http://SECRET_ENDPOINT_TOKEN.invalid:18443";
+            const string username = "SECRET_USERNAME_TOKEN";
+            const string password = "SECRET_PASSWORD_TOKEN";
+            const string walletName = "SECRET_WALLET_TOKEN";
+            var now = UtcNow();
+            var pipeline = NewPipeline(poolId, httpHandler, endpoint, username, password, walletName);
+            await InsertBalanceAsync(con, poolId, "addr-one", 3m, now.AddSeconds(-2));
+            await InsertBalanceAsync(con, poolId, "addr-two", 4m, now.AddSeconds(-1));
+            var balanceBefore = await SumBalancesAsync(con, poolId);
+
+            await pipeline.ReservationRunner.CreateReservationAsync(new CreatePayoutReservationRequest
+            {
+                PoolId = poolId,
+                Coin = Coin,
+                CoinFamily = PayoutProfileConstants.Families.Bitcoin,
+                Handler = PayoutProfileConstants.AdapterIds.BitcoinRpc,
+                SendShape = PayoutProfileConstants.SendShapes.BatchMultiRecipient,
+                MinimumPayment = 1m,
+                MaxCandidates = 10,
+                Created = now
+            }, Ct);
+
+            await pipeline.PlanningRunner.CreateSendAttemptsAsync(new PayoutPlanningRunnerRequest
+            {
+                PoolId = poolId,
+                MaxBatches = 10,
+                Created = now.AddSeconds(1)
+            }, Ct);
+
+            var execution = await pipeline.ExecutionRunner.ExecutePreparedAttemptsAsync(new PayoutExecutionRunnerRequest
+            {
+                PoolId = poolId,
+                MaxAttempts = 10,
+                Started = now.AddSeconds(2)
+            }, Ct);
+
+            var stale = await pipeline.StaleRunner.ReconcileStaleSendingAsync(
+                NewStaleRequest(poolId, now.AddMinutes(-30), now.AddSeconds(3)), Ct);
+
+            var operationId = await pipeline.OperationIdRunner.ReconcileOperationIdsAsync(
+                new PayoutOperationIdReconciliationRunnerRequest
+                {
+                    PoolId = poolId,
+                    Limit = 10,
+                    CheckedAt = now.AddSeconds(4)
+                }, Ct);
+
+            var settlement = await pipeline.SettlementRunner.SettleAcceptedAttemptsAsync(
+                new PayoutSettlementRunnerRequest
+                {
+                    PoolId = poolId,
+                    Limit = 10,
+                    SettledAt = now.AddSeconds(5)
+                }, Ct);
+
+            var executionResult = Assert.Single(execution.ExecutionResults);
+            Assert.Equal(1, execution.CandidateAttemptCount);
+            Assert.Equal(1, execution.ExecutedAttemptCount);
+            Assert.Equal(0, execution.SkippedAttemptCount);
+            Assert.Equal(0, execution.FailureCount);
+            Assert.Equal(expectedExecutionStatus, executionResult.Status);
+            Assert.Equal(expectedErrorCode, executionResult.ErrorCode);
+            Assert.Contains(expectedErrorMessageToken, executionResult.ErrorMessage, StringComparison.Ordinal);
+            Assert.Equal(1, httpHandler.CallCount);
+
+            Assert.Equal(0, stale.CandidateBatchCount);
+            Assert.Empty(stale.MarkedBatchIds);
+            Assert.Equal(0, operationId.CandidateCount);
+            Assert.Equal(0, operationId.EvidenceAttachedCount);
+            Assert.Equal(0, settlement.CandidateCount);
+            Assert.Equal(0, settlement.SettledCount);
+
+            Assert.Equal(0, await CountAttemptsInStateAsync(con, poolId, PayoutSendAttemptStates.Prepared));
+            Assert.Equal(0, await CountAttemptsInStateAsync(con, poolId, PayoutSendAttemptStates.Sending));
+            Assert.Equal(0, await CountAttemptsInStateAsync(con, poolId, PayoutSendAttemptStates.Accepted));
+            Assert.Equal(1, await CountAttemptsInStateAsync(con, poolId,
+                PayoutSendAttemptStates.AmbiguousRequiresReview));
+            Assert.Equal(0, await CountAttemptsInStateAsync(con, poolId, PayoutSendAttemptStates.FailedPreAccept));
+            Assert.Equal(0, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId));
+            Assert.Equal(0, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.RawHash));
+            Assert.Equal(0, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.OperationId));
+            Assert.Equal(0, await CountPoolRowsAsync(con, "payments", poolId));
+            Assert.Equal(0, await CountNegativeBalanceChangesAsync(con, poolId));
+            Assert.Equal(balanceBefore, await SumBalancesAsync(con, poolId));
+            Assert.Equal(0, await CountIntentsInStateAsync(con, poolId, PayoutIntentStates.Settled));
+
+            var errorCode = await GetOnlyAttemptErrorCodeAsync(con, poolId);
+            var errorMessage = await GetOnlyAttemptErrorMessageAsync(con, poolId);
+            Assert.Equal(expectedErrorCode, errorCode);
+            Assert.Contains(expectedErrorMessageToken, errorMessage, StringComparison.Ordinal);
+            AssertDoesNotLeak(errorCode, endpoint, username, password, walletName, "Authorization", "Basic",
+                "userinfo", "SECRET_ENDPOINT_TOKEN", "SECRET_USERNAME_TOKEN", "SECRET_PASSWORD_TOKEN",
+                "SECRET_WALLET_TOKEN");
+            AssertDoesNotLeak(errorMessage, endpoint, username, password, walletName, "Authorization", "Basic",
+                "userinfo", "SECRET_ENDPOINT_TOKEN", "SECRET_USERNAME_TOKEN", "SECRET_PASSWORD_TOKEN",
+                "SECRET_WALLET_TOKEN");
+        });
+    }
+
     private Pipeline NewPipeline(
         string poolId,
         FakeBitcoinRpcHttpHandler httpHandler,
@@ -449,12 +629,20 @@ public class PayoutPipelineBitcoinRpcSenderIntegrationTests : PostgresCommittedI
 
     private sealed class FakeBitcoinRpcHttpHandler : HttpMessageHandler
     {
-        public FakeBitcoinRpcHttpHandler(string responseBody)
+        public FakeBitcoinRpcHttpHandler(string responseBody, HttpStatusCode statusCode = HttpStatusCode.OK)
         {
             this.responseBody = responseBody;
+            this.statusCode = statusCode;
         }
 
-        private readonly string responseBody;
+        public FakeBitcoinRpcHttpHandler(Exception exception)
+        {
+            this.exception = exception;
+        }
+
+        private readonly string responseBody = string.Empty;
+        private readonly HttpStatusCode statusCode = HttpStatusCode.OK;
+        private readonly Exception exception;
         public int CallCount { get; private set; }
         public HttpMethod LastMethod { get; private set; }
         public string LastRequestBody { get; private set; } = string.Empty;
@@ -468,7 +656,10 @@ public class PayoutPipelineBitcoinRpcSenderIntegrationTests : PostgresCommittedI
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken);
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            if(exception != null)
+                throw exception;
+
+            return new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(responseBody)
             };
