@@ -165,24 +165,28 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
     }
 
     [Fact]
-    public void ToSafeSummaryDoesNotIncludePasswordUsernameOrEndpointUserInfoCredentials()
+    public void ToSafeSummaryDoesNotIncludePasswordUsernameEndpointOrWalletName()
     {
         const string username = "rpc-user";
         const string secret = "SUPER_SECRET_PASSWORD";
         const string endpoint = "http://rpc-user:SUPER_SECRET_PASSWORD@127.0.0.1:18443";
+        const string walletName = "secret-wallet";
         var config = EnabledConfig();
         config.Username = username;
         config.Password = secret;
         config.Endpoint = endpoint;
+        config.WalletName = walletName;
 
         var summary = config.ToSafeSummary();
 
         Assert.DoesNotContain(secret, summary, StringComparison.Ordinal);
         Assert.DoesNotContain(username, summary, StringComparison.Ordinal);
         Assert.DoesNotContain(endpoint, summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(walletName, summary, StringComparison.Ordinal);
         Assert.DoesNotContain("127.0.0.1", summary, StringComparison.Ordinal);
         Assert.Contains("UsernameSet=True", summary, StringComparison.Ordinal);
         Assert.Contains("EndpointSet=True", summary, StringComparison.Ordinal);
+        Assert.Contains("WalletNameSet=True", summary, StringComparison.Ordinal);
     }
 
     private static PayoutProcessorBitcoinRpcAdapterConfig EnabledConfig()

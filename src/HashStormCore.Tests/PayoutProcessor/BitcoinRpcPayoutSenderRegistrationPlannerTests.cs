@@ -193,10 +193,12 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
         const string username = "rpc-user";
         const string password = "SUPER_SECRET_PASSWORD";
         const string endpoint = "http://127.0.0.1:18443";
+        const string walletName = "secret-wallet";
         var config = EnabledConfig();
         config.Username = username;
         config.Password = password;
         config.Endpoint = endpoint;
+        config.WalletName = walletName;
 
         var result = BitcoinRpcPayoutSenderRegistrationPlanner.CreatePlans(
             new[] { config }, Resolver(("bitcoin", BitcoinSendManyProfile())));
@@ -207,8 +209,10 @@ public class BitcoinRpcPayoutSenderRegistrationPlannerTests
         Assert.DoesNotContain(password, route.SafeSummary, StringComparison.Ordinal);
         Assert.DoesNotContain(username, route.SafeSummary, StringComparison.Ordinal);
         Assert.DoesNotContain(endpoint, route.SafeSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain(walletName, route.SafeSummary, StringComparison.Ordinal);
         Assert.DoesNotContain("127.0.0.1", route.SafeSummary, StringComparison.Ordinal);
         Assert.DoesNotContain("userinfo", route.SafeSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("WalletNameSet=True", route.SafeSummary, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -245,12 +245,16 @@ public class BitcoinJsonRpcHttpTransportTests
     [Fact]
     public void RequestSafeSummaryDoesNotExposeSecrets()
     {
-        var request = Request().WithEndpoint("http://rpc-user:SUPER_SECRET_PASSWORD@127.0.0.1:18443");
+        const string walletName = "secret-wallet";
+        var request = Request()
+            .WithEndpoint("http://rpc-user:SUPER_SECRET_PASSWORD@127.0.0.1:18443")
+            .WithWalletName(walletName);
 
         var summary = request.ToSafeSummary();
 
-        AssertDoesNotLeak(summary, "rpc-user", "rpc-password", "SUPER_SECRET_PASSWORD",
+        AssertDoesNotLeak(summary, "rpc-user", "rpc-password", "SUPER_SECRET_PASSWORD", walletName,
             "http://rpc-user:SUPER_SECRET_PASSWORD@127.0.0.1:18443", "Authorization");
+        Assert.Contains("WalletNameSet=True", summary, StringComparison.Ordinal);
     }
 
     [Fact]

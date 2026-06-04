@@ -63,15 +63,24 @@ public class BitcoinJsonRpcPayoutClientTests
         const string endpoint = "http://127.0.0.1:18443";
         const string username = "rpc-user";
         const string password = "SUPER_SECRET_PASSWORD";
-        var options = Options(endpoint, username, password);
+        const string walletName = "secret-wallet";
+        var options = new BitcoinJsonRpcRouteOptions
+        {
+            Endpoint = endpoint,
+            Username = username,
+            Password = password,
+            WalletName = walletName
+        };
 
         var summary = options.ToString();
 
         Assert.DoesNotContain(endpoint, summary, StringComparison.Ordinal);
         Assert.DoesNotContain(username, summary, StringComparison.Ordinal);
         Assert.DoesNotContain(password, summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(walletName, summary, StringComparison.Ordinal);
         Assert.Contains("EndpointSet=True", summary, StringComparison.Ordinal);
         Assert.Contains("UsernameSet=True", summary, StringComparison.Ordinal);
+        Assert.Contains("WalletNameSet=True", summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -325,8 +334,10 @@ public class BitcoinJsonRpcPayoutClientTests
         Assert.DoesNotContain(endpoint, requestSummary, StringComparison.Ordinal);
         Assert.DoesNotContain(username, requestSummary, StringComparison.Ordinal);
         Assert.DoesNotContain(password, requestSummary, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-wallet", requestSummary, StringComparison.Ordinal);
         Assert.DoesNotContain(transport.LastRequest.ParamsJson, requestSummary, StringComparison.Ordinal);
         Assert.Contains("EndpointSet=True", requestSummary, StringComparison.Ordinal);
+        Assert.Contains("WalletNameSet=False", requestSummary, StringComparison.Ordinal);
 
         var responseSummary = transport.Response.ToString();
         Assert.DoesNotContain(transport.Response.Body, responseSummary, StringComparison.Ordinal);

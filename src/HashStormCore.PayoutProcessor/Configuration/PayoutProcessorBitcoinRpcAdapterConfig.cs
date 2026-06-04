@@ -16,7 +16,7 @@ public class PayoutProcessorBitcoinRpcAdapterConfig
     public string ToSafeSummary()
     {
         return
-            $"Enabled={Enabled}; PoolId={PoolId}; Coin={Coin}; EndpointSet={!string.IsNullOrWhiteSpace(Endpoint)}; WalletName={WalletName}; UsernameSet={!string.IsNullOrWhiteSpace(Username)}; RequestTimeoutSeconds={RequestTimeoutSeconds}; AllowSendMany={AllowSendMany}; AllowSendToAddress={AllowSendToAddress}";
+            $"Enabled={Enabled}; PoolId={PoolId}; Coin={Coin}; EndpointSet={!string.IsNullOrWhiteSpace(Endpoint)}; WalletNameSet={!string.IsNullOrWhiteSpace(WalletName)}; UsernameSet={!string.IsNullOrWhiteSpace(Username)}; RequestTimeoutSeconds={RequestTimeoutSeconds}; AllowSendMany={AllowSendMany}; AllowSendToAddress={AllowSendToAddress}";
     }
 }
 

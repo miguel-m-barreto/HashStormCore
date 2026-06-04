@@ -19,7 +19,7 @@ public class BitcoinJsonRpcRouteOptions
     public string ToSafeSummary()
     {
         return
-            $"EndpointSet={!string.IsNullOrWhiteSpace(Endpoint)}; UsernameSet={!string.IsNullOrWhiteSpace(Username)}; WalletName={WalletName}; RequestTimeoutSeconds={RequestTimeoutSeconds}";
+            $"EndpointSet={!string.IsNullOrWhiteSpace(Endpoint)}; UsernameSet={!string.IsNullOrWhiteSpace(Username)}; WalletNameSet={!string.IsNullOrWhiteSpace(WalletName)}; RequestTimeoutSeconds={RequestTimeoutSeconds}";
     }
 
     public override string ToString()
@@ -42,7 +42,7 @@ public class BitcoinJsonRpcTransportRequest
     public string ToSafeSummary()
     {
         return
-            $"EndpointSet={!string.IsNullOrWhiteSpace(Endpoint)}; UsernameSet={!string.IsNullOrWhiteSpace(Username)}; WalletName={WalletName}; Method={Method}; ParamsSet={!string.IsNullOrWhiteSpace(ParamsJson)}; RequestId={RequestId}; RequestTimeoutSeconds={RequestTimeoutSeconds}";
+            $"EndpointSet={!string.IsNullOrWhiteSpace(Endpoint)}; UsernameSet={!string.IsNullOrWhiteSpace(Username)}; WalletNameSet={!string.IsNullOrWhiteSpace(WalletName)}; Method={Method}; ParamsSet={!string.IsNullOrWhiteSpace(ParamsJson)}; RequestId={RequestId}; RequestTimeoutSeconds={RequestTimeoutSeconds}";
     }
 
     public override string ToString()
