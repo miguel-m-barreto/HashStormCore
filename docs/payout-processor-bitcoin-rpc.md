@@ -46,6 +46,21 @@ http://rpc-user:secret@127.0.0.1:8332
 
 Use separate `username` and `password` fields. Startup diagnostics, validation errors, and safe summaries redact endpoint, username, password, raw wallet name, authorization headers, and JSON-RPC payloads. Prefer environment variables or a secrets manager for real deployments.
 
+`walletPassphrase` is also a secret. It is only represented as `WalletPassphraseSet=true/false` in safe summaries and errors. Do not place wallet credentials or passphrases in endpoint URI userinfo.
+
+## Wallet Unlock
+
+Wallet unlock is optional. Leave `walletPassphrase` empty for wallets that are already unlocked or do not require an unlock for sends.
+
+When Bitcoin Core returns wallet locked error code `-13`:
+
+- without `walletPassphrase`, the send attempt is marked failed before accept with `bitcoin_wallet_locked`
+- with `walletPassphrase`, the client calls `walletpassphrase`, retries the original send exactly once, then calls `walletlock` when `lockWalletAfterSend=true`
+- ambiguous unlock failures do not retry the send, settle, create payments, or debit balances
+- repeated wallet locked responses after the retry do not loop
+
+`walletUnlockSeconds` is required when `walletPassphrase` is set and is capped by sidecar validation. `lockWalletAfterSend` defaults to `true`.
+
 ## Minimal Disabled Example
 
 `configs/payout-processor.example.json` is safe by default. The Bitcoin RPC entry is disabled and `fakeAdaptersOnly` remains `true`.
@@ -64,6 +79,9 @@ Use separate `username` and `password` fields. Startup diagnostics, validation e
       "username": "bitcoin-rpc-user",
       "password": "change-me",
       "walletName": "optional-wallet-name",
+      "walletPassphrase": "change-me-wallet-passphrase",
+      "walletUnlockSeconds": 60,
+      "lockWalletAfterSend": true,
       "requestTimeoutSeconds": 30,
       "allowSendMany": true,
       "allowSendToAddress": true
@@ -90,6 +108,9 @@ Only use this after validating pool configuration, wallet routing, and operation
       "username": "bitcoin-rpc-user",
       "password": "change-me",
       "walletName": "optional-wallet-name",
+      "walletPassphrase": "change-me-wallet-passphrase",
+      "walletUnlockSeconds": 60,
+      "lockWalletAfterSend": true,
       "requestTimeoutSeconds": 30,
       "allowSendMany": true,
       "allowSendToAddress": true
@@ -114,8 +135,7 @@ The matching Pool Core pool must be enabled and must use intent payment processi
 
 ## Explicit Limitations
 
-- No wallet unlock/passphrase flow is implemented.
-- No subtract-fee or miners-pay-fees mode is implemented.
+- The new Bitcoin RPC sender does not implement legacy subtract-fee/miners-pay-fees policy. Enabling that behavior requires a separate accounting-aware patch. Current settlement assumes the payment amount equals the planned payout intent amount.
 - Startup does not perform a real daemon health check.
 - Bitcoin RPC does not use operation-id reconciliation.
 - HTTP and transport failures become ambiguous review states and do not settle or debit balances.

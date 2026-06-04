@@ -145,11 +145,14 @@ public class BitcoinRpcPayoutSenderRegistryBuilderTests
         const string username = "rpc-user";
         const string password = "rpc-password";
         const string walletName = "wallet-a";
+        const string walletPassphrase = "SUPER_SECRET_WALLET_PASSPHRASE";
         var config = EnabledSidecarConfig();
         config.BitcoinRpcAdapters[0].Endpoint = endpoint;
         config.BitcoinRpcAdapters[0].Username = username;
         config.BitcoinRpcAdapters[0].Password = password;
         config.BitcoinRpcAdapters[0].WalletName = walletName;
+        config.BitcoinRpcAdapters[0].WalletPassphrase = walletPassphrase;
+        config.BitcoinRpcAdapters[0].WalletUnlockSeconds = 60;
 
         var result = BuildWithReport(config);
 
@@ -162,8 +165,10 @@ public class BitcoinRpcPayoutSenderRegistryBuilderTests
         var route = Assert.Single(result.Report.Routes);
         Assert.Equal("pool-a", route.PoolId);
         Assert.Equal("bitcoin", route.Coin);
-        AssertDoesNotLeak(result.Report.ToSafeSummary(), endpoint, username, password, walletName, "127.0.0.1");
-        AssertDoesNotLeak(route.ToSafeSummary(), endpoint, username, password, walletName, "127.0.0.1");
+        AssertDoesNotLeak(result.Report.ToSafeSummary(), endpoint, username, password, walletName, walletPassphrase,
+            "127.0.0.1");
+        AssertDoesNotLeak(route.ToSafeSummary(), endpoint, username, password, walletName, walletPassphrase,
+            "127.0.0.1");
     }
 
     [Fact]
@@ -346,16 +351,19 @@ public class BitcoinRpcPayoutSenderRegistryBuilderTests
         const string username = "rpc-user";
         const string password = "SUPER_SECRET_PASSWORD";
         const string walletName = "secret-wallet";
+        const string walletPassphrase = "SUPER_SECRET_WALLET_PASSPHRASE";
         var config = EnabledSidecarConfig();
         config.BitcoinRpcAdapters[0].Endpoint = endpoint;
         config.BitcoinRpcAdapters[0].Username = username;
         config.BitcoinRpcAdapters[0].Password = password;
         config.BitcoinRpcAdapters[0].WalletName = walletName;
+        config.BitcoinRpcAdapters[0].WalletPassphrase = walletPassphrase;
+        config.BitcoinRpcAdapters[0].WalletUnlockSeconds = 60;
 
         var ex = Assert.Throws<InvalidOperationException>(() => Build(config));
 
         Assert.Contains("bitcoin_rpc_adapter_endpoint_contains_credentials", ex.Message, StringComparison.Ordinal);
-        AssertDoesNotLeak(ex.Message, endpoint, username, password, walletName, "127.0.0.1");
+        AssertDoesNotLeak(ex.Message, endpoint, username, password, walletName, walletPassphrase, "127.0.0.1");
     }
 
     [Fact]

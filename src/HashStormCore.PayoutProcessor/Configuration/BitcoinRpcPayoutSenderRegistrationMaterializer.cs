@@ -148,6 +148,9 @@ public class BitcoinRpcPayoutSenderRegistrationMaterializer
                 Username = config.Username,
                 Password = config.Password,
                 WalletName = config.WalletName,
+                WalletPassphrase = config.WalletPassphrase,
+                WalletUnlockSeconds = config.WalletUnlockSeconds,
+                LockWalletAfterSend = config.LockWalletAfterSend,
                 RequestTimeoutSeconds = config.RequestTimeoutSeconds
             };
 

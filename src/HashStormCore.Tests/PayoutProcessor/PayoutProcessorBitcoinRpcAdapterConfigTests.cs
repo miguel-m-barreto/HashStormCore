@@ -178,6 +178,89 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
     }
 
     [Fact]
+    public void Validate_WalletPassphraseOmittedPasses()
+    {
+        var config = EnabledConfig();
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
+    public void Validate_WalletPassphraseWithUnlockSecondsPasses()
+    {
+        var config = EnabledConfig();
+        config.WalletPassphrase = "SUPER_SECRET_WALLET_PASSPHRASE";
+        config.WalletUnlockSeconds = 60;
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Validate_WalletPassphraseRequiresPositiveUnlockSeconds(int unlockSeconds)
+    {
+        const string passphrase = "SUPER_SECRET_WALLET_PASSPHRASE";
+        var config = EnabledConfig();
+        config.WalletPassphrase = passphrase;
+        config.WalletUnlockSeconds = unlockSeconds;
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors,
+            x => x.Code == "bitcoin_rpc_adapter_wallet_passphrase_requires_unlock_seconds");
+        AssertDoesNotLeakSecret(result, passphrase);
+    }
+
+    [Fact]
+    public void Validate_WalletUnlockSecondsRequiresPassphrase()
+    {
+        var config = EnabledConfig();
+        config.WalletUnlockSeconds = 60;
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_wallet_unlock_requires_passphrase");
+    }
+
+    [Fact]
+    public void Validate_WalletUnlockSecondsTooLargeFails()
+    {
+        const string passphrase = "SUPER_SECRET_WALLET_PASSPHRASE";
+        var config = EnabledConfig();
+        config.WalletPassphrase = passphrase;
+        config.WalletUnlockSeconds = PayoutProcessorBitcoinRpcAdapterConfig.MaxWalletUnlockSeconds + 1;
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_wallet_unlock_seconds_too_large");
+        AssertDoesNotLeakSecret(result, passphrase);
+    }
+
+    [Fact]
+    public void Validate_DisabledInvalidWalletUnlockConfigIsIgnored()
+    {
+        var config = EnabledConfig();
+        config.Enabled = false;
+        config.WalletPassphrase = "SUPER_SECRET_WALLET_PASSPHRASE";
+        config.WalletUnlockSeconds = 0;
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
     public void Validate_EnabledEntryRequiresAtLeastOneAllowedSendMethod()
     {
         var config = EnabledConfig();
@@ -310,6 +393,7 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
     {
         const string username = "rpc-user";
         const string secret = "SUPER_SECRET_PASSWORD";
+        const string walletPassphrase = "SUPER_SECRET_WALLET_PASSPHRASE";
         const string endpoint = "http://rpc-user:SUPER_SECRET_PASSWORD@127.0.0.1:18443";
         const string walletName = "secret-wallet";
         var config = EnabledConfig();
@@ -317,6 +401,8 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         config.Password = secret;
         config.Endpoint = endpoint;
         config.WalletName = walletName;
+        config.WalletPassphrase = walletPassphrase;
+        config.WalletUnlockSeconds = 60;
 
         var summary = config.ToSafeSummary();
 
@@ -324,10 +410,12 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         Assert.DoesNotContain(username, summary, StringComparison.Ordinal);
         Assert.DoesNotContain(endpoint, summary, StringComparison.Ordinal);
         Assert.DoesNotContain(walletName, summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(walletPassphrase, summary, StringComparison.Ordinal);
         Assert.DoesNotContain("127.0.0.1", summary, StringComparison.Ordinal);
         Assert.Contains("UsernameSet=True", summary, StringComparison.Ordinal);
         Assert.Contains("EndpointSet=True", summary, StringComparison.Ordinal);
         Assert.Contains("WalletNameSet=True", summary, StringComparison.Ordinal);
+        Assert.Contains("WalletPassphraseSet=True", summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -364,6 +452,9 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         Assert.True(adapter.AllowSendMany);
         Assert.True(adapter.AllowSendToAddress);
         Assert.Equal(30, adapter.RequestTimeoutSeconds);
+        Assert.Equal(string.Empty, adapter.WalletPassphrase);
+        Assert.Equal(0, adapter.WalletUnlockSeconds);
+        Assert.True(adapter.LockWalletAfterSend);
     }
 
     [Fact]
@@ -373,6 +464,7 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         const string username = "bitcoin-rpc-user";
         const string password = "change-me";
         const string walletName = "optional-wallet-name";
+        const string walletPassphrase = "change-me-wallet-passphrase";
         var config = BindJson("""
             {
               "enabled": true,
@@ -387,6 +479,9 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
                   "username": "bitcoin-rpc-user",
                   "password": "change-me",
                   "walletName": "optional-wallet-name",
+                  "walletPassphrase": "change-me-wallet-passphrase",
+                  "walletUnlockSeconds": 60,
+                  "lockWalletAfterSend": false,
                   "requestTimeoutSeconds": 45,
                   "allowSendMany": true,
                   "allowSendToAddress": false
@@ -401,6 +496,9 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         Assert.Equal(username, adapter.Username);
         Assert.Equal(password, adapter.Password);
         Assert.Equal(walletName, adapter.WalletName);
+        Assert.Equal(walletPassphrase, adapter.WalletPassphrase);
+        Assert.Equal(60, adapter.WalletUnlockSeconds);
+        Assert.False(adapter.LockWalletAfterSend);
         Assert.Equal(45, adapter.RequestTimeoutSeconds);
         Assert.True(adapter.AllowSendMany);
         Assert.False(adapter.AllowSendToAddress);
@@ -410,9 +508,11 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         Assert.DoesNotContain(username, summary, StringComparison.Ordinal);
         Assert.DoesNotContain(password, summary, StringComparison.Ordinal);
         Assert.DoesNotContain(walletName, summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(walletPassphrase, summary, StringComparison.Ordinal);
         Assert.Contains("EndpointSet=True", summary, StringComparison.Ordinal);
         Assert.Contains("UsernameSet=True", summary, StringComparison.Ordinal);
         Assert.Contains("WalletNameSet=True", summary, StringComparison.Ordinal);
+        Assert.Contains("WalletPassphraseSet=True", summary, StringComparison.Ordinal);
     }
 
     [Fact]

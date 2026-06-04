@@ -5,6 +5,8 @@ namespace HashStormCore.PayoutProcessor.Configuration;
 
 public class PayoutProcessorBitcoinRpcAdapterConfig
 {
+    public const int MaxWalletUnlockSeconds = 3600;
+
     public bool Enabled { get; set; } = false;
     public string PoolId { get; set; } = string.Empty;
     public string Coin { get; set; } = string.Empty;
@@ -12,6 +14,9 @@ public class PayoutProcessorBitcoinRpcAdapterConfig
     public string Username { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
     public string WalletName { get; set; } = string.Empty;
+    public string WalletPassphrase { get; set; } = string.Empty;
+    public int WalletUnlockSeconds { get; set; }
+    public bool LockWalletAfterSend { get; set; } = true;
     public int RequestTimeoutSeconds { get; set; } = 30;
     public bool AllowSendMany { get; set; } = true;
     public bool AllowSendToAddress { get; set; } = true;
@@ -19,7 +24,7 @@ public class PayoutProcessorBitcoinRpcAdapterConfig
     public string ToSafeSummary()
     {
         return
-            $"Enabled={Enabled}; PoolId={PoolId}; Coin={Coin}; EndpointSet={!string.IsNullOrWhiteSpace(Endpoint)}; WalletNameSet={!string.IsNullOrWhiteSpace(WalletName)}; UsernameSet={!string.IsNullOrWhiteSpace(Username)}; RequestTimeoutSeconds={RequestTimeoutSeconds}; AllowSendMany={AllowSendMany}; AllowSendToAddress={AllowSendToAddress}";
+            $"Enabled={Enabled}; PoolId={PoolId}; Coin={Coin}; EndpointSet={!string.IsNullOrWhiteSpace(Endpoint)}; WalletNameSet={!string.IsNullOrWhiteSpace(WalletName)}; UsernameSet={!string.IsNullOrWhiteSpace(Username)}; WalletPassphraseSet={!string.IsNullOrEmpty(WalletPassphrase)}; WalletUnlockSeconds={WalletUnlockSeconds}; LockWalletAfterSend={LockWalletAfterSend}; RequestTimeoutSeconds={RequestTimeoutSeconds}; AllowSendMany={AllowSendMany}; AllowSendToAddress={AllowSendToAddress}";
     }
 }
 
@@ -88,6 +93,8 @@ public static class PayoutProcessorBitcoinRpcAdapterValidator
             if(adapter.RequestTimeoutSeconds <= 0)
                 errors.Add(Error(index, adapter.PoolId, adapter.Coin, "bitcoin_rpc_adapter_invalid_timeout",
                     "Enabled Bitcoin RPC adapter config requires RequestTimeoutSeconds greater than zero"));
+
+            ValidateWalletUnlock(errors, index, adapter);
 
             if(!adapter.AllowSendMany && !adapter.AllowSendToAddress)
                 errors.Add(Error(index, adapter.PoolId, adapter.Coin, "bitcoin_rpc_adapter_no_allowed_methods",
@@ -172,6 +179,34 @@ public static class PayoutProcessorBitcoinRpcAdapterValidator
             errors.Add(Error(index, adapter.PoolId, adapter.Coin,
                 "bitcoin_rpc_adapter_endpoint_contains_credentials",
                 "Enabled Bitcoin RPC adapter config endpoint must not include URI userinfo credentials"));
+    }
+
+    private static void ValidateWalletUnlock(
+        ICollection<PayoutProcessorBitcoinRpcAdapterValidationError> errors,
+        int index,
+        PayoutProcessorBitcoinRpcAdapterConfig adapter)
+    {
+        var hasPassphrase = !string.IsNullOrEmpty(adapter.WalletPassphrase);
+        if(hasPassphrase && adapter.WalletUnlockSeconds <= 0)
+        {
+            errors.Add(Error(index, adapter.PoolId, adapter.Coin,
+                "bitcoin_rpc_adapter_wallet_passphrase_requires_unlock_seconds",
+                "Enabled Bitcoin RPC adapter config WalletPassphrase requires WalletUnlockSeconds greater than zero"));
+        }
+
+        if(!hasPassphrase && adapter.WalletUnlockSeconds > 0)
+        {
+            errors.Add(Error(index, adapter.PoolId, adapter.Coin,
+                "bitcoin_rpc_adapter_wallet_unlock_requires_passphrase",
+                "Enabled Bitcoin RPC adapter config WalletUnlockSeconds requires WalletPassphrase"));
+        }
+
+        if(adapter.WalletUnlockSeconds > PayoutProcessorBitcoinRpcAdapterConfig.MaxWalletUnlockSeconds)
+        {
+            errors.Add(Error(index, adapter.PoolId, adapter.Coin,
+                "bitcoin_rpc_adapter_wallet_unlock_seconds_too_large",
+                "Enabled Bitcoin RPC adapter config WalletUnlockSeconds exceeds the maximum allowed duration"));
+        }
     }
 
     private static PayoutProcessorBitcoinRpcAdapterValidationError Error(

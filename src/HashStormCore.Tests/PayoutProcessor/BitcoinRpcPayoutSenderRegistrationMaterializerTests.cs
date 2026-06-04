@@ -147,6 +147,36 @@ public class BitcoinRpcPayoutSenderRegistrationMaterializerTests
     }
 
     [Fact]
+    public async Task Materialize_RouteOptionsReceiveWalletUnlockConfigForExactPoolAndCoin()
+    {
+        const string passphrase = "SUPER_SECRET_WALLET_PASSPHRASE";
+        var config = EnabledConfig();
+        config.WalletPassphrase = passphrase;
+        config.WalletUnlockSeconds = 90;
+        config.LockWalletAfterSend = false;
+        var route = new TestRouteHandler("pool-a", "bitcoin", new FakeHandler(new[]
+        {
+            "{\"result\":null,\"error\":{\"code\":-13,\"message\":\"wallet locked\"},\"id\":\"1\"}",
+            "{\"result\":null,\"error\":null,\"id\":\"2\"}",
+            "{\"result\":\"txid-after-unlock\",\"error\":null,\"id\":\"3\"}"
+        }));
+        var materializer = NewMaterializer(Resolver(("bitcoin", BitcoinSendManyProfile())), ProviderWith(route));
+
+        var result = materializer.Materialize(new[] { config });
+        var sender = Assert.IsType<BitcoinRpcPayoutSender>(Assert.Single(result.Registrations).Sender);
+
+        var sendResult = await sender.SendAsync(SendManyContext("pool-a", "bitcoin"), CancellationToken.None);
+
+        Assert.Equal(PayoutAttemptSendStatus.Accepted, sendResult.Status);
+        Assert.Equal(new[] { "sendmany", "walletpassphrase", "sendmany" },
+            route.Handler.Methods.ToArray());
+        using var unlockParams = System.Text.Json.JsonDocument.Parse(route.Handler.RequestBodies[1]);
+        var walletPassphraseParams = unlockParams.RootElement.GetProperty("params");
+        Assert.Equal(passphrase, walletPassphraseParams[0].GetString());
+        Assert.Equal(90, walletPassphraseParams[1].GetInt32());
+    }
+
+    [Fact]
     public void Materialize_MissingHttpClientReturnsStructuredErrorAndNoRegistrations()
     {
         var materializer = NewMaterializer(Resolver(("bitcoin", BitcoinSendManyProfile())),
@@ -251,6 +281,25 @@ public class BitcoinRpcPayoutSenderRegistrationMaterializerTests
             AssertDoesNotLeak(error.ToString(), endpoint, username, password, walletName);
             AssertDoesNotLeak(error.Message, endpoint, username, password, walletName);
         });
+    }
+
+    [Fact]
+    public void Materialize_ResultSummaryAndErrorsDoNotLeakWalletPassphrase()
+    {
+        const string passphrase = "SUPER_SECRET_WALLET_PASSPHRASE";
+        var config = EnabledConfig();
+        config.WalletPassphrase = passphrase;
+        config.WalletUnlockSeconds = 0;
+        var materializer = NewMaterializer(Resolver(("bitcoin", BitcoinSendManyProfile())),
+            ProviderWith(RouteHandler("pool-a", "bitcoin")));
+
+        var result = materializer.Materialize(new[] { config });
+
+        Assert.False(result.IsValid);
+        Assert.Empty(result.Registrations);
+        Assert.Contains(result.Errors,
+            x => x.Code == "bitcoin_rpc_adapter_wallet_passphrase_requires_unlock_seconds");
+        AssertDoesNotLeak(result, passphrase);
     }
 
     [Fact]
@@ -451,9 +500,18 @@ public class BitcoinRpcPayoutSenderRegistrationMaterializerTests
             this.txId = txId;
         }
 
+        public FakeHandler(IEnumerable<string> responseBodies)
+        {
+            txId = "txid-default";
+            responses = new Queue<string>(responseBodies);
+        }
+
         private readonly string txId;
+        private readonly Queue<string> responses = new();
         public int CallCount { get; private set; }
         public string LastRequestBody { get; private set; } = string.Empty;
+        public List<string> RequestBodies { get; } = new();
+        public List<string> Methods { get; } = new();
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -462,11 +520,24 @@ public class BitcoinRpcPayoutSenderRegistrationMaterializerTests
             LastRequestBody = request.Content == null
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken);
+            RequestBodies.Add(LastRequestBody);
+            Methods.Add(ReadMethod(LastRequestBody));
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("{\"result\":\"" + txId + "\",\"error\":null,\"id\":\"1\"}")
+                Content = new StringContent(responses.Count > 0
+                    ? responses.Dequeue()
+                    : "{\"result\":\"" + txId + "\",\"error\":null,\"id\":\"1\"}")
             };
+        }
+
+        private static string ReadMethod(string requestBody)
+        {
+            if(string.IsNullOrWhiteSpace(requestBody))
+                return string.Empty;
+
+            using var document = System.Text.Json.JsonDocument.Parse(requestBody);
+            return document.RootElement.GetProperty("method").GetString();
         }
     }
 }
