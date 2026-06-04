@@ -5,10 +5,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using HashStormCore.Payments;
+using HashStormCore.PayoutProcessor.Configuration;
+using HashStormCore.PayoutProcessor.Services;
 using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Postgres;
 using HashStormCore.Persistence.Postgres.Repositories;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Xunit;
 
@@ -136,6 +139,64 @@ public class PayoutPipelineEmptyRegistrySafetyTests : PostgresCommittedIntegrati
             Assert.Equal(0, await CountNegativeBalanceChangesAsync(con, poolId));
             Assert.Equal(balanceBefore, await SumBalancesAsync(con, poolId));
             Assert.Equal(0, await CountIntentsInStateAsync(con, poolId, PayoutIntentStates.Settled));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task OrchestratorDbMutatingNoSenderPreflightDoesNotReserveOrPlan()
+    {
+        var poolId = NewCommittedPoolId("orchestrator_no_sender_preflight");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var profile = ReadyTxIdProfile();
+            await InsertBalanceAsync(con, poolId, "addr-one", 3m, now.AddSeconds(-2));
+            await InsertBalanceAsync(con, poolId, "addr-two", 4m, now.AddSeconds(-1));
+            var balanceBefore = await SumBalancesAsync(con, poolId);
+
+            var resolver = new DictionaryProfileResolver(profile);
+            var connectionFactory = new PgConnectionFactory(GetConnectionString());
+            var senderRegistry = new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>());
+            var orchestrator = new PayoutPoolOrchestrator(
+                new PayoutProcessorConfig
+                {
+                    Enabled = true,
+                    Mode = PayoutProcessorMode.DbMutating,
+                    ReservationMaxCandidates = 10,
+                    PlanningMaxBatches = 10,
+                    ExecutionBatchSize = 10,
+                    StaleSendingAgeSeconds = 900
+                },
+                resolver,
+                new DbPayoutReservationRunner(connectionFactory,
+                    new PayoutReservationService(payoutIntentRepo, payoutReservationRepo)),
+                new DbPayoutPlanningRunner(connectionFactory, payoutIntentRepo,
+                    new PayoutSendAttemptPlannerService(payoutIntentRepo), resolver),
+                new DbPayoutExecutionRunner(connectionFactory, payoutIntentRepo,
+                    new PayoutSendExecutorService(connectionFactory, payoutIntentRepo, resolver), resolver,
+                    senderRegistry),
+                new DbPayoutStaleSendReconciliationRunner(connectionFactory,
+                    new PayoutStaleSendReconciliationService(payoutIntentRepo)),
+                new DbPayoutOperationIdReconciliationRunner(connectionFactory, payoutIntentRepo, resolver,
+                    new PayoutOperationStatusProviderRegistry(
+                        Array.Empty<PayoutOperationStatusProviderRegistration>()),
+                    new PayoutOperationIdReconciliationService(connectionFactory, payoutIntentRepo, resolver)),
+                new DbPayoutSettlementRunner(connectionFactory, payoutSettlementRepo,
+                    new PayoutSettlementService(payoutSettlementRepo, resolver)),
+                senderRegistry,
+                NullLogger<PayoutPoolOrchestrator>.Instance);
+            var pool = new PayoutProcessorPoolConfig(poolId, Coin, "intent", 1m,
+                Array.Empty<PayoutProcessorRewardRecipientConfig>());
+
+            await orchestrator.RunReservationTickAsync(pool, Ct);
+            await orchestrator.RunPlanningTickAsync(pool, Ct);
+
+            Assert.Equal(0, await CountPoolRowsAsync(con, "payout_batches", poolId));
+            Assert.Equal(0, await CountPoolRowsAsync(con, "payout_send_attempts", poolId));
+            Assert.Equal(0, await CountPoolRowsAsync(con, "payments", poolId));
+            Assert.Equal(0, await CountNegativeBalanceChangesAsync(con, poolId));
+            Assert.Equal(balanceBefore, await SumBalancesAsync(con, poolId));
         });
     }
 

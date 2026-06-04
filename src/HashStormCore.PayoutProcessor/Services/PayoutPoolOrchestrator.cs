@@ -19,6 +19,7 @@ public class PayoutPoolOrchestrator
         IPayoutStaleSendReconciliationRunner payoutStaleSendReconciliationRunner,
         IPayoutOperationIdReconciliationRunner payoutOperationIdReconciliationRunner,
         IPayoutSettlementRunner payoutSettlementRunner,
+        IPayoutAttemptSenderRegistry payoutAttemptSenderRegistry,
         ILogger<PayoutPoolOrchestrator> logger)
     {
         this.config = config;
@@ -29,6 +30,7 @@ public class PayoutPoolOrchestrator
         this.payoutStaleSendReconciliationRunner = payoutStaleSendReconciliationRunner;
         this.payoutOperationIdReconciliationRunner = payoutOperationIdReconciliationRunner;
         this.payoutSettlementRunner = payoutSettlementRunner;
+        this.payoutAttemptSenderRegistry = payoutAttemptSenderRegistry;
         this.logger = logger;
     }
 
@@ -40,6 +42,7 @@ public class PayoutPoolOrchestrator
     private readonly IPayoutStaleSendReconciliationRunner payoutStaleSendReconciliationRunner;
     private readonly IPayoutOperationIdReconciliationRunner payoutOperationIdReconciliationRunner;
     private readonly IPayoutSettlementRunner payoutSettlementRunner;
+    private readonly IPayoutAttemptSenderRegistry payoutAttemptSenderRegistry;
     private readonly ILogger<PayoutPoolOrchestrator> logger;
 
     public async Task RunReservationTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)
@@ -96,10 +99,9 @@ public class PayoutPoolOrchestrator
             return;
         }
 
-        var request = BuildReservationRequest(pool, profile, config);
-
         if(config.Mode == PayoutProcessorMode.DryRun)
         {
+            var request = BuildReservationRequest(pool, profile, config);
             logger.LogInformation(
                 "Dry-run payout reservation tick for pool {PoolId}: would create reservation with coinKey={Coin}, coinFamily={CoinFamily}, handler={Handler}, sendShape={SendShape}, minimumPayment={MinimumPayment}, maxCandidates={MaxCandidates}, rewardRecipientThresholds={RewardRecipientThresholdCount}",
                 request.PoolId, request.Coin, request.CoinFamily, request.Handler, request.SendShape,
@@ -113,6 +115,11 @@ public class PayoutPoolOrchestrator
                 config.Mode);
             return;
         }
+
+        if(!HasRegisteredSenderForDbMutation(pool, profile, "reservation"))
+            return;
+
+        var request = BuildReservationRequest(pool, profile, config);
 
         logger.LogInformation(
             "DB-mutating payout reservation tick for pool {PoolId}: coinKey={Coin}, coinFamily={CoinFamily}, handler={Handler}, sendShape={SendShape}, maxCandidates={MaxCandidates}",
@@ -192,6 +199,28 @@ public class PayoutPoolOrchestrator
             return;
         }
 
+        var resolution = payoutProfileResolver.Resolve(pool.Coin);
+        if(!resolution.HasProfile)
+        {
+            logger.LogWarning(
+                "Skipping payout planning for pool {PoolId}: configured coin '{Coin}' is unsupported: {Reason}. Hint: pool.coin must match a coins.json key",
+                pool.Id, pool.Coin, resolution.Reason);
+            return;
+        }
+
+        var profile = resolution.Profile;
+        if(!profile.ReservationReady)
+        {
+            logger.LogWarning(
+                "Skipping payout planning for pool {PoolId}: profile is not reservation-ready for coinKey={CoinKey}, family={Family}, adapterId={AdapterId}, reason={Reason}",
+                pool.Id, profile.CoinKey, profile.CoinFamily, profile.AdapterId,
+                string.IsNullOrWhiteSpace(profile.NotReadyReason) ? resolution.Reason : profile.NotReadyReason);
+            return;
+        }
+
+        if(!HasRegisteredSenderForDbMutation(pool, profile, "planning"))
+            return;
+
         var request = BuildPlanningRequest(pool, config);
 
         logger.LogInformation("DB-mutating payout planning tick for pool {PoolId}: maxBatches={MaxBatches}",
@@ -210,6 +239,18 @@ public class PayoutPoolOrchestrator
                 skipped.BatchId, skipped.PoolId, skipped.Coin, skipped.CoinFamily, skipped.Handler,
                 skipped.SendShape, skipped.Reason);
         }
+    }
+
+    private bool HasRegisteredSenderForDbMutation(PayoutProcessorPoolConfig pool, PayoutProfile profile, string stage)
+    {
+        if(payoutAttemptSenderRegistry.TryGetSender(profile, out _))
+            return true;
+
+        logger.LogWarning(
+            "Skipping payout {Stage} for pool {PoolId}: payout_sender_not_registered for coinKey={CoinKey}, family={Family}, adapterId={AdapterId}, sendShape={SendShape}, sendMethod={SendMethod}",
+            stage, pool.Id, profile.CoinKey, profile.CoinFamily, profile.AdapterId, profile.SendShape,
+            profile.SendMethod);
+        return false;
     }
 
     public async Task RunExecutionTickAsync(PayoutProcessorPoolConfig pool, CancellationToken ct)

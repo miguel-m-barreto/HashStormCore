@@ -11,6 +11,7 @@ The payout processor remains non-sending by default:
 - `fakeAdaptersOnly=true` forces the Bitcoin RPC sender registry to stay empty.
 - Empty or disabled `bitcoinRpcAdapters` entries do not create senders.
 - Invalid enabled Bitcoin RPC adapter config fails startup instead of partially registering senders.
+- In `DbMutating` mode, reservation and planning are skipped for intent pools that do not have an exact registered sender.
 
 ## Required Gates
 
@@ -26,6 +27,8 @@ Bitcoin RPC senders are materialized only when every gate is satisfied:
 - `paymentProcessing.engine=intent`
 - the pool coin matches the adapter coin; coin matching is case-insensitive for Bitcoin RPC route lookup while pool id routing remains exact
 - the resolved payout profile is reservation-ready and uses the `bitcoin-rpc` adapter
+
+`ReservationReady` only means the profile can safely reserve and plan in abstract. It does not mean this sidecar currently has a production sender. The payout processor checks the exact sender registry before DbMutating reservation and planning, so pools without a registered sender do not create new stuck reserved batches or prepared attempts. Existing prepared attempts without a sender are still skipped by the execution runner as a lower-level safety net.
 
 ## Supported Methods
 
@@ -140,3 +143,4 @@ The matching Pool Core pool must be enabled and must use intent payment processi
 - Startup does not perform a real daemon health check.
 - Bitcoin RPC does not use operation-id reconciliation.
 - HTTP and transport failures become ambiguous review states and do not settle or debit balances.
+- During migration, Bitcoin RPC is the only production sender path wired by the sidecar gates unless additional senders are added later.

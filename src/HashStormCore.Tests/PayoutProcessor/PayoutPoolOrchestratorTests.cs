@@ -98,7 +98,8 @@ public class PayoutPoolOrchestratorTests
         var runner = Substitute.For<IPayoutReservationRunner>();
         var resolver = Substitute.For<IPayoutProfileResolver>();
         resolver.Resolve("bitcoin").Returns(PayoutProfileResolution.Resolved(NewReadyProfile()));
-        var orchestrator = NewOrchestrator(PayoutProcessorMode.DryRun, resolver, runner);
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DryRun, resolver, runner,
+            senderRegistry: new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>()));
 
         await orchestrator.RunReservationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
 
@@ -234,7 +235,8 @@ public class PayoutPoolOrchestratorTests
         var orchestrator = NewOrchestrator(PayoutProcessorMode.DryRun,
             Substitute.For<IPayoutProfileResolver>(),
             Substitute.For<IPayoutReservationRunner>(),
-            planningRunner);
+            planningRunner,
+            senderRegistry: new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>()));
 
         await orchestrator.RunPlanningTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
 
@@ -292,12 +294,14 @@ public class PayoutPoolOrchestratorTests
     public async Task RunPlanningTickAsync_DbMutatingIntentPoolCallsPlanningRunnerWithRequest()
     {
         var planningRunner = Substitute.For<IPayoutPlanningRunner>();
+        var resolver = Substitute.For<IPayoutProfileResolver>();
+        resolver.Resolve("bitcoin").Returns(PayoutProfileResolution.Resolved(NewReadyProfile()));
         PayoutPlanningRunnerRequest capturedRequest = null;
         planningRunner.CreateSendAttemptsAsync(Arg.Do<PayoutPlanningRunnerRequest>(x => capturedRequest = x),
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new PayoutPlanningRunnerResult()));
         var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
-            Substitute.For<IPayoutProfileResolver>(),
+            resolver,
             Substitute.For<IPayoutReservationRunner>(),
             planningRunner,
             planningMaxBatches: 23,
@@ -313,6 +317,25 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public async Task RunPlanningTickAsync_DbMutatingReadyProfileWithoutSenderSkipsPlanningRunner()
+    {
+        var planningRunner = Substitute.For<IPayoutPlanningRunner>();
+        var resolver = Substitute.For<IPayoutProfileResolver>();
+        resolver.Resolve("bitcoin").Returns(PayoutProfileResolution.Resolved(NewReadyProfile()));
+        var senderRegistry = new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>());
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            resolver,
+            Substitute.For<IPayoutReservationRunner>(),
+            planningRunner,
+            senderRegistry: senderRegistry);
+
+        await orchestrator.RunPlanningTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await planningRunner.DidNotReceive().CreateSendAttemptsAsync(Arg.Any<PayoutPlanningRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunPlanningTickAsync_DbMutatingInvalidBatchSizeSkipsBeforePlanningRunner()
     {
         var planningRunner = Substitute.For<IPayoutPlanningRunner>();
@@ -323,6 +346,51 @@ public class PayoutPoolOrchestratorTests
             planningMaxBatches: 0);
 
         await orchestrator.RunPlanningTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await planningRunner.DidNotReceive().CreateSendAttemptsAsync(Arg.Any<PayoutPlanningRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunPlanningTickAsync_UnsupportedProfileSkipsPlanningRunner()
+    {
+        var planningRunner = Substitute.For<IPayoutPlanningRunner>();
+        var resolver = Substitute.For<IPayoutProfileResolver>();
+        resolver.Resolve("unknown").Returns(PayoutProfileResolution.Unsupported("missing coins.json entry"));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            resolver,
+            Substitute.For<IPayoutReservationRunner>(),
+            planningRunner);
+
+        await orchestrator.RunPlanningTickAsync(NewPool("unknown", "intent"), CancellationToken.None);
+
+        await planningRunner.DidNotReceive().CreateSendAttemptsAsync(Arg.Any<PayoutPlanningRunnerRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunPlanningTickAsync_NotReadyProfileSkipsPlanningRunner()
+    {
+        var planningRunner = Substitute.For<IPayoutPlanningRunner>();
+        var resolver = Substitute.For<IPayoutProfileResolver>();
+        resolver.Resolve("kaspa").Returns(PayoutProfileResolution.Resolved(new PayoutProfile
+        {
+            CoinKey = "kaspa",
+            CoinSymbol = "KAS",
+            CoinFamily = "kaspa",
+            AdapterId = PayoutProfileConstants.AdapterIds.KaspaWalletWrapper,
+            SendShape = PayoutProfileConstants.SendShapes.PerAddress,
+            SendMethod = PayoutProfileConstants.SendMethods.KaspaSend,
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.UnsafePlaceholder,
+            ReservationReady = false,
+            NotReadyReason = "placeholder evidence is not settlement-safe"
+        }));
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating,
+            resolver,
+            Substitute.For<IPayoutReservationRunner>(),
+            planningRunner);
+
+        await orchestrator.RunPlanningTickAsync(NewPool("kaspa", "intent"), CancellationToken.None);
 
         await planningRunner.DidNotReceive().CreateSendAttemptsAsync(Arg.Any<PayoutPlanningRunnerRequest>(),
             Arg.Any<CancellationToken>());
@@ -1472,6 +1540,22 @@ public class PayoutPoolOrchestratorTests
     }
 
     [Fact]
+    public async Task RunReservationTickAsync_DbMutatingReadyProfileWithoutSenderSkipsReservationRunner()
+    {
+        var runner = Substitute.For<IPayoutReservationRunner>();
+        var resolver = Substitute.For<IPayoutProfileResolver>();
+        resolver.Resolve("bitcoin").Returns(PayoutProfileResolution.Resolved(NewReadyProfile()));
+        var senderRegistry = new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>());
+        var orchestrator = NewOrchestrator(PayoutProcessorMode.DbMutating, resolver, runner,
+            senderRegistry: senderRegistry);
+
+        await orchestrator.RunReservationTickAsync(NewPool("bitcoin", "intent"), CancellationToken.None);
+
+        await runner.DidNotReceive().CreateReservationAsync(Arg.Any<CreatePayoutReservationRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunReservationTickAsync_DisabledModeSkipsBeforeProfileResolution()
     {
         var runner = Substitute.For<IPayoutReservationRunner>();
@@ -1600,7 +1684,8 @@ public class PayoutPoolOrchestratorTests
         int staleSendingAgeSeconds = 900, IPayoutExecutionRunner executionRunner = null,
         IPayoutStaleSendReconciliationRunner staleReconciliationRunner = null,
         IPayoutOperationIdReconciliationRunner operationIdReconciliationRunner = null,
-        IPayoutSettlementRunner settlementRunner = null)
+        IPayoutSettlementRunner settlementRunner = null,
+        IPayoutAttemptSenderRegistry senderRegistry = null)
     {
         if(staleReconciliationRunner == null)
         {
@@ -1642,6 +1727,7 @@ public class PayoutPoolOrchestratorTests
             staleReconciliationRunner,
             operationIdReconciliationRunner,
             settlementRunner,
+            senderRegistry ?? SenderRegistryFor(NewReadyProfile()),
             NullLogger<PayoutPoolOrchestrator>.Instance);
     }
 
@@ -1664,6 +1750,33 @@ public class PayoutPoolOrchestratorTests
             SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
             ReservationReady = true
         };
+    }
+
+    private static IPayoutAttemptSenderRegistry SenderRegistryFor(PayoutProfile profile)
+    {
+        return new PayoutAttemptSenderRegistry(new[]
+        {
+            new PayoutAttemptSenderRegistration
+            {
+                Key = new PayoutAttemptSenderKey
+                {
+                    CoinFamily = profile.CoinFamily,
+                    AdapterId = profile.AdapterId,
+                    SendShape = profile.SendShape,
+                    SendMethod = profile.SendMethod
+                },
+                Sender = new FakePayoutAttemptSender()
+            }
+        });
+    }
+
+    private sealed class FakePayoutAttemptSender : IPayoutAttemptSender
+    {
+        public Task<PayoutAttemptSendResult> SendAsync(PayoutSendExecutionContext context, CancellationToken ct)
+        {
+            return Task.FromResult(PayoutAttemptSendResult.FailedPreAccept("test_sender_not_used",
+                "test sender should not be used by orchestrator tests"));
+        }
     }
 
     private static string CreateCryptoNoteAddress(ulong prefix, int payloadLength)
