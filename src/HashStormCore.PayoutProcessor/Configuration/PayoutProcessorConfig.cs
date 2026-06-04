@@ -1,3 +1,5 @@
+using System;
+
 namespace HashStormCore.PayoutProcessor.Configuration;
 
 public enum PayoutProcessorMode
@@ -25,4 +27,6 @@ public class PayoutProcessorConfig
     public int ExecutionBatchSize { get; set; } = 8;
     public int StaleSendingAgeSeconds { get; set; } = 900;
     public bool FakeAdaptersOnly { get; set; } = true;
+    public PayoutProcessorBitcoinRpcAdapterConfig[] BitcoinRpcAdapters { get; set; } =
+        Array.Empty<PayoutProcessorBitcoinRpcAdapterConfig>();
 }

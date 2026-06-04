@@ -7,6 +7,38 @@ namespace HashStormCore.Tests.PayoutProcessor;
 public class PayoutProcessorBitcoinRpcAdapterConfigTests
 {
     [Fact]
+    public void DefaultPayoutProcessorConfigHasEmptyBitcoinRpcAdapterList()
+    {
+        var config = new PayoutProcessorConfig();
+
+        Assert.NotNull(config.BitcoinRpcAdapters);
+        Assert.Empty(config.BitcoinRpcAdapters);
+    }
+
+    [Fact]
+    public void Validate_NullAdapterListIsAcceptedAsEmpty()
+    {
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(null);
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
+    public void Validate_NullConfigAdapterPropertyIsAcceptedAsEmpty()
+    {
+        var config = new PayoutProcessorConfig
+        {
+            BitcoinRpcAdapters = null
+        };
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(config.BitcoinRpcAdapters);
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
     public void Validate_DisabledEntryWithEmptySecretsIsAccepted()
     {
         var result = PayoutProcessorBitcoinRpcAdapterValidator.Validate(new[]
@@ -61,13 +93,80 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
     }
 
     [Theory]
+    [InlineData("PoolId", " pool-a", "bitcoin_rpc_adapter_poolid_has_outer_whitespace")]
+    [InlineData("PoolId", "pool-a ", "bitcoin_rpc_adapter_poolid_has_outer_whitespace")]
+    [InlineData("Coin", " bitcoin", "bitcoin_rpc_adapter_coin_has_outer_whitespace")]
+    [InlineData("Coin", "bitcoin ", "bitcoin_rpc_adapter_coin_has_outer_whitespace")]
+    [InlineData("Username", " rpc-user", "bitcoin_rpc_adapter_username_has_outer_whitespace")]
+    [InlineData("Username", "rpc-user ", "bitcoin_rpc_adapter_username_has_outer_whitespace")]
+    public void Validate_EnabledEntryRejectsOuterWhitespaceForRouteIdentityFields(
+        string fieldName,
+        string value,
+        string expectedCode)
+    {
+        var config = EnabledConfig();
+        SetStringProperty(config, fieldName, value);
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.Code == expectedCode);
+        AssertDoesNotLeakSecret(result, config.Password);
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1:18443")]
+    [InlineData("https://127.0.0.1:18443")]
+    public void Validate_EnabledEndpointHttpAndHttpsPass(string endpoint)
+    {
+        var config = EnabledConfig();
+        config.Endpoint = endpoint;
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Theory]
+    [InlineData("/relative")]
+    [InlineData("not an absolute uri")]
+    public void Validate_EnabledRelativeOrInvalidEndpointFails(string endpoint)
+    {
+        var config = EnabledConfig();
+        config.Endpoint = endpoint;
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_endpoint_invalid");
+        AssertDoesNotLeakSecret(result, endpoint);
+    }
+
+    [Theory]
+    [InlineData("ftp://127.0.0.1:18443")]
+    [InlineData("file:///tmp/wallet")]
+    [InlineData("custom://127.0.0.1:18443")]
+    public void Validate_EnabledUnsupportedEndpointSchemeFails(string endpoint)
+    {
+        var config = EnabledConfig();
+        config.Endpoint = endpoint;
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_endpoint_scheme_unsupported");
+        AssertDoesNotLeakSecret(result, endpoint);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(-1)]
     public void Validate_EnabledEntryRequiresPositiveTimeout(int timeoutSeconds)
     {
         var config = EnabledConfig().WithTimeout(timeoutSeconds);
 
-        var result = PayoutProcessorBitcoinRpcAdapterValidator.Validate(new[] { config });
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_invalid_timeout");
@@ -81,7 +180,7 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         config.AllowSendMany = false;
         config.AllowSendToAddress = false;
 
-        var result = PayoutProcessorBitcoinRpcAdapterValidator.Validate(new[] { config });
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_no_allowed_methods");
@@ -95,7 +194,7 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         var second = EnabledConfig();
         second.Endpoint = "http://127.0.0.1:18444";
 
-        var result = PayoutProcessorBitcoinRpcAdapterValidator.Validate(new[] { first, second });
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { first, second });
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_duplicate_pool_coin");
@@ -110,10 +209,27 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         var second = EnabledConfig();
         second.Enabled = false;
 
-        var result = PayoutProcessorBitcoinRpcAdapterValidator.Validate(new[] { first, second });
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { first, second });
 
         Assert.True(result.IsValid);
         Assert.Empty(result.Errors);
+    }
+
+    [Fact]
+    public void Validate_DuplicateEnabledPoolAndCoinComparisonIsOrdinalIgnoreCase()
+    {
+        var first = EnabledConfig();
+        first.PoolId = "pool-a";
+        first.Coin = "bitcoin";
+        var second = EnabledConfig();
+        second.PoolId = "POOL-A";
+        second.Coin = "BITCOIN";
+        second.Endpoint = "http://127.0.0.1:18444";
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { first, second });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_duplicate_pool_coin");
     }
 
     [Fact]
@@ -125,10 +241,31 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         config.Endpoint = string.Empty;
         config.RequestTimeoutSeconds = 0;
 
-        var result = PayoutProcessorBitcoinRpcAdapterValidator.Validate(new[] { config });
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
 
         Assert.False(result.IsValid);
         AssertDoesNotLeakSecret(result, secret);
+    }
+
+    [Fact]
+    public void Validate_MissingPasswordDoesNotLeakOtherSecretFields()
+    {
+        const string username = "rpc-user";
+        const string endpoint = "http://127.0.0.1:18443";
+        const string walletName = "secret-wallet";
+        var config = EnabledConfig();
+        config.Username = username;
+        config.Endpoint = endpoint;
+        config.WalletName = walletName;
+        config.Password = string.Empty;
+
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_missing_password");
+        AssertDoesNotLeakSecret(result, username);
+        AssertDoesNotLeakSecret(result, endpoint);
+        AssertDoesNotLeakSecret(result, walletName);
     }
 
     [Fact]
@@ -142,7 +279,7 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         config.Password = password;
         config.Endpoint = endpoint;
 
-        var result = PayoutProcessorBitcoinRpcAdapterValidator.Validate(new[] { config });
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
 
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors,
@@ -158,7 +295,7 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         var config = EnabledConfig();
         config.Endpoint = "http://127.0.0.1:18443";
 
-        var result = PayoutProcessorBitcoinRpcAdapterValidator.Validate(new[] { config });
+        var result = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(new[] { config });
 
         Assert.True(result.IsValid);
         Assert.Empty(result.Errors);

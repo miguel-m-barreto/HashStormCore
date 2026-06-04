@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace HashStormCore.PayoutProcessor.Configuration;
 
 public class PayoutProcessorBitcoinRpcAdapterConfig
@@ -22,7 +25,19 @@ public class PayoutProcessorBitcoinRpcAdapterConfig
 
 public static class PayoutProcessorBitcoinRpcAdapterValidator
 {
+    private static readonly HashSet<string> SupportedEndpointSchemes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "http",
+        "https"
+    };
+
     public static PayoutProcessorBitcoinRpcAdapterValidationResult Validate(
+        IEnumerable<PayoutProcessorBitcoinRpcAdapterConfig> adapters)
+    {
+        return ValidateAdapters(adapters);
+    }
+
+    public static PayoutProcessorBitcoinRpcAdapterValidationResult ValidateAdapters(
         IEnumerable<PayoutProcessorBitcoinRpcAdapterConfig> adapters)
     {
         var errors = new List<PayoutProcessorBitcoinRpcAdapterValidationError>();
@@ -50,19 +65,25 @@ public static class PayoutProcessorBitcoinRpcAdapterValidator
 
             RequireNonEmpty(errors, index, adapter, adapter.PoolId, "bitcoin_rpc_adapter_missing_pool_id",
                 "Enabled Bitcoin RPC adapter config requires PoolId");
+            RequireNoOuterWhitespace(errors, index, adapter, adapter.PoolId,
+                "bitcoin_rpc_adapter_poolid_has_outer_whitespace",
+                "Enabled Bitcoin RPC adapter config PoolId must not include leading or trailing whitespace");
             RequireNonEmpty(errors, index, adapter, adapter.Coin, "bitcoin_rpc_adapter_missing_coin",
                 "Enabled Bitcoin RPC adapter config requires Coin");
+            RequireNoOuterWhitespace(errors, index, adapter, adapter.Coin,
+                "bitcoin_rpc_adapter_coin_has_outer_whitespace",
+                "Enabled Bitcoin RPC adapter config Coin must not include leading or trailing whitespace");
             RequireNonEmpty(errors, index, adapter, adapter.Endpoint, "bitcoin_rpc_adapter_missing_endpoint",
                 "Enabled Bitcoin RPC adapter config requires Endpoint");
             RequireNonEmpty(errors, index, adapter, adapter.Username, "bitcoin_rpc_adapter_missing_username",
                 "Enabled Bitcoin RPC adapter config requires Username");
-            RequireNonEmpty(errors, index, adapter, adapter.Password, "bitcoin_rpc_adapter_missing_password",
+            RequireNoOuterWhitespace(errors, index, adapter, adapter.Username,
+                "bitcoin_rpc_adapter_username_has_outer_whitespace",
+                "Enabled Bitcoin RPC adapter config Username must not include leading or trailing whitespace");
+            RequireNonEmptyPassword(errors, index, adapter, adapter.Password, "bitcoin_rpc_adapter_missing_password",
                 "Enabled Bitcoin RPC adapter config requires Password");
 
-            if(EndpointContainsCredentials(adapter.Endpoint))
-                errors.Add(Error(index, adapter.PoolId, adapter.Coin,
-                    "bitcoin_rpc_adapter_endpoint_contains_credentials",
-                    "Enabled Bitcoin RPC adapter config endpoint must not include URI userinfo credentials"));
+            ValidateEndpoint(errors, index, adapter);
 
             if(adapter.RequestTimeoutSeconds <= 0)
                 errors.Add(Error(index, adapter.PoolId, adapter.Coin, "bitcoin_rpc_adapter_invalid_timeout",
@@ -100,10 +121,57 @@ public static class PayoutProcessorBitcoinRpcAdapterValidator
             errors.Add(Error(index, adapter.PoolId, adapter.Coin, code, message));
     }
 
-    private static bool EndpointContainsCredentials(string endpoint)
+    private static void RequireNonEmptyPassword(
+        ICollection<PayoutProcessorBitcoinRpcAdapterValidationError> errors,
+        int index,
+        PayoutProcessorBitcoinRpcAdapterConfig adapter,
+        string value,
+        string code,
+        string message)
     {
-        return Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) &&
-               !string.IsNullOrEmpty(uri.UserInfo);
+        if(string.IsNullOrWhiteSpace(value))
+            errors.Add(Error(index, adapter.PoolId, adapter.Coin, code, message));
+    }
+
+    private static void RequireNoOuterWhitespace(
+        ICollection<PayoutProcessorBitcoinRpcAdapterValidationError> errors,
+        int index,
+        PayoutProcessorBitcoinRpcAdapterConfig adapter,
+        string value,
+        string code,
+        string message)
+    {
+        if(string.IsNullOrEmpty(value) || string.Equals(value, value.Trim(), StringComparison.Ordinal))
+            return;
+
+        errors.Add(Error(index, adapter.PoolId, adapter.Coin, code, message));
+    }
+
+    private static void ValidateEndpoint(
+        ICollection<PayoutProcessorBitcoinRpcAdapterValidationError> errors,
+        int index,
+        PayoutProcessorBitcoinRpcAdapterConfig adapter)
+    {
+        if(string.IsNullOrWhiteSpace(adapter.Endpoint))
+            return;
+
+        if(!Uri.TryCreate(adapter.Endpoint, UriKind.Absolute, out var uri))
+        {
+            errors.Add(Error(index, adapter.PoolId, adapter.Coin,
+                "bitcoin_rpc_adapter_endpoint_invalid",
+                "Enabled Bitcoin RPC adapter config endpoint must be an absolute URI"));
+            return;
+        }
+
+        if(!SupportedEndpointSchemes.Contains(uri.Scheme))
+            errors.Add(Error(index, adapter.PoolId, adapter.Coin,
+                "bitcoin_rpc_adapter_endpoint_scheme_unsupported",
+                "Enabled Bitcoin RPC adapter config endpoint scheme must be http or https"));
+
+        if(!string.IsNullOrEmpty(uri.UserInfo))
+            errors.Add(Error(index, adapter.PoolId, adapter.Coin,
+                "bitcoin_rpc_adapter_endpoint_contains_credentials",
+                "Enabled Bitcoin RPC adapter config endpoint must not include URI userinfo credentials"));
     }
 
     private static PayoutProcessorBitcoinRpcAdapterValidationError Error(

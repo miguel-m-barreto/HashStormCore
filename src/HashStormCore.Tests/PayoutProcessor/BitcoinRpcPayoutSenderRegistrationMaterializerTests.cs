@@ -193,7 +193,7 @@ public class BitcoinRpcPayoutSenderRegistrationMaterializerTests
     }
 
     [Fact]
-    public void Materialize_InvalidRouteOptionsReturnsStructuredErrorAndNoRegistrations()
+    public void Materialize_InvalidEndpointReturnsPlannerErrorAndNoRegistrations()
     {
         var config = EnabledConfig();
         config.Endpoint = "not an absolute uri";
@@ -204,7 +204,7 @@ public class BitcoinRpcPayoutSenderRegistrationMaterializerTests
 
         Assert.False(result.IsValid);
         Assert.Empty(result.Registrations);
-        Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_materializer_route_options_invalid");
+        Assert.Contains(result.Errors, x => x.Code == "bitcoin_rpc_adapter_endpoint_invalid");
         AssertDoesNotLeak(result, config.Endpoint, config.Username, config.Password, config.WalletName);
     }
 
