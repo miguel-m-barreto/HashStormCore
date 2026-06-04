@@ -70,12 +70,17 @@ public class PayoutOperationIdReconciliationService
                 if(evidenceValidator.IsUnsafeEvidenceValue(providerResult.TxId))
                     return SingleResult(needsReviewCount: 1);
 
-                var attached = await AttachTxIdEvidenceIfMissingAsync(candidate, providerResult.TxId,
+                var attachResult = await AttachTxIdEvidenceIfMissingAsync(candidate, providerResult.TxId,
                     checkedAt, ct);
 
-                return attached
-                    ? SingleResult(attachedCount: 1, attachedAttemptIds: new[] { candidate.AttemptId })
-                    : SingleResult(alreadyAttachedCount: 1);
+                return attachResult switch
+                {
+                    TxIdAttachResult.Attached => SingleResult(attachedCount: 1,
+                        attachedAttemptIds: new[] { candidate.AttemptId }),
+                    TxIdAttachResult.AlreadyAttached => SingleResult(alreadyAttachedCount: 1),
+                    TxIdAttachResult.NeedsReview => SingleResult(needsReviewCount: 1),
+                    _ => SingleResult(providerErrorCount: 1)
+                };
 
             case PayoutOperationStatus.ProvenNoAccept:
             case PayoutOperationStatus.Unknown:
@@ -116,7 +121,7 @@ public class PayoutOperationIdReconciliationService
                string.Equals(candidate.Method, profile.SendMethod, StringComparison.Ordinal);
     }
 
-    private async Task<bool> AttachTxIdEvidenceIfMissingAsync(PayoutReconciliationAttemptSummary candidate,
+    private async Task<TxIdAttachResult> AttachTxIdEvidenceIfMissingAsync(PayoutReconciliationAttemptSummary candidate,
         string txId, DateTime created, CancellationToken ct)
     {
         return await cf.RunTx(async (con, tx) =>
@@ -124,8 +129,22 @@ public class PayoutOperationIdReconciliationService
             var confirmations = await payoutIntentRepo.GetAttemptConfirmationsAsync(con, tx, candidate.BatchId,
                 candidate.AttemptId, candidate.PoolId, ct);
 
-            if(confirmations.Any(x => x.Kind == PayoutExternalConfirmationKinds.TxId && x.Value == txId))
-                return false;
+            var finalEvidencePairs = confirmations
+                .Where(x => evidenceValidator.IsFinalSettlementEvidenceKind(x.Kind) &&
+                            !string.IsNullOrWhiteSpace(x.Value))
+                .Select(x => new EvidencePair(x.Kind, x.Value))
+                .Distinct()
+                .ToArray();
+
+            if(finalEvidencePairs.Length > 1)
+                return TxIdAttachResult.NeedsReview;
+
+            if(finalEvidencePairs.Length == 1)
+                return string.Equals(finalEvidencePairs[0].Kind, PayoutExternalConfirmationKinds.TxId,
+                           StringComparison.Ordinal) &&
+                       string.Equals(finalEvidencePairs[0].Value, txId, StringComparison.Ordinal)
+                    ? TxIdAttachResult.AlreadyAttached
+                    : TxIdAttachResult.NeedsReview;
 
             await payoutIntentRepo.InsertExternalConfirmationAsync(con, tx, new PayoutExternalConfirmation
             {
@@ -138,9 +157,18 @@ public class PayoutOperationIdReconciliationService
                 Created = created
             }, ct);
 
-            return true;
+            return TxIdAttachResult.Attached;
         });
     }
+
+    private enum TxIdAttachResult
+    {
+        Attached,
+        AlreadyAttached,
+        NeedsReview
+    }
+
+    private readonly record struct EvidencePair(string Kind, string Value);
 
     private static PayoutOperationIdReconciliationResult SingleResult(int pendingCount = 0, int attachedCount = 0,
         int alreadyAttachedCount = 0, int needsReviewCount = 0, int providerErrorCount = 0,

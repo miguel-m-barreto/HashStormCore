@@ -178,6 +178,114 @@ public class PayoutOperationIdReconciliationServiceTests : PostgresCommittedInte
     }
 
     [PostgresIntegrationFact]
+    public Task ReconcileOperationIdCandidateAsync_ConflictingExistingTxIdNeedsReviewWithoutInsert()
+    {
+        var poolId = NewCommittedPoolId("opid_conflicting_txid");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var data = await CreateAcceptedOperationIdAttemptAsync(con, poolId, now, "opid-conflict");
+            await InsertTxIdConfirmationAsync(con, data, "txid-existing", now.AddMinutes(1));
+            var provider = new StaticOperationStatusProvider(PayoutOperationStatusResult.ResolvedTxId("txid-provider"));
+            var candidate = await LoadSingleCandidateAsync(con, poolId);
+
+            var result = await NewService().ReconcileOperationIdCandidateAsync(candidate, now.AddMinutes(2),
+                provider, Ct);
+
+            Assert.Equal(1, result.CandidateCount);
+            Assert.Equal(1, result.NeedsReviewCount);
+            Assert.Equal(0, result.AlreadyAttachedCount);
+            Assert.Equal(0, result.EvidenceAttachedCount);
+            Assert.Equal(1, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId));
+            Assert.Equal(1, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId, "txid-existing"));
+            Assert.Equal(0, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId, "txid-provider"));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReconcileOperationIdCandidateAsync_ExistingRawHashNeedsReviewWithoutTxIdInsert()
+    {
+        var poolId = NewCommittedPoolId("opid_existing_rawhash");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var data = await CreateAcceptedOperationIdAttemptAsync(con, poolId, now, "opid-rawhash-conflict");
+            await InsertConfirmationAsync(con, data, PayoutExternalConfirmationKinds.RawHash, "rawhash-existing",
+                now.AddMinutes(1));
+            var provider = new StaticOperationStatusProvider(PayoutOperationStatusResult.ResolvedTxId("txid-provider"));
+            var candidate = await LoadSingleCandidateAsync(con, poolId);
+
+            var result = await NewService().ReconcileOperationIdCandidateAsync(candidate, now.AddMinutes(2),
+                provider, Ct);
+
+            Assert.Equal(1, result.CandidateCount);
+            Assert.Equal(1, result.NeedsReviewCount);
+            Assert.Equal(0, result.EvidenceAttachedCount);
+            Assert.Equal(1, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.RawHash,
+                "rawhash-existing"));
+            Assert.Equal(0, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId,
+                "txid-provider"));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReconcileOperationIdCandidateAsync_MultipleExistingTxIdsNeedsReviewWithoutInsert()
+    {
+        var poolId = NewCommittedPoolId("opid_multiple_txids");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var data = await CreateAcceptedOperationIdAttemptAsync(con, poolId, now, "opid-multiple");
+            await InsertTxIdConfirmationAsync(con, data, "txid-existing-a", now.AddMinutes(1));
+            await InsertTxIdConfirmationAsync(con, data, "txid-existing-b", now.AddMinutes(2));
+            var provider = new StaticOperationStatusProvider(PayoutOperationStatusResult.ResolvedTxId("txid-provider"));
+            var candidate = await LoadSingleCandidateAsync(con, poolId);
+
+            var result = await NewService().ReconcileOperationIdCandidateAsync(candidate, now.AddMinutes(3),
+                provider, Ct);
+
+            Assert.Equal(1, result.CandidateCount);
+            Assert.Equal(1, result.NeedsReviewCount);
+            Assert.Equal(0, result.EvidenceAttachedCount);
+            Assert.Equal(2, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId));
+            Assert.Equal(0, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId, "txid-provider"));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReconcileOperationIdCandidateAsync_MultipleFinalEvidencePairsNeedReviewWithoutInsert()
+    {
+        var poolId = NewCommittedPoolId("opid_multiple_final_pairs");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var data = await CreateAcceptedOperationIdAttemptAsync(con, poolId, now, "opid-multiple-final");
+            await InsertTxIdConfirmationAsync(con, data, "txid-existing", now.AddMinutes(1));
+            await InsertConfirmationAsync(con, data, PayoutExternalConfirmationKinds.RawHash, "rawhash-existing",
+                now.AddMinutes(2));
+            var provider = new StaticOperationStatusProvider(PayoutOperationStatusResult.ResolvedTxId("txid-provider"));
+            var candidate = await LoadSingleCandidateAsync(con, poolId);
+
+            var result = await NewService().ReconcileOperationIdCandidateAsync(candidate, now.AddMinutes(3),
+                provider, Ct);
+
+            Assert.Equal(1, result.CandidateCount);
+            Assert.Equal(1, result.NeedsReviewCount);
+            Assert.Equal(0, result.EvidenceAttachedCount);
+            Assert.Equal(1, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId,
+                "txid-existing"));
+            Assert.Equal(1, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.RawHash,
+                "rawhash-existing"));
+            Assert.Equal(0, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId,
+                "txid-provider"));
+        });
+    }
+
+    [PostgresIntegrationFact]
     public Task ReconcileOperationIdCandidateAsync_ProviderExceptionDoesNotMutateOrStoreRawMessage()
     {
         var poolId = NewCommittedPoolId("opid_provider_exception");
@@ -543,6 +651,12 @@ public class PayoutOperationIdReconciliationServiceTests : PostgresCommittedInte
 
     private async Task InsertTxIdConfirmationAsync(NpgsqlConnection con, TestPayoutData data, string txId, DateTime created)
     {
+        await InsertConfirmationAsync(con, data, PayoutExternalConfirmationKinds.TxId, txId, created);
+    }
+
+    private async Task InsertConfirmationAsync(NpgsqlConnection con, TestPayoutData data, string kind, string value,
+        DateTime created)
+    {
         await using var tx = await con.BeginTransactionAsync();
         try
         {
@@ -552,8 +666,8 @@ public class PayoutOperationIdReconciliationServiceTests : PostgresCommittedInte
                 Coin = data.Batch.Coin,
                 BatchId = data.Batch.Id,
                 AttemptId = data.Attempt.Id,
-                Kind = PayoutExternalConfirmationKinds.TxId,
-                Value = txId,
+                Kind = kind,
+                Value = value,
                 Created = created
             }, Ct);
 

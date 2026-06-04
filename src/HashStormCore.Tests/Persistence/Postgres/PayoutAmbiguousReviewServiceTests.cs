@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dapper;
 using HashStormCore.Payments;
+using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence.Model;
 using HashStormCore.Persistence.Postgres.Repositories;
 using Npgsql;
@@ -25,7 +26,7 @@ public class PayoutAmbiguousReviewServiceTests : PostgresIntegrationTestBase
 
     public PayoutAmbiguousReviewServiceTests()
     {
-        service = new PayoutAmbiguousReviewService(repo);
+        service = NewService(TxIdProfile());
     }
 
     [PostgresIntegrationFact]
@@ -75,7 +76,7 @@ public class PayoutAmbiguousReviewServiceTests : PostgresIntegrationTestBase
             await repo.MarkStaleBatchAmbiguousAsync(con, tx, batch.Id, target.Id, poolId, "stale", null, now.AddMinutes(1), Ct);
 
             var result = await service.ReviewAmbiguousAttemptAsync(con, tx, NewAcceptedRequest(new TestPayoutData(batch, target),
-                now.AddMinutes(2), PayoutExternalConfirmationKinds.RawHash, "rawhash-reviewed"), Ct);
+                now.AddMinutes(2), PayoutExternalConfirmationKinds.TxId, "txid-reviewed-sibling"), Ct);
 
             Assert.Equal(PayoutAmbiguousReviewStatus.Accepted, result.Status);
             Assert.Equal(PayoutSendAttemptStates.Accepted, await GetAttemptStateAsync(con, tx, target.Id));
@@ -85,6 +86,279 @@ public class PayoutAmbiguousReviewServiceTests : PostgresIntegrationTestBase
                 await GetAttemptIntentStateAsync(con, tx, sibling.Id, batch.Intents[1].Id));
             Assert.Equal(PayoutIntentStates.AmbiguousRequiresReview, await GetIntentStateAsync(con, tx, batch.Intents[1].Id));
             Assert.Equal(PayoutBatchStates.AmbiguousRequiresReview, await GetBatchStateAsync(con, tx, batch.Id));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReviewAmbiguousAttemptAsync_TxIdProfileRejectsWrongOrUnsafeAcceptedEvidence()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("ambiguous_review_txid_reject");
+            var now = UtcNow();
+            var invalidEvidence = new[]
+            {
+                (PayoutExternalConfirmationKinds.RawHash, "rawhash-reviewed"),
+                (PayoutExternalConfirmationKinds.OperationId, "operationid-reviewed"),
+                (PayoutExternalConfirmationKinds.WalletAck, "wallet-ack-reviewed"),
+                (PayoutExternalConfirmationKinds.TxId, "send:fake-reviewed"),
+                (PayoutExternalConfirmationKinds.TxId, "placeholder-reviewed")
+            };
+
+            for(var i = 0; i < invalidEvidence.Length; i++)
+            {
+                var (kind, value) = invalidEvidence[i];
+                var data = await CreateAmbiguousAttemptAsync(con, tx, poolId, now.AddMinutes(i));
+
+                var result = await service.ReviewAmbiguousAttemptAsync(con, tx,
+                    NewAcceptedRequest(data, now.AddMinutes(20 + i), kind, value), Ct);
+
+                Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, result.Status);
+                Assert.Equal(PayoutBatchStates.AmbiguousRequiresReview,
+                    await GetBatchStateAsync(con, tx, data.Batch.Id));
+                Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview,
+                    await GetAttemptStateAsync(con, tx, data.Attempt.Id));
+                Assert.Equal(0, await CountConfirmationsAsync(con, tx, data.Batch.Id, data.Attempt.Id, kind, value));
+            }
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReviewAmbiguousAttemptAsync_RawHashProfileAcceptsRawHashAndRejectsTxId()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("ambiguous_review_rawhash");
+            var now = UtcNow();
+            var acceptedData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now);
+            var rawHashService = NewService(RawHashProfile());
+
+            var accepted = await rawHashService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(acceptedData, now.AddMinutes(1), PayoutExternalConfirmationKinds.RawHash,
+                    "rawhash-reviewed"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.Accepted, accepted.Status);
+            Assert.Equal(1, await CountConfirmationsAsync(con, tx, acceptedData.Batch.Id, acceptedData.Attempt.Id,
+                PayoutExternalConfirmationKinds.RawHash, "rawhash-reviewed"));
+
+            var rejectedData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now.AddMinutes(2));
+            var rejected = await rawHashService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(rejectedData, now.AddMinutes(3), PayoutExternalConfirmationKinds.TxId,
+                    "txid-wrong-for-rawhash"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, rejected.Status);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview,
+                await GetAttemptStateAsync(con, tx, rejectedData.Attempt.Id));
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, rejectedData.Batch.Id, rejectedData.Attempt.Id,
+                PayoutExternalConfirmationKinds.TxId, "txid-wrong-for-rawhash"));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReviewAmbiguousAttemptAsync_AsyncOperationProfileAcceptsFinalTxIdButRejectsOperationId()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("ambiguous_review_async_final_txid");
+            var now = UtcNow();
+            var acceptedData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now,
+                sendShape: PayoutSendShapes.AsyncOperation);
+            var asyncService = NewService(AsyncOperationProfile());
+
+            var accepted = await asyncService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(acceptedData, now.AddMinutes(1), PayoutExternalConfirmationKinds.TxId,
+                    "txid-reviewed-async"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.Accepted, accepted.Status);
+            Assert.Equal(1, await CountConfirmationsAsync(con, tx, acceptedData.Batch.Id, acceptedData.Attempt.Id,
+                PayoutExternalConfirmationKinds.TxId, "txid-reviewed-async"));
+
+            var rejectedOperationIdData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now.AddMinutes(2),
+                sendShape: PayoutSendShapes.AsyncOperation);
+            var rejectedOperationId = await asyncService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(rejectedOperationIdData, now.AddMinutes(3), PayoutExternalConfirmationKinds.OperationId,
+                    "operationid-not-final"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, rejectedOperationId.Status);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview,
+                await GetAttemptStateAsync(con, tx, rejectedOperationIdData.Attempt.Id));
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, rejectedOperationIdData.Batch.Id,
+                rejectedOperationIdData.Attempt.Id,
+                PayoutExternalConfirmationKinds.OperationId, "operationid-not-final"));
+
+            var rejectedWalletAckData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now.AddMinutes(4),
+                sendShape: PayoutSendShapes.AsyncOperation);
+            var rejectedWalletAck = await asyncService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(rejectedWalletAckData, now.AddMinutes(5), PayoutExternalConfirmationKinds.WalletAck,
+                    "wallet-ack-not-final"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, rejectedWalletAck.Status);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview,
+                await GetAttemptStateAsync(con, tx, rejectedWalletAckData.Attempt.Id));
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, rejectedWalletAckData.Batch.Id,
+                rejectedWalletAckData.Attempt.Id,
+                PayoutExternalConfirmationKinds.WalletAck, "wallet-ack-not-final"));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReviewAmbiguousAttemptAsync_MetadataMismatchRejectsAcceptedEvidence()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("ambiguous_review_metadata_mismatch");
+            var now = UtcNow();
+            var data = await CreateAmbiguousAttemptAsync(con, tx, poolId, now);
+            var mismatchService = NewService(TxIdProfile() with { AdapterId = "different-handler" });
+
+            var result = await mismatchService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(data, now.AddMinutes(1), PayoutExternalConfirmationKinds.TxId, "txid-reviewed"),
+                Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, result.Status);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview, await GetAttemptStateAsync(con, tx, data.Attempt.Id));
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, data.Batch.Id, data.Attempt.Id,
+                PayoutExternalConfirmationKinds.TxId, "txid-reviewed"));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReviewAmbiguousAttemptAsync_ConflictingExistingFinalEvidenceRejectsAcceptedEvidence()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("ambiguous_review_conflicting_evidence");
+            var now = UtcNow();
+            var data = await CreateAmbiguousAttemptAsync(con, tx, poolId, now);
+            await InsertConfirmationAsync(con, tx, data, PayoutExternalConfirmationKinds.TxId, "txid-existing",
+                now.AddMinutes(1));
+
+            var result = await service.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(data, now.AddMinutes(2), PayoutExternalConfirmationKinds.TxId, "txid-reviewed"),
+                Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, result.Status);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview, await GetAttemptStateAsync(con, tx, data.Attempt.Id));
+            Assert.Equal(1, await CountConfirmationsByKindAsync(con, tx, data.Batch.Id, data.Attempt.Id,
+                PayoutExternalConfirmationKinds.TxId));
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, data.Batch.Id, data.Attempt.Id,
+                PayoutExternalConfirmationKinds.TxId, "txid-reviewed"));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReviewAmbiguousAttemptAsync_ExistingDifferentFinalEvidenceKindRejectsAcceptedEvidence()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("ambiguous_review_cross_kind_conflict");
+            var now = UtcNow();
+
+            var txIdProfileData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now);
+            await InsertConfirmationAsync(con, tx, txIdProfileData, PayoutExternalConfirmationKinds.RawHash,
+                "rawhash-existing", now.AddMinutes(1));
+            var txIdProfileResult = await service.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(txIdProfileData, now.AddMinutes(2), PayoutExternalConfirmationKinds.TxId,
+                    "txid-reviewed"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, txIdProfileResult.Status);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview,
+                await GetAttemptStateAsync(con, tx, txIdProfileData.Attempt.Id));
+            Assert.Equal(1, await CountConfirmationsAsync(con, tx, txIdProfileData.Batch.Id,
+                txIdProfileData.Attempt.Id, PayoutExternalConfirmationKinds.RawHash, "rawhash-existing"));
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, txIdProfileData.Batch.Id,
+                txIdProfileData.Attempt.Id, PayoutExternalConfirmationKinds.TxId, "txid-reviewed"));
+
+            var rawHashProfileData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now.AddMinutes(3));
+            await InsertConfirmationAsync(con, tx, rawHashProfileData, PayoutExternalConfirmationKinds.TxId,
+                "txid-existing", now.AddMinutes(4));
+            var rawHashService = NewService(RawHashProfile());
+            var rawHashProfileResult = await rawHashService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(rawHashProfileData, now.AddMinutes(5), PayoutExternalConfirmationKinds.RawHash,
+                    "rawhash-reviewed"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, rawHashProfileResult.Status);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview,
+                await GetAttemptStateAsync(con, tx, rawHashProfileData.Attempt.Id));
+            Assert.Equal(1, await CountConfirmationsAsync(con, tx, rawHashProfileData.Batch.Id,
+                rawHashProfileData.Attempt.Id, PayoutExternalConfirmationKinds.TxId, "txid-existing"));
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, rawHashProfileData.Batch.Id,
+                rawHashProfileData.Attempt.Id, PayoutExternalConfirmationKinds.RawHash, "rawhash-reviewed"));
+
+            var asyncProfileData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now.AddMinutes(6),
+                sendShape: PayoutSendShapes.AsyncOperation);
+            await InsertConfirmationAsync(con, tx, asyncProfileData, PayoutExternalConfirmationKinds.RawHash,
+                "rawhash-existing-async", now.AddMinutes(7));
+            var asyncService = NewService(AsyncOperationProfile());
+            var asyncProfileResult = await asyncService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(asyncProfileData, now.AddMinutes(8), PayoutExternalConfirmationKinds.TxId,
+                    "txid-reviewed-async"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, asyncProfileResult.Status);
+            Assert.Equal(PayoutSendAttemptStates.AmbiguousRequiresReview,
+                await GetAttemptStateAsync(con, tx, asyncProfileData.Attempt.Id));
+            Assert.Equal(1, await CountConfirmationsAsync(con, tx, asyncProfileData.Batch.Id,
+                asyncProfileData.Attempt.Id, PayoutExternalConfirmationKinds.RawHash, "rawhash-existing-async"));
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, asyncProfileData.Batch.Id,
+                asyncProfileData.Attempt.Id, PayoutExternalConfirmationKinds.TxId, "txid-reviewed-async"));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReviewAmbiguousAttemptAsync_ExistingSameFinalEvidencePairAllowsAcceptedEvidence()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("ambiguous_review_same_evidence");
+            var now = UtcNow();
+            var data = await CreateAmbiguousAttemptAsync(con, tx, poolId, now);
+            await InsertConfirmationAsync(con, tx, data, PayoutExternalConfirmationKinds.TxId, "txid-reviewed",
+                now.AddMinutes(1));
+
+            var result = await service.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(data, now.AddMinutes(2), PayoutExternalConfirmationKinds.TxId, "txid-reviewed"),
+                Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.Accepted, result.Status);
+            Assert.Equal(PayoutSendAttemptStates.Accepted, await GetAttemptStateAsync(con, tx, data.Attempt.Id));
+            Assert.Equal(1, await CountConfirmationsAsync(con, tx, data.Batch.Id, data.Attempt.Id,
+                PayoutExternalConfirmationKinds.TxId, "txid-reviewed"));
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task ReviewAmbiguousAttemptAsync_UnsupportedOrNotReadyProfileRejectsAcceptedEvidence()
+    {
+        return WithRollbackAsync(async (con, tx) =>
+        {
+            var poolId = NewPoolId("ambiguous_review_profile_not_ready");
+            var now = UtcNow();
+            var unsupportedData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now);
+            var unsupportedService = new PayoutAmbiguousReviewService(repo,
+                new FixedProfileResolver(PayoutProfileResolution.Unsupported("coin not configured")));
+
+            var unsupported = await unsupportedService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(unsupportedData, now.AddMinutes(1), PayoutExternalConfirmationKinds.TxId,
+                    "txid-unsupported"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, unsupported.Status);
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, unsupportedData.Batch.Id,
+                unsupportedData.Attempt.Id, PayoutExternalConfirmationKinds.TxId, "txid-unsupported"));
+
+            var notReadyData = await CreateAmbiguousAttemptAsync(con, tx, poolId, now.AddMinutes(2));
+            var notReadyService = NewService(TxIdProfile() with
+            {
+                ReservationReady = false,
+                NotReadyReason = "not ready"
+            });
+
+            var notReady = await notReadyService.ReviewAmbiguousAttemptAsync(con, tx,
+                NewAcceptedRequest(notReadyData, now.AddMinutes(3), PayoutExternalConfirmationKinds.TxId,
+                    "txid-not-ready"), Ct);
+
+            Assert.Equal(PayoutAmbiguousReviewStatus.AttemptNotEligible, notReady.Status);
+            Assert.Equal(0, await CountConfirmationsAsync(con, tx, notReadyData.Batch.Id,
+                notReadyData.Attempt.Id, PayoutExternalConfirmationKinds.TxId, "txid-not-ready"));
         });
     }
 
@@ -267,9 +541,9 @@ public class PayoutAmbiguousReviewServiceTests : PostgresIntegrationTestBase
     }
 
     private async Task<TestPayoutData> CreateAmbiguousAttemptAsync(NpgsqlConnection con, NpgsqlTransaction tx,
-        string poolId, DateTime created)
+        string poolId, DateTime created, string sendShape = PayoutSendShapes.PerAddress)
     {
-        var batch = await CreateBatchAsync(con, tx, poolId, created, ("addr-a", 1m));
+        var batch = await CreateBatchAsync(con, tx, poolId, created, sendShape, ("addr-a", 1m));
         var attempt = await CreateAttemptAsync(con, tx, batch, 1, $"review-ambiguous-{Guid.NewGuid():N}", created,
             batch.Intents[0].Id);
 
@@ -280,8 +554,14 @@ public class PayoutAmbiguousReviewServiceTests : PostgresIntegrationTestBase
         return new TestPayoutData(batch, attempt);
     }
 
-    private Task<PayoutBatch> CreateBatchAsync(NpgsqlConnection con, NpgsqlTransaction tx, string poolId, DateTime created,
-        params (string address, decimal amount)[] intents)
+    private Task<PayoutBatch> CreateBatchAsync(NpgsqlConnection con, NpgsqlTransaction tx, string poolId,
+        DateTime created, params (string address, decimal amount)[] intents)
+    {
+        return CreateBatchAsync(con, tx, poolId, created, PayoutSendShapes.PerAddress, intents);
+    }
+
+    private Task<PayoutBatch> CreateBatchAsync(NpgsqlConnection con, NpgsqlTransaction tx, string poolId,
+        DateTime created, string sendShape, params (string address, decimal amount)[] intents)
     {
         var intentRequests = intents.Select(x => new CreatePayoutIntentRequest
         {
@@ -298,7 +578,7 @@ public class PayoutAmbiguousReviewServiceTests : PostgresIntegrationTestBase
             Coin = Coin,
             CoinFamily = CoinFamily,
             Handler = Handler,
-            SendShape = PayoutSendShapes.PerAddress,
+            SendShape = sendShape,
             RecipientSetHash = $"recipient-set-{Guid.NewGuid():N}",
             MinimumAmount = 0m,
             ReservedAmountSnapshot = intents.Sum(x => x.amount),
@@ -361,6 +641,60 @@ public class PayoutAmbiguousReviewServiceTests : PostgresIntegrationTestBase
         {
             Kind = kind,
             Value = value
+        };
+    }
+
+    private async Task InsertConfirmationAsync(NpgsqlConnection con, NpgsqlTransaction tx, TestPayoutData data, string kind,
+        string value, DateTime created)
+    {
+        await repo.InsertExternalConfirmationAsync(con, tx, new PayoutExternalConfirmation
+        {
+            PoolId = data.Batch.PoolId,
+            Coin = data.Batch.Coin,
+            BatchId = data.Batch.Id,
+            AttemptId = data.Attempt.Id,
+            Kind = kind,
+            Value = value,
+            Created = created
+        }, Ct);
+    }
+
+    private static PayoutAmbiguousReviewService NewService(PayoutProfile profile)
+    {
+        return new PayoutAmbiguousReviewService(new PayoutIntentRepository(),
+            new FixedProfileResolver(PayoutProfileResolution.Resolved(profile)));
+    }
+
+    private static PayoutProfile TxIdProfile()
+    {
+        return new PayoutProfile
+        {
+            CoinKey = Coin,
+            CoinFamily = CoinFamily,
+            AdapterId = Handler,
+            SendShape = PayoutSendShapes.PerAddress,
+            SendMethod = Method,
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.TxId,
+            ReservationReady = true
+        };
+    }
+
+    private static PayoutProfile RawHashProfile()
+    {
+        return TxIdProfile() with
+        {
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.RawHash
+        };
+    }
+
+    private static PayoutProfile AsyncOperationProfile()
+    {
+        return TxIdProfile() with
+        {
+            SendShape = PayoutSendShapes.AsyncOperation,
+            SettlementEvidenceKind = PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId,
+            RequiresOperationIdProvider = true,
+            SupportsShieldedOperationTracking = true
         };
     }
 
@@ -427,6 +761,14 @@ public class PayoutAmbiguousReviewServiceTests : PostgresIntegrationTestBase
             new { batchid = batchId, attemptid = attemptId, kind, value }, tx);
     }
 
+    private static Task<int> CountConfirmationsByKindAsync(NpgsqlConnection con, NpgsqlTransaction tx, long batchId,
+        long attemptId, string kind)
+    {
+        return con.QuerySingleAsync<int>(@"SELECT COUNT(*) FROM payout_external_confirmations
+            WHERE batchid = @batchid AND attemptid = @attemptid AND kind = @kind",
+            new { batchid = batchId, attemptid = attemptId, kind }, tx);
+    }
+
     private static Task<int> CountPoolRowsAsync(NpgsqlConnection con, IDbTransaction tx, string table, string poolId)
     {
         return con.QuerySingleAsync<int>($"SELECT COUNT(*) FROM {table} WHERE poolid = @poolid", new { poolid = poolId }, tx);
@@ -444,4 +786,16 @@ public class PayoutAmbiguousReviewServiceTests : PostgresIntegrationTestBase
     }
 
     private record TestPayoutData(PayoutBatch Batch, PayoutSendAttempt Attempt);
+
+    private sealed class FixedProfileResolver : IPayoutProfileResolver
+    {
+        public FixedProfileResolver(PayoutProfileResolution resolution)
+        {
+            this.resolution = resolution;
+        }
+
+        private readonly PayoutProfileResolution resolution;
+
+        public PayoutProfileResolution Resolve(string coinKey) => resolution;
+    }
 }

@@ -118,6 +118,68 @@ public class PayoutExecutionEvidenceValidatorTests
         Assert.False(result);
     }
 
+    // ── Final accepted review evidence rules ─────────────────────────────────
+
+    [Fact]
+    public void TxIdProfile_AcceptsOnlyTxIdFinalAcceptedEvidence()
+    {
+        var profile = TxIdProfile();
+
+        Assert.True(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.TxId, "txid-reviewed"), out _));
+        Assert.False(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.RawHash, "rawhash-reviewed"), out _));
+        Assert.False(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.OperationId, "operationid-reviewed"), out _));
+        Assert.False(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.WalletAck, "wallet-ack-reviewed"), out _));
+    }
+
+    [Fact]
+    public void RawHashProfile_AcceptsOnlyRawHashFinalAcceptedEvidence()
+    {
+        var profile = RawHashProfile();
+
+        Assert.True(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.RawHash, "rawhash-reviewed"), out _));
+        Assert.False(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.TxId, "txid-reviewed"), out _));
+    }
+
+    [Fact]
+    public void AsyncOperationProfile_AcceptsFinalTxIdButRejectsOperationIdAndWalletAck()
+    {
+        var profile = AsyncOperationProfile();
+
+        Assert.True(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.TxId, "txid-reviewed"), out _));
+        Assert.False(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.OperationId, "operationid-not-final"), out _));
+        Assert.False(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.WalletAck, "wallet-ack-reviewed"), out _));
+    }
+
+    [Fact]
+    public void FinalAcceptedEvidence_RejectsUnsafeValues()
+    {
+        var profile = TxIdProfile();
+
+        Assert.False(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.TxId, "send:fake-reviewed"), out _));
+        Assert.False(validator.TryValidateFinalAcceptedEvidenceForProfile(profile,
+            Evidence(PayoutExternalConfirmationKinds.TxId, "placeholder-reviewed"), out _));
+    }
+
+    [Theory]
+    [InlineData(PayoutExternalConfirmationKinds.TxId, true)]
+    [InlineData(PayoutExternalConfirmationKinds.RawHash, true)]
+    [InlineData(PayoutExternalConfirmationKinds.OperationId, false)]
+    [InlineData(PayoutExternalConfirmationKinds.WalletAck, false)]
+    public void IsFinalSettlementEvidenceKind_ReturnsOnlyTxIdAndRawHash(string kind, bool expected)
+    {
+        Assert.Equal(expected, validator.IsFinalSettlementEvidenceKind(kind));
+    }
+
     // ── Unsafe evidence values ────────────────────────────────────────────────
 
     [Theory]

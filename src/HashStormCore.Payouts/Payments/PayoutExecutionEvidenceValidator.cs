@@ -50,6 +50,50 @@ public class PayoutExecutionEvidenceValidator
         return true;
     }
 
+    public bool TryValidateFinalAcceptedEvidenceForProfile(PayoutProfile profile, PayoutAttemptEvidence? evidence,
+        out string errorMessage)
+    {
+        if(profile == null)
+        {
+            errorMessage = "Profile is required for final accepted evidence validation";
+            return false;
+        }
+
+        if(evidence == null)
+        {
+            errorMessage = "Final accepted evidence is required";
+            return false;
+        }
+
+        if(string.IsNullOrWhiteSpace(evidence.Kind))
+        {
+            errorMessage = "Final accepted evidence kind is empty";
+            return false;
+        }
+
+        if(IsUnsafeEvidenceValue(evidence.Value))
+        {
+            errorMessage = $"Final accepted evidence value is unsafe or fake for kind '{evidence.Kind}'";
+            return false;
+        }
+
+        var expectedKind = GetExpectedFinalAcceptedEvidenceKind(profile);
+        if(expectedKind == null)
+        {
+            errorMessage = $"Profile settlement evidence kind '{profile.SettlementEvidenceKind}' does not define valid final accepted evidence";
+            return false;
+        }
+
+        if(!string.Equals(evidence.Kind, expectedKind, StringComparison.Ordinal))
+        {
+            errorMessage = $"Profile requires final accepted evidence kind '{expectedKind}' but review provided '{evidence.Kind}'";
+            return false;
+        }
+
+        errorMessage = string.Empty;
+        return true;
+    }
+
     public bool TryValidateAdditionalEvidence(PayoutProfile profile, PayoutAttemptEvidence? primary,
         IReadOnlyCollection<PayoutAttemptEvidence>? additional, out string errorMessage)
     {
@@ -166,6 +210,12 @@ public class PayoutExecutionEvidenceValidator
                profile.SupportsShieldedOperationTracking;
     }
 
+    public bool IsFinalSettlementEvidenceKind(string kind)
+    {
+        return string.Equals(kind, PayoutExternalConfirmationKinds.TxId, StringComparison.Ordinal) ||
+               string.Equals(kind, PayoutExternalConfirmationKinds.RawHash, StringComparison.Ordinal);
+    }
+
     private static string? GetExpectedPrimaryEvidenceKind(PayoutProfile profile)
     {
         var kind = profile.SettlementEvidenceKind;
@@ -181,6 +231,25 @@ public class PayoutExecutionEvidenceValidator
            string.Equals(profile.SendShape, PayoutProfileConstants.SendShapes.AsyncOperation,
                StringComparison.Ordinal))
             return PayoutExternalConfirmationKinds.OperationId;
+
+        return null;
+    }
+
+    private static string? GetExpectedFinalAcceptedEvidenceKind(PayoutProfile profile)
+    {
+        var kind = profile.SettlementEvidenceKind;
+
+        if(string.Equals(kind, PayoutProfileConstants.SettlementEvidenceKinds.TxId, StringComparison.Ordinal))
+            return PayoutExternalConfirmationKinds.TxId;
+
+        if(string.Equals(kind, PayoutProfileConstants.SettlementEvidenceKinds.RawHash, StringComparison.Ordinal))
+            return PayoutExternalConfirmationKinds.RawHash;
+
+        if(string.Equals(kind, PayoutProfileConstants.SettlementEvidenceKinds.OperationIdThenTxId,
+               StringComparison.Ordinal) &&
+           string.Equals(profile.SendShape, PayoutProfileConstants.SendShapes.AsyncOperation,
+               StringComparison.Ordinal))
+            return PayoutExternalConfirmationKinds.TxId;
 
         return null;
     }

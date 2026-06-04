@@ -1616,6 +1616,49 @@ public class PayoutIntentRepository : IPayoutIntentRepository
         }, tx, cancellationToken: ct))).ToArray();
     }
 
+#nullable enable annotations
+    public async Task<PayoutAmbiguousAttemptReviewContext?> GetAmbiguousAttemptReviewContextAsync(IDbConnection con,
+        IDbTransaction tx, long batchId, long attemptId, string poolId, CancellationToken ct)
+    {
+        con = RequireConnection(con);
+        tx = RequireTransaction(tx);
+        RequireText(poolId, nameof(poolId));
+
+        if(batchId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(batchId), "Payout batch id must be greater than zero");
+
+        if(attemptId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(attemptId), "Payout send attempt id must be greater than zero");
+
+        const string query = @"SELECT
+                b.id AS BatchId,
+                psa.id AS AttemptId,
+                psa.poolid AS PoolId,
+                psa.coin AS Coin,
+                b.coinfamily AS CoinFamily,
+                b.handler AS Handler,
+                b.sendshape AS SendShape,
+                psa.method AS Method,
+                b.state AS BatchState,
+                psa.state AS AttemptState
+            FROM payout_send_attempts psa
+            JOIN payout_batches b ON b.id = psa.batchid
+                AND b.poolid = psa.poolid
+                AND b.coin = psa.coin
+            WHERE psa.id = @attemptid
+              AND psa.batchid = @batchid
+              AND psa.poolid = @poolid";
+
+        return await con.QuerySingleOrDefaultAsync<PayoutAmbiguousAttemptReviewContext>(
+            new CommandDefinition(query, new
+            {
+                attemptid = attemptId,
+                batchid = batchId,
+                poolid = poolId
+            }, tx, cancellationToken: ct));
+    }
+#nullable restore
+
     public async Task<PayoutBatch[]> GetRecoverableBatchesAsync(IDbConnection con, string poolId, CancellationToken ct)
     {
         con = RequireConnection(con);
