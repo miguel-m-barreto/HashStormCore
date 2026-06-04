@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using HashStormCore.Payments;
+using HashStormCore.PayoutProcessor.Configuration;
 using HashStormCore.Payouts.Bitcoin;
 using HashStormCore.Payouts.Profiles;
 using HashStormCore.Persistence.Model;
@@ -81,5 +82,17 @@ public class PayoutProductionAdapterSafetyTests
 
         Assert.False(senderRegistry.TryGetSender(profile, out _));
         Assert.False(providerRegistry.TryGetProvider(profile, out _));
+    }
+
+    [Fact]
+    public void PayoutProcessorConfigDefaultsKeepRealBitcoinRpcSendersDisabled()
+    {
+        var config = new PayoutProcessorConfig();
+
+        Assert.False(config.Enabled);
+        Assert.Equal(PayoutProcessorMode.Disabled, config.Mode);
+        Assert.True(config.FakeAdaptersOnly);
+        Assert.NotNull(config.BitcoinRpcAdapters);
+        Assert.Empty(config.BitcoinRpcAdapters);
     }
 }

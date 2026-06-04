@@ -23,6 +23,7 @@ using HashStormCore.Persistence.Repositories;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -79,10 +80,16 @@ builder.Services.AddHttpClient(DefaultBitcoinJsonRpcHttpClientProvider.ClientNam
 builder.Services.AddSingleton<IBitcoinJsonRpcHttpClientProvider, DefaultBitcoinJsonRpcHttpClientProvider>();
 builder.Services.AddSingleton<BitcoinRpcPayoutSenderRegistrationMaterializer>();
 builder.Services.AddSingleton<IPayoutAttemptSenderRegistry>(sp =>
-    BitcoinRpcPayoutSenderRegistryBuilder.Build(
+{
+    var result = BitcoinRpcPayoutSenderRegistryBuilder.BuildWithReport(
         sp.GetRequiredService<PayoutProcessorConfig>(),
         sp.GetRequiredService<PayoutProcessorClusterConfig>(),
-        sp.GetRequiredService<BitcoinRpcPayoutSenderRegistrationMaterializer>()));
+        sp.GetRequiredService<BitcoinRpcPayoutSenderRegistrationMaterializer>());
+    sp.GetRequiredService<ILoggerFactory>()
+        .CreateLogger("HashStormCore.PayoutProcessor.BitcoinRpcPayoutSenderRegistry")
+        .LogInformation("Bitcoin RPC payout sender registry build: {Summary}", result.Report.ToSafeSummary());
+    return result.Registry;
+});
 builder.Services.AddSingleton<IPayoutExecutionRunner, DbPayoutExecutionRunner>();
 builder.Services.AddSingleton<PayoutStaleSendReconciliationService>();
 builder.Services.AddSingleton<IPayoutStaleSendReconciliationRunner, DbPayoutStaleSendReconciliationRunner>();

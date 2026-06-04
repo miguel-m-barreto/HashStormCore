@@ -1,0 +1,30 @@
+{
+  "enabled": false,
+  "mode": "Disabled",
+  "pools": [],
+  "reservationIntervalSeconds": 60,
+  "planningIntervalSeconds": 15,
+  "executionIntervalSeconds": 5,
+  "staleReconciliationIntervalSeconds": 60,
+  "operationIdReconciliationIntervalSeconds": 30,
+  "settlementIntervalSeconds": 15,
+  "reservationMaxCandidates": 500,
+  "planningMaxBatches": 8,
+  "executionBatchSize": 8,
+  "staleSendingAgeSeconds": 900,
+  "fakeAdaptersOnly": true,
+  "bitcoinRpcAdapters": [
+    {
+      "enabled": false,
+      "poolId": "example-bitcoin-pool",
+      "coin": "bitcoin",
+      "endpoint": "http://127.0.0.1:8332",
+      "username": "bitcoin-rpc-user",
+      "password": "change-me",
+      "walletName": "optional-wallet-name",
+      "requestTimeoutSeconds": 30,
+      "allowSendMany": true,
+      "allowSendToAddress": true
+    }
+  ]
+}

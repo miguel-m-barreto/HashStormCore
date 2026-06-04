@@ -25,6 +25,18 @@ public class BitcoinRpcPayoutSenderRegistryBuilderTests
     }
 
     [Fact]
+    public void BuildWithReport_DefaultConfigReportsProcessorDisabled()
+    {
+        var result = BuildWithReport(new PayoutProcessorConfig());
+
+        AssertEmpty(result.Registry);
+        Assert.Equal("empty", result.Report.Status);
+        Assert.Equal("bitcoin_rpc_sender_registry_processor_disabled", result.Report.ReasonCode);
+        Assert.Equal(0, result.Report.RegistrationCount);
+        Assert.Equal(0, result.Report.RouteCount);
+    }
+
+    [Fact]
     public void Build_DisabledProcessorReturnsEmptyRegistry()
     {
         var config = EnabledSidecarConfig();
@@ -60,6 +72,19 @@ public class BitcoinRpcPayoutSenderRegistryBuilderTests
     }
 
     [Fact]
+    public void BuildWithReport_DryRunReportsSafeEmptyReason()
+    {
+        var config = EnabledSidecarConfig();
+        config.Mode = PayoutProcessorMode.DryRun;
+
+        var result = BuildWithReport(config);
+
+        AssertEmpty(result.Registry);
+        Assert.Equal("bitcoin_rpc_sender_registry_dry_run", result.Report.ReasonCode);
+        Assert.Equal(1, result.Report.EnabledAdapterCount);
+    }
+
+    [Fact]
     public void Build_FakeAdaptersOnlyReturnsEmptyRegistryEvenWithEnabledBitcoinRpcAdapter()
     {
         var config = EnabledSidecarConfig();
@@ -70,6 +95,19 @@ public class BitcoinRpcPayoutSenderRegistryBuilderTests
 
         AssertEmpty(registry);
         Assert.Equal(0, provider.CallCount);
+    }
+
+    [Fact]
+    public void BuildWithReport_FakeAdaptersOnlyReportsSafeEmptyReason()
+    {
+        var config = EnabledSidecarConfig();
+        config.FakeAdaptersOnly = true;
+
+        var result = BuildWithReport(config);
+
+        AssertEmpty(result.Registry);
+        Assert.Equal("bitcoin_rpc_sender_registry_fake_adapters_only", result.Report.ReasonCode);
+        Assert.Equal(1, result.Report.EnabledAdapterCount);
     }
 
     [Fact]
@@ -98,6 +136,34 @@ public class BitcoinRpcPayoutSenderRegistryBuilderTests
 
         Assert.True(registry.TryGetSender(BitcoinSendManyProfile(), out var sender));
         Assert.IsType<BitcoinRpcPayoutSender>(sender);
+    }
+
+    [Fact]
+    public void BuildWithReport_ValidEnabledAdapterReportsMaterializedSummaryWithoutSecrets()
+    {
+        const string endpoint = "http://127.0.0.1:18443";
+        const string username = "rpc-user";
+        const string password = "rpc-password";
+        const string walletName = "wallet-a";
+        var config = EnabledSidecarConfig();
+        config.BitcoinRpcAdapters[0].Endpoint = endpoint;
+        config.BitcoinRpcAdapters[0].Username = username;
+        config.BitcoinRpcAdapters[0].Password = password;
+        config.BitcoinRpcAdapters[0].WalletName = walletName;
+
+        var result = BuildWithReport(config);
+
+        Assert.True(result.Registry.TryGetSender(BitcoinSendManyProfile(), out _));
+        Assert.Equal("materialized", result.Report.Status);
+        Assert.Equal("bitcoin_rpc_sender_registry_materialized", result.Report.ReasonCode);
+        Assert.Equal(1, result.Report.EnabledAdapterCount);
+        Assert.Equal(1, result.Report.RegistrationCount);
+        Assert.Equal(1, result.Report.RouteCount);
+        var route = Assert.Single(result.Report.Routes);
+        Assert.Equal("pool-a", route.PoolId);
+        Assert.Equal("bitcoin", route.Coin);
+        AssertDoesNotLeak(result.Report.ToSafeSummary(), endpoint, username, password, walletName, "127.0.0.1");
+        AssertDoesNotLeak(route.ToSafeSummary(), endpoint, username, password, walletName, "127.0.0.1");
     }
 
     [Fact]
@@ -322,6 +388,22 @@ public class BitcoinRpcPayoutSenderRegistryBuilderTests
             provider ?? ProviderWith(RouteHandler("pool-a", "bitcoin", new FakeHandler("txid-default"))));
 
         return BitcoinRpcPayoutSenderRegistryBuilder.Build(
+            config,
+            cluster ?? ClusterPool(),
+            materializer);
+    }
+
+    private static BitcoinRpcPayoutSenderRegistryBuildResult BuildWithReport(
+        PayoutProcessorConfig config,
+        PayoutProcessorClusterConfig cluster = null,
+        IPayoutProfileResolver resolver = null,
+        TestHttpClientProvider provider = null)
+    {
+        var materializer = new BitcoinRpcPayoutSenderRegistrationMaterializer(
+            resolver ?? Resolver(("bitcoin", BitcoinSendManyProfile())),
+            provider ?? ProviderWith(RouteHandler("pool-a", "bitcoin", new FakeHandler("txid-default"))));
+
+        return BitcoinRpcPayoutSenderRegistryBuilder.BuildWithReport(
             config,
             cluster ?? ClusterPool(),
             materializer);

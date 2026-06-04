@@ -1,5 +1,8 @@
 using System;
+using System.IO;
+using System.Text;
 using HashStormCore.PayoutProcessor.Configuration;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace HashStormCore.Tests.PayoutProcessor;
@@ -13,6 +16,7 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
 
         Assert.NotNull(config.BitcoinRpcAdapters);
         Assert.Empty(config.BitcoinRpcAdapters);
+        Assert.True(config.FakeAdaptersOnly);
     }
 
     [Fact]
@@ -324,6 +328,133 @@ public class PayoutProcessorBitcoinRpcAdapterConfigTests
         Assert.Contains("UsernameSet=True", summary, StringComparison.Ordinal);
         Assert.Contains("EndpointSet=True", summary, StringComparison.Ordinal);
         Assert.Contains("WalletNameSet=True", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bind_EmptyJsonUsesSafeDefaults()
+    {
+        var config = BindJson("{}");
+
+        Assert.False(config.Enabled);
+        Assert.Equal(PayoutProcessorMode.Disabled, config.Mode);
+        Assert.True(config.FakeAdaptersOnly);
+        Assert.NotNull(config.BitcoinRpcAdapters);
+        Assert.Empty(config.BitcoinRpcAdapters);
+    }
+
+    [Fact]
+    public void Bind_DisabledAdapterDefaultsAreSafe()
+    {
+        var config = BindJson("""
+            {
+              "bitcoinRpcAdapters": [
+                {
+                  "poolId": "pool-a",
+                  "coin": "bitcoin",
+                  "endpoint": "http://127.0.0.1:8332",
+                  "username": "bitcoin-rpc-user",
+                  "password": "change-me"
+                }
+              ]
+            }
+            """);
+
+        var adapter = Assert.Single(config.BitcoinRpcAdapters);
+        Assert.False(adapter.Enabled);
+        Assert.True(adapter.AllowSendMany);
+        Assert.True(adapter.AllowSendToAddress);
+        Assert.Equal(30, adapter.RequestTimeoutSeconds);
+    }
+
+    [Fact]
+    public void Bind_EnabledAdapterBindsSecretsButSafeSummaryRedactsThem()
+    {
+        const string endpoint = "http://127.0.0.1:8332";
+        const string username = "bitcoin-rpc-user";
+        const string password = "change-me";
+        const string walletName = "optional-wallet-name";
+        var config = BindJson("""
+            {
+              "enabled": true,
+              "mode": "DbMutating",
+              "fakeAdaptersOnly": false,
+              "bitcoinRpcAdapters": [
+                {
+                  "enabled": true,
+                  "poolId": "pool-a",
+                  "coin": "bitcoin",
+                  "endpoint": "http://127.0.0.1:8332",
+                  "username": "bitcoin-rpc-user",
+                  "password": "change-me",
+                  "walletName": "optional-wallet-name",
+                  "requestTimeoutSeconds": 45,
+                  "allowSendMany": true,
+                  "allowSendToAddress": false
+                }
+              ]
+            }
+            """);
+
+        var adapter = Assert.Single(config.BitcoinRpcAdapters);
+        Assert.True(adapter.Enabled);
+        Assert.Equal(endpoint, adapter.Endpoint);
+        Assert.Equal(username, adapter.Username);
+        Assert.Equal(password, adapter.Password);
+        Assert.Equal(walletName, adapter.WalletName);
+        Assert.Equal(45, adapter.RequestTimeoutSeconds);
+        Assert.True(adapter.AllowSendMany);
+        Assert.False(adapter.AllowSendToAddress);
+
+        var summary = adapter.ToSafeSummary();
+        Assert.DoesNotContain(endpoint, summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(username, summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(password, summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(walletName, summary, StringComparison.Ordinal);
+        Assert.Contains("EndpointSet=True", summary, StringComparison.Ordinal);
+        Assert.Contains("UsernameSet=True", summary, StringComparison.Ordinal);
+        Assert.Contains("WalletNameSet=True", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExampleConfigBindsAndIsSafeByDefault()
+    {
+        var config = BindJson(File.ReadAllText(FindRepositoryFile("configs/payout-processor.example.json")));
+
+        Assert.False(config.Enabled);
+        Assert.Equal(PayoutProcessorMode.Disabled, config.Mode);
+        Assert.True(config.FakeAdaptersOnly);
+        Assert.NotNull(config.BitcoinRpcAdapters);
+        Assert.All(config.BitcoinRpcAdapters, adapter => Assert.False(adapter.Enabled));
+
+        var validation = PayoutProcessorBitcoinRpcAdapterValidator.ValidateAdapters(config.BitcoinRpcAdapters);
+        Assert.True(validation.IsValid);
+        Assert.Empty(validation.Errors);
+    }
+
+    private static PayoutProcessorConfig BindJson(string json)
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(stream)
+            .Build();
+        var config = new PayoutProcessorConfig();
+        configuration.Bind(config);
+        return config;
+    }
+
+    private static string FindRepositoryFile(string relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while(directory != null)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath);
+            if(File.Exists(candidate))
+                return candidate;
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not find repository file {relativePath}");
     }
 
     private static PayoutProcessorBitcoinRpcAdapterConfig EnabledConfig()

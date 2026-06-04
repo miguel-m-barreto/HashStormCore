@@ -12,6 +12,14 @@ public static class BitcoinRpcPayoutSenderRegistryBuilder
         PayoutProcessorClusterConfig clusterConfig,
         BitcoinRpcPayoutSenderRegistrationMaterializer materializer)
     {
+        return BuildWithReport(config, clusterConfig, materializer).Registry;
+    }
+
+    public static BitcoinRpcPayoutSenderRegistryBuildResult BuildWithReport(
+        PayoutProcessorConfig config,
+        PayoutProcessorClusterConfig clusterConfig,
+        BitcoinRpcPayoutSenderRegistrationMaterializer materializer)
+    {
         if(config == null)
             throw new ArgumentNullException(nameof(config));
 
@@ -27,11 +35,23 @@ public static class BitcoinRpcPayoutSenderRegistryBuilder
             .Where(x => x.Adapter?.Enabled == true)
             .ToArray();
 
-        if(!config.Enabled ||
-           config.Mode != PayoutProcessorMode.DbMutating ||
-           config.FakeAdaptersOnly ||
-           enabledAdapters.Length == 0)
-            return EmptyRegistry();
+        if(!config.Enabled)
+            return EmptyResult("bitcoin_rpc_sender_registry_processor_disabled", enabledAdapters.Length);
+
+        if(config.Mode == PayoutProcessorMode.Disabled)
+            return EmptyResult("bitcoin_rpc_sender_registry_mode_disabled", enabledAdapters.Length);
+
+        if(config.Mode == PayoutProcessorMode.DryRun)
+            return EmptyResult("bitcoin_rpc_sender_registry_dry_run", enabledAdapters.Length);
+
+        if(config.Mode != PayoutProcessorMode.DbMutating)
+            return EmptyResult("bitcoin_rpc_sender_registry_mode_not_db_mutating", enabledAdapters.Length);
+
+        if(config.FakeAdaptersOnly)
+            return EmptyResult("bitcoin_rpc_sender_registry_fake_adapters_only", enabledAdapters.Length);
+
+        if(enabledAdapters.Length == 0)
+            return EmptyResult("bitcoin_rpc_sender_registry_no_enabled_adapters", 0);
 
         var poolErrors = ValidateClusterPoolGates(enabledAdapters, clusterConfig);
         if(poolErrors.Count > 0)
@@ -62,7 +82,24 @@ public static class BitcoinRpcPayoutSenderRegistryBuilder
 
         try
         {
-            return new PayoutAttemptSenderRegistry(materializationResult.Registrations);
+            var registry = new PayoutAttemptSenderRegistry(materializationResult.Registrations);
+            return new BitcoinRpcPayoutSenderRegistryBuildResult
+            {
+                Registry = registry,
+                Report = BitcoinRpcPayoutSenderRegistryBuildReport.Materialized(
+                    enabledAdapters.Length,
+                    materializationResult.Registrations.Count,
+                    materializationResult.Plans.Sum(x => x.Routes.Count),
+                    materializationResult.Plans.SelectMany(x => x.Routes)
+                        .Select(x => new BitcoinRpcPayoutSenderRegistryRouteReport
+                        {
+                            ConfigIndex = x.ConfigIndex,
+                            PoolId = x.PoolId,
+                            Coin = x.Coin,
+                            SafeSummary = x.SafeSummary
+                        })
+                        .ToArray())
+            };
         }
         catch(Exception)
         {
@@ -73,9 +110,13 @@ public static class BitcoinRpcPayoutSenderRegistryBuilder
         }
     }
 
-    private static PayoutAttemptSenderRegistry EmptyRegistry()
+    private static BitcoinRpcPayoutSenderRegistryBuildResult EmptyResult(string reasonCode, int enabledAdapterCount)
     {
-        return new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>());
+        return new BitcoinRpcPayoutSenderRegistryBuildResult
+        {
+            Registry = new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>()),
+            Report = BitcoinRpcPayoutSenderRegistryBuildReport.Empty(reasonCode, enabledAdapterCount)
+        };
     }
 
     private static IReadOnlyCollection<BitcoinRpcPayoutSenderRegistryBuildError> ValidateClusterPoolGates(
@@ -162,6 +203,85 @@ public record BitcoinRpcPayoutSenderRegistryBuildError
     public string ToSafeSummary()
     {
         return $"ConfigIndex={ConfigIndex}; PoolId={PoolId}; Coin={Coin}; Code={Code}";
+    }
+
+    public override string ToString()
+    {
+        return ToSafeSummary();
+    }
+}
+
+public record BitcoinRpcPayoutSenderRegistryBuildResult
+{
+    public IPayoutAttemptSenderRegistry Registry { get; init; }
+    public BitcoinRpcPayoutSenderRegistryBuildReport Report { get; init; } =
+        BitcoinRpcPayoutSenderRegistryBuildReport.Empty("bitcoin_rpc_sender_registry_not_built", 0);
+}
+
+public record BitcoinRpcPayoutSenderRegistryBuildReport
+{
+    public string Status { get; init; } = string.Empty;
+    public string ReasonCode { get; init; } = string.Empty;
+    public int EnabledAdapterCount { get; init; }
+    public int RegistrationCount { get; init; }
+    public int RouteCount { get; init; }
+    public IReadOnlyCollection<BitcoinRpcPayoutSenderRegistryRouteReport> Routes { get; init; } =
+        Array.Empty<BitcoinRpcPayoutSenderRegistryRouteReport>();
+
+    public static BitcoinRpcPayoutSenderRegistryBuildReport Empty(string reasonCode, int enabledAdapterCount)
+    {
+        return new BitcoinRpcPayoutSenderRegistryBuildReport
+        {
+            Status = "empty",
+            ReasonCode = reasonCode,
+            EnabledAdapterCount = enabledAdapterCount
+        };
+    }
+
+    public static BitcoinRpcPayoutSenderRegistryBuildReport Materialized(
+        int enabledAdapterCount,
+        int registrationCount,
+        int routeCount,
+        IReadOnlyCollection<BitcoinRpcPayoutSenderRegistryRouteReport> routes)
+    {
+        return new BitcoinRpcPayoutSenderRegistryBuildReport
+        {
+            Status = "materialized",
+            ReasonCode = "bitcoin_rpc_sender_registry_materialized",
+            EnabledAdapterCount = enabledAdapterCount,
+            RegistrationCount = registrationCount,
+            RouteCount = routeCount,
+            Routes = routes ?? Array.Empty<BitcoinRpcPayoutSenderRegistryRouteReport>()
+        };
+    }
+
+    public string ToSafeSummary()
+    {
+        var routeSummaries = Routes.Count == 0
+            ? string.Empty
+            : string.Join(" | ", Routes.Select(x => x.ToSafeSummary()));
+
+        return
+            $"Status={Status}; ReasonCode={ReasonCode}; EnabledAdapterCount={EnabledAdapterCount}; RegistrationCount={RegistrationCount}; RouteCount={RouteCount}; Routes=[{routeSummaries}]";
+    }
+
+    public override string ToString()
+    {
+        return ToSafeSummary();
+    }
+}
+
+public record BitcoinRpcPayoutSenderRegistryRouteReport
+{
+    public int ConfigIndex { get; init; }
+    public string PoolId { get; init; } = string.Empty;
+    public string Coin { get; init; } = string.Empty;
+    public string SafeSummary { get; init; } = string.Empty;
+
+    public string ToSafeSummary()
+    {
+        return
+            $"ConfigIndex={ConfigIndex}; PoolId={PoolId}; Coin={Coin}; SafeSummarySet={!string.IsNullOrWhiteSpace(SafeSummary)}; Summary={SafeSummary}";
     }
 
     public override string ToString()
