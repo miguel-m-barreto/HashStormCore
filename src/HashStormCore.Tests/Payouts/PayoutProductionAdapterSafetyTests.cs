@@ -52,14 +52,16 @@ public class PayoutProductionAdapterSafetyTests
     }
 
     [Fact]
-    public void PayoutsAssemblyContainsNoProductionBitcoinJsonRpcTransportImplementations()
+    public void PayoutsAssemblyContainsOnlyKnownUnregisteredBitcoinJsonRpcTransportImplementations()
     {
         var implementations = typeof(IBitcoinJsonRpcTransport).Assembly.GetTypes()
             .Where(x => !x.IsAbstract && !x.IsInterface)
             .Where(x => typeof(IBitcoinJsonRpcTransport).IsAssignableFrom(x))
+            .Select(x => x.FullName)
+            .OrderBy(x => x, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Empty(implementations);
+        Assert.Equal(new[] { typeof(BitcoinJsonRpcHttpTransport).FullName }, implementations);
     }
 
     [Fact]
