@@ -75,8 +75,14 @@ builder.Services.AddSingleton<IPayoutReservationRunner, DbPayoutReservationRunne
 builder.Services.AddSingleton<PayoutSendAttemptPlannerService>();
 builder.Services.AddSingleton<IPayoutPlanningRunner, DbPayoutPlanningRunner>();
 builder.Services.AddSingleton<PayoutSendExecutorService>();
-builder.Services.AddSingleton<IPayoutAttemptSenderRegistry>(_ =>
-    new PayoutAttemptSenderRegistry(Array.Empty<PayoutAttemptSenderRegistration>()));
+builder.Services.AddHttpClient(DefaultBitcoinJsonRpcHttpClientProvider.ClientName);
+builder.Services.AddSingleton<IBitcoinJsonRpcHttpClientProvider, DefaultBitcoinJsonRpcHttpClientProvider>();
+builder.Services.AddSingleton<BitcoinRpcPayoutSenderRegistrationMaterializer>();
+builder.Services.AddSingleton<IPayoutAttemptSenderRegistry>(sp =>
+    BitcoinRpcPayoutSenderRegistryBuilder.Build(
+        sp.GetRequiredService<PayoutProcessorConfig>(),
+        sp.GetRequiredService<PayoutProcessorClusterConfig>(),
+        sp.GetRequiredService<BitcoinRpcPayoutSenderRegistrationMaterializer>()));
 builder.Services.AddSingleton<IPayoutExecutionRunner, DbPayoutExecutionRunner>();
 builder.Services.AddSingleton<PayoutStaleSendReconciliationService>();
 builder.Services.AddSingleton<IPayoutStaleSendReconciliationRunner, DbPayoutStaleSendReconciliationRunner>();
