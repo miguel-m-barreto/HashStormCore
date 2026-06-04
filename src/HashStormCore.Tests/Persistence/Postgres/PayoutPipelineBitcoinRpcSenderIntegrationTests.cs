@@ -213,6 +213,147 @@ public class PayoutPipelineBitcoinRpcSenderIntegrationTests : PostgresCommittedI
     }
 
     [PostgresIntegrationFact]
+    public Task WalletLockCancellationAfterAcceptedRetryStillSettles()
+    {
+        var poolId = NewCommittedPoolId("bitcoin_rpc_pipeline_walletlock_cancel");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            const string walletPassphrase = "SECRET_WALLET_PASSPHRASE_TOKEN";
+            var now = UtcNow();
+            var httpHandler = new FakeBitcoinRpcHttpHandler(new object[]
+            {
+                "{\"result\":null,\"error\":{\"code\":-13,\"message\":\"wallet locked\"},\"id\":\"1\"}",
+                "{\"result\":null,\"error\":null,\"id\":\"2\"}",
+                "{\"result\":\"txid-after-walletlock-cancel\",\"error\":null,\"id\":\"3\"}",
+                new OperationCanceledException(new CancellationToken(true))
+            });
+            var pipeline = NewPipeline(poolId, httpHandler, walletPassphrase: walletPassphrase,
+                walletUnlockSeconds: 60);
+            await InsertBalanceAsync(con, poolId, "addr-one", 3m, now.AddSeconds(-2));
+            await InsertBalanceAsync(con, poolId, "addr-two", 4m, now.AddSeconds(-1));
+            var balanceBefore = await SumBalancesAsync(con, poolId);
+
+            await pipeline.ReservationRunner.CreateReservationAsync(new CreatePayoutReservationRequest
+            {
+                PoolId = poolId,
+                Coin = Coin,
+                CoinFamily = PayoutProfileConstants.Families.Bitcoin,
+                Handler = PayoutProfileConstants.AdapterIds.BitcoinRpc,
+                SendShape = PayoutProfileConstants.SendShapes.BatchMultiRecipient,
+                MinimumPayment = 1m,
+                MaxCandidates = 10,
+                Created = now
+            }, Ct);
+
+            await pipeline.PlanningRunner.CreateSendAttemptsAsync(new PayoutPlanningRunnerRequest
+            {
+                PoolId = poolId,
+                MaxBatches = 10,
+                Created = now.AddSeconds(1)
+            }, Ct);
+
+            var execution = await pipeline.ExecutionRunner.ExecutePreparedAttemptsAsync(new PayoutExecutionRunnerRequest
+            {
+                PoolId = poolId,
+                MaxAttempts = 10,
+                Started = now.AddSeconds(2)
+            }, Ct);
+
+            var settlement = await pipeline.SettlementRunner.SettleAcceptedAttemptsAsync(
+                new PayoutSettlementRunnerRequest
+                {
+                    PoolId = poolId,
+                    Limit = 10,
+                    SettledAt = now.AddSeconds(5)
+                }, Ct);
+
+            Assert.Equal(PayoutSendExecutionStatus.Accepted, Assert.Single(execution.ExecutionResults).Status);
+            Assert.Equal(new[] { "sendmany", "walletpassphrase", "sendmany", "walletlock" },
+                httpHandler.Methods.ToArray());
+            Assert.Equal(1, await CountAttemptsInStateAsync(con, poolId, PayoutSendAttemptStates.Accepted));
+            Assert.Equal(1, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId));
+            Assert.Equal("txid-after-walletlock-cancel", await GetConfirmationValueAsync(con, poolId,
+                PayoutExternalConfirmationKinds.TxId));
+            Assert.Equal(1, settlement.CandidateCount);
+            Assert.Equal(1, settlement.SettledCount);
+            Assert.Equal(2, await CountPoolRowsAsync(con, "payments", poolId));
+            Assert.Equal(2, await CountNegativeBalanceChangesAsync(con, poolId));
+            Assert.Equal(2, await CountIntentsInStateAsync(con, poolId, PayoutIntentStates.Settled));
+            Assert.Equal(0m, await SumBalancesAsync(con, poolId));
+            Assert.Equal(balanceBefore, await SumPaymentsAsync(con, poolId));
+
+            var errorCode = await GetOnlyAttemptErrorCodeAsync(con, poolId);
+            var errorMessage = await GetOnlyAttemptErrorMessageAsync(con, poolId);
+            AssertDoesNotLeak(errorCode, walletPassphrase, "Authorization", "Basic",
+                "SECRET_WALLET_PASSPHRASE_TOKEN");
+            AssertDoesNotLeak(errorMessage, walletPassphrase, "Authorization", "Basic",
+                "SECRET_WALLET_PASSPHRASE_TOKEN");
+        });
+    }
+
+    [PostgresIntegrationFact]
+    public Task MixedCaseAdapterCoinRoutesAndSettles()
+    {
+        var poolId = NewCommittedPoolId("bitcoin_rpc_pipeline_coin_case");
+
+        return WithCommittedCleanupAsync(poolId, async con =>
+        {
+            var now = UtcNow();
+            var httpHandler = new FakeBitcoinRpcHttpHandler(
+                "{\"result\":\"txid-mixed-case-route\",\"error\":null,\"id\":\"1\"}");
+            var pipeline = NewPipeline(poolId, httpHandler, adapterCoin: "Bitcoin", poolCoin: "bitcoin");
+            await InsertBalanceAsync(con, poolId, "addr-one", 3m, now.AddSeconds(-2));
+            await InsertBalanceAsync(con, poolId, "addr-two", 4m, now.AddSeconds(-1));
+
+            await pipeline.ReservationRunner.CreateReservationAsync(new CreatePayoutReservationRequest
+            {
+                PoolId = poolId,
+                Coin = Coin,
+                CoinFamily = PayoutProfileConstants.Families.Bitcoin,
+                Handler = PayoutProfileConstants.AdapterIds.BitcoinRpc,
+                SendShape = PayoutProfileConstants.SendShapes.BatchMultiRecipient,
+                MinimumPayment = 1m,
+                MaxCandidates = 10,
+                Created = now
+            }, Ct);
+
+            await pipeline.PlanningRunner.CreateSendAttemptsAsync(new PayoutPlanningRunnerRequest
+            {
+                PoolId = poolId,
+                MaxBatches = 10,
+                Created = now.AddSeconds(1)
+            }, Ct);
+
+            var execution = await pipeline.ExecutionRunner.ExecutePreparedAttemptsAsync(new PayoutExecutionRunnerRequest
+            {
+                PoolId = poolId,
+                MaxAttempts = 10,
+                Started = now.AddSeconds(2)
+            }, Ct);
+
+            var settlement = await pipeline.SettlementRunner.SettleAcceptedAttemptsAsync(
+                new PayoutSettlementRunnerRequest
+                {
+                    PoolId = poolId,
+                    Limit = 10,
+                    SettledAt = now.AddSeconds(5)
+                }, Ct);
+
+            var executionResult = Assert.Single(execution.ExecutionResults);
+            Assert.Equal(PayoutSendExecutionStatus.Accepted, executionResult.Status);
+            Assert.NotEqual("bitcoin_rpc_route_not_configured", executionResult.ErrorCode);
+            Assert.Equal(1, httpHandler.CallCount);
+            Assert.Equal(1, await CountConfirmationsAsync(con, poolId, PayoutExternalConfirmationKinds.TxId));
+            Assert.Equal("txid-mixed-case-route", await GetConfirmationValueAsync(con, poolId,
+                PayoutExternalConfirmationKinds.TxId));
+            Assert.Equal(1, settlement.SettledCount);
+            Assert.Equal(2, await CountPoolRowsAsync(con, "payments", poolId));
+            Assert.Equal(2, await CountNegativeBalanceChangesAsync(con, poolId));
+        });
+    }
+
+    [PostgresIntegrationFact]
     public Task WalletLockedWithoutPassphraseFailsPreAcceptNoDebit()
     {
         var poolId = NewCommittedPoolId("bitcoin_rpc_pipeline_locked_no_passphrase");
@@ -620,7 +761,9 @@ public class PayoutPipelineBitcoinRpcSenderIntegrationTests : PostgresCommittedI
         string walletName = "wallet-a",
         string walletPassphrase = "",
         int walletUnlockSeconds = 0,
-        bool lockWalletAfterSend = true)
+        bool lockWalletAfterSend = true,
+        string adapterCoin = Coin,
+        string poolCoin = PoolCoin)
     {
         var resolver = new DictionaryProfileResolver(ReadyBitcoinTxIdProfile());
         var connectionFactory = new PgConnectionFactory(GetConnectionString());
@@ -636,7 +779,7 @@ public class PayoutPipelineBitcoinRpcSenderIntegrationTests : PostgresCommittedI
                     {
                         Enabled = true,
                         PoolId = poolId,
-                        Coin = Coin,
+                        Coin = adapterCoin,
                         Endpoint = endpoint,
                         Username = username,
                         Password = password,
@@ -658,7 +801,7 @@ public class PayoutPipelineBitcoinRpcSenderIntegrationTests : PostgresCommittedI
                     {
                         Id = poolId,
                         Enabled = true,
-                        Coin = PoolCoin,
+                        Coin = poolCoin,
                         PaymentProcessing = new PayoutProcessorClusterPaymentProcessingConfig
                         {
                             Enabled = true,
@@ -669,7 +812,7 @@ public class PayoutPipelineBitcoinRpcSenderIntegrationTests : PostgresCommittedI
                 }
             },
             new BitcoinRpcPayoutSenderRegistrationMaterializer(resolver,
-                new FakeBitcoinJsonRpcHttpClientProvider(poolId, Coin, new HttpClient(httpHandler))));
+                new FakeBitcoinJsonRpcHttpClientProvider(poolId, adapterCoin, new HttpClient(httpHandler))));
 
         return new Pipeline(
             new DbPayoutReservationRunner(connectionFactory,
@@ -898,6 +1041,9 @@ public class PayoutPipelineBitcoinRpcSenderIntegrationTests : PostgresCommittedI
 
             if(next is Exception exception)
                 throw exception;
+
+            if(next is Func<CancellationToken, HttpResponseMessage> createResponse)
+                return createResponse(cancellationToken);
 
             var response = (FakeHttpResponse)next;
 

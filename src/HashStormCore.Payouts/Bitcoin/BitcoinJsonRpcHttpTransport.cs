@@ -7,6 +7,12 @@ namespace HashStormCore.Payouts.Bitcoin;
 
 public class BitcoinJsonRpcHttpTransport : IBitcoinJsonRpcTransport
 {
+    private static readonly HashSet<string> SupportedEndpointSchemes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "http",
+        "https"
+    };
+
     public BitcoinJsonRpcHttpTransport(HttpClient httpClient)
     {
         this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -68,6 +74,9 @@ public class BitcoinJsonRpcHttpTransport : IBitcoinJsonRpcTransport
 
         if(!Uri.TryCreate(request.Endpoint, UriKind.Absolute, out var uri))
             throw new ArgumentException("Endpoint must be an absolute URI", nameof(request));
+
+        if(!SupportedEndpointSchemes.Contains(uri.Scheme))
+            throw new ArgumentException("Endpoint scheme must be http or https", nameof(request));
 
         if(!string.IsNullOrEmpty(uri.UserInfo))
             throw new ArgumentException("Endpoint must not include URI userinfo credentials", nameof(request));

@@ -45,7 +45,8 @@ public class BitcoinPayoutRpcRoutingClient : IBitcoinPayoutRpcClient
         }
     }
 
-    private readonly Dictionary<BitcoinPayoutRpcRouteKey, BitcoinPayoutRpcRouteRegistration> clients = new();
+    private readonly Dictionary<BitcoinPayoutRpcRouteKey, BitcoinPayoutRpcRouteRegistration> clients =
+        new(RouteKeyComparer.Instance);
 
     public Task<BitcoinPayoutRpcResult> SendManyAsync(BitcoinPayoutSendManyRequest request, CancellationToken ct)
     {
@@ -102,5 +103,29 @@ public class BitcoinPayoutRpcRoutingClient : IBitcoinPayoutRpcClient
     {
         if(string.IsNullOrWhiteSpace(value))
             throw new ArgumentException($"{name} is required", name);
+    }
+
+    private sealed class RouteKeyComparer : IEqualityComparer<BitcoinPayoutRpcRouteKey>
+    {
+        public static readonly RouteKeyComparer Instance = new();
+
+        public bool Equals(BitcoinPayoutRpcRouteKey x, BitcoinPayoutRpcRouteKey y)
+        {
+            if(ReferenceEquals(x, y))
+                return true;
+
+            if(x == null || y == null)
+                return false;
+
+            return string.Equals(x.PoolId, y.PoolId, StringComparison.Ordinal) &&
+                   string.Equals(x.Coin, y.Coin, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public int GetHashCode(BitcoinPayoutRpcRouteKey obj)
+        {
+            return HashCode.Combine(
+                StringComparer.Ordinal.GetHashCode(obj.PoolId ?? string.Empty),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Coin ?? string.Empty));
+        }
     }
 }

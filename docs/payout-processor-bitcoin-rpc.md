@@ -24,7 +24,7 @@ Bitcoin RPC senders are materialized only when every gate is satisfied:
 - the cluster pool is enabled
 - `paymentProcessing.enabled=true`
 - `paymentProcessing.engine=intent`
-- the pool coin matches the adapter coin
+- the pool coin matches the adapter coin; coin matching is case-insensitive for Bitcoin RPC route lookup while pool id routing remains exact
 - the resolved payout profile is reservation-ready and uses the `bitcoin-rpc` adapter
 
 ## Supported Methods
@@ -56,6 +56,7 @@ When Bitcoin Core returns wallet locked error code `-13`:
 
 - without `walletPassphrase`, the send attempt is marked failed before accept with `bitcoin_wallet_locked`
 - with `walletPassphrase`, the client calls `walletpassphrase`, retries the original send exactly once, then calls `walletlock` when `lockWalletAfterSend=true`
+- after the retry returns an accepted txid, `walletlock` is best-effort post-send hygiene and cannot hide the accepted txid
 - ambiguous unlock failures do not retry the send, settle, create payments, or debit balances
 - repeated wallet locked responses after the retry do not loop
 

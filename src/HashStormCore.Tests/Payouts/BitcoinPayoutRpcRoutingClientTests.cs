@@ -27,6 +27,16 @@ public class BitcoinPayoutRpcRoutingClientTests
         }));
     }
 
+    [Fact]
+    public void Constructor_DuplicateRouteKeyWithDifferentCoinCasingThrows()
+    {
+        Assert.Throws<ArgumentException>(() => new BitcoinPayoutRpcRoutingClient(new[]
+        {
+            Route(RouteKey("pool-a", "Bitcoin"), new FakeBitcoinPayoutRpcClient()),
+            Route(RouteKey("pool-a", "bitcoin"), new FakeBitcoinPayoutRpcClient())
+        }));
+    }
+
     [Theory]
     [InlineData("", "bitcoin")]
     [InlineData(" ", "bitcoin")]
@@ -86,6 +96,21 @@ public class BitcoinPayoutRpcRoutingClientTests
     }
 
     [Fact]
+    public async Task SendManyAsync_DelegatesToCoinRouteIgnoringCasing()
+    {
+        var routeClient = new FakeBitcoinPayoutRpcClient();
+        var client = new BitcoinPayoutRpcRoutingClient(new[]
+        {
+            Route(RouteKey("pool-a", "Bitcoin"), routeClient)
+        });
+
+        var result = await client.SendManyAsync(SendManyRequest("pool-a", "bitcoin"), CancellationToken.None);
+
+        Assert.Equal(BitcoinPayoutRpcStatus.Accepted, result.Status);
+        Assert.Equal(1, routeClient.SendManyCallCount);
+    }
+
+    [Fact]
     public async Task SendManyAsync_NullRequestThrows()
     {
         var client = new BitcoinPayoutRpcRoutingClient(Array.Empty<BitcoinPayoutRpcRouteRegistration>());
@@ -132,6 +157,22 @@ public class BitcoinPayoutRpcRoutingClientTests
         });
 
         var result = await client.SendManyAsync(SendManyRequest("pool-b", "bitcoin"), CancellationToken.None);
+
+        Assert.Equal(BitcoinPayoutRpcStatus.FailedPreAccept, result.Status);
+        Assert.Equal(BitcoinPayoutRpcRoutingClient.RouteNotConfiguredErrorCode, result.ErrorCode);
+        Assert.Equal(0, routeClient.TotalCallCount);
+    }
+
+    [Fact]
+    public async Task SendManyAsync_RequestForDifferentPoolCasingDoesNotCallWrongRoute()
+    {
+        var routeClient = new FakeBitcoinPayoutRpcClient();
+        var client = new BitcoinPayoutRpcRoutingClient(new[]
+        {
+            Route(RouteKey("Pool-A", "bitcoin"), routeClient)
+        });
+
+        var result = await client.SendManyAsync(SendManyRequest("pool-a", "bitcoin"), CancellationToken.None);
 
         Assert.Equal(BitcoinPayoutRpcStatus.FailedPreAccept, result.Status);
         Assert.Equal(BitcoinPayoutRpcRoutingClient.RouteNotConfiguredErrorCode, result.ErrorCode);

@@ -41,6 +41,20 @@ public class BitcoinJsonRpcHttpTransportTests
     }
 
     [Theory]
+    [InlineData("ftp://127.0.0.1:18443")]
+    [InlineData("file:///tmp/bitcoin-rpc")]
+    [InlineData("custom://127.0.0.1:18443")]
+    public async Task SendAsync_UnsupportedEndpointSchemeRejectedWithoutLeakingEndpoint(string endpoint)
+    {
+        var transport = new BitcoinJsonRpcHttpTransport(HttpClientWith(new FakeHandler()));
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            transport.SendAsync(Request().WithEndpoint(endpoint), CancellationToken.None));
+
+        AssertDoesNotLeak(ex.Message, endpoint, "127.0.0.1");
+    }
+
+    [Theory]
     [InlineData("Endpoint")]
     [InlineData("Username")]
     [InlineData("Password")]

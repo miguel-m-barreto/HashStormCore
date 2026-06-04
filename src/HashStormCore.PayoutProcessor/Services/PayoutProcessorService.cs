@@ -72,7 +72,7 @@ public class PayoutProcessorService : BackgroundService
         else
         {
             logger.LogWarning(
-                "PayoutProcessor DbMutating mode is enabled for reservation, planning, no-sender-safe execution, local stale sending quarantine, no-provider-safe operation-id reconciliation, and profile-validated settlement. Wallet/daemon/RPC calls remain disabled");
+                "PayoutProcessor DbMutating mode is enabled for reservation, planning, sender-registry-gated execution, local stale sending quarantine, no-provider-safe operation-id reconciliation, and profile-validated settlement. Real sender execution depends on strict sidecar registry gates; DryRun and FakeAdaptersOnly keep real senders disabled");
             logger.LogWarning("PayoutProcessor DbMutating reservation, planning, execution, stale sending quarantine, operation-id reconciliation, and settlement process only pools with paymentProcessing.engine=intent");
         }
 

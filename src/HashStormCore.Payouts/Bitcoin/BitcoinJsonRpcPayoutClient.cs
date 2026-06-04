@@ -84,6 +84,11 @@ public class BitcoinJsonRpcPayoutClient : IBitcoinPayoutRpcClient
     public const string WalletUnlockAmbiguousErrorCode = "bitcoin_wallet_unlock_ambiguous";
     private const int WalletLockedJsonRpcErrorCode = -13;
     private const int MaxWalletUnlockSeconds = 3600;
+    private static readonly HashSet<string> SupportedEndpointSchemes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "http",
+        "https"
+    };
 
     public BitcoinJsonRpcPayoutClient(IBitcoinJsonRpcTransport transport, BitcoinJsonRpcRouteOptions options)
     {
@@ -175,18 +180,22 @@ public class BitcoinJsonRpcPayoutClient : IBitcoinPayoutRpcClient
         if(unlockResult != null)
             return unlockResult;
 
+        BitcoinPayoutRpcResult retryResult = null;
         try
         {
             var retryResponse = await transport.SendAsync(retryRequestFactory(), ct);
-            return IsWalletLockedResponse(retryResponse)
+            retryResult = IsWalletLockedResponse(retryResponse)
                 ? BitcoinPayoutRpcResult.FailedPreAccept(WalletLockedErrorCode,
                     "Bitcoin wallet remained locked after one unlock attempt")
                 : MapSendResponse(retryResponse);
+
+            return retryResult;
         }
         finally
         {
             if(options.LockWalletAfterSend)
-                await TryLockWalletWithoutChangingResultAsync(ct);
+                await TryLockWalletWithoutChangingResultAsync(ct,
+                    retryResult?.Status == BitcoinPayoutRpcStatus.Accepted);
         }
     }
 
@@ -218,15 +227,19 @@ public class BitcoinJsonRpcPayoutClient : IBitcoinPayoutRpcClient
         return null;
     }
 
-    private async Task TryLockWalletWithoutChangingResultAsync(CancellationToken ct)
+    private async Task TryLockWalletWithoutChangingResultAsync(CancellationToken ct, bool suppressCancellation)
     {
         try
         {
             await transport.SendAsync(CreateTransportRequest("walletlock", Array.Empty<object>()), ct);
         }
-        catch(OperationCanceledException) when(ct.IsCancellationRequested)
+        catch(OperationCanceledException) when(ct.IsCancellationRequested && !suppressCancellation)
         {
             throw;
+        }
+        catch(OperationCanceledException)
+        {
+            // Wallet lock is post-acceptance hygiene; it must not hide a known accepted txid.
         }
         catch(Exception)
         {
@@ -412,6 +425,9 @@ public class BitcoinJsonRpcPayoutClient : IBitcoinPayoutRpcClient
 
         if(!Uri.TryCreate(options.Endpoint, UriKind.Absolute, out var uri))
             throw new ArgumentException("Endpoint must be an absolute URI", nameof(options));
+
+        if(!SupportedEndpointSchemes.Contains(uri.Scheme))
+            throw new ArgumentException("Endpoint scheme must be http or https", nameof(options));
 
         if(!string.IsNullOrEmpty(uri.UserInfo))
             throw new ArgumentException("Endpoint must not include URI userinfo credentials", nameof(options));

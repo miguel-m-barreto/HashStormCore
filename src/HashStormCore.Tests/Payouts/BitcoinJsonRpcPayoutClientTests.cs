@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -74,6 +75,19 @@ public class BitcoinJsonRpcPayoutClientTests
         Assert.DoesNotContain(endpoint, ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("rpc-user", ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("SUPER_SECRET_PASSWORD", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("ftp://127.0.0.1:18443")]
+    [InlineData("file:///tmp/bitcoin-rpc")]
+    [InlineData("custom://127.0.0.1:18443")]
+    public void Constructor_UnsupportedEndpointSchemeThrowsWithoutLeakingEndpoint(string endpoint)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new BitcoinJsonRpcPayoutClient(new FakeTransport(),
+            Options().WithEndpoint(endpoint)));
+
+        Assert.DoesNotContain(endpoint, ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("127.0.0.1", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -366,6 +380,49 @@ public class BitcoinJsonRpcPayoutClientTests
 
         Assert.Equal(BitcoinPayoutRpcStatus.FailedPreAccept, result.Status);
         Assert.Equal(BitcoinJsonRpcPayoutClient.WalletLockedErrorCode, result.ErrorCode);
+        Assert.Equal(new[] { "sendmany", "walletpassphrase", "sendmany", "walletlock" },
+            transport.Requests.Select(x => x.Method).ToArray());
+    }
+
+    [Fact]
+    public async Task SendManyAsync_WalletLockCancellationAfterAcceptedTxIdStillReturnsAccepted()
+    {
+        using var cts = new CancellationTokenSource();
+        var transport = new FakeTransport();
+        transport.Responses.Enqueue(WalletLockedResponse());
+        transport.Responses.Enqueue(Response("""{"result":null,"error":null,"id":"2"}"""));
+        transport.Responses.Enqueue(Response("""{"result":"txid-after-unlock","error":null,"id":"3"}"""));
+        transport.OnSend = (_, _) =>
+        {
+            cts.Cancel();
+            throw new OperationCanceledException(cts.Token);
+        };
+        var client = new BitcoinJsonRpcPayoutClient(transport,
+            Options(walletPassphrase: "wallet-passphrase", walletUnlockSeconds: 30));
+
+        var result = await client.SendManyAsync(SendManyRequest(), cts.Token);
+
+        Assert.Equal(BitcoinPayoutRpcStatus.Accepted, result.Status);
+        Assert.Equal("txid-after-unlock", result.TxId);
+        Assert.Equal(new[] { "sendmany", "walletpassphrase", "sendmany", "walletlock" },
+            transport.Requests.Select(x => x.Method).ToArray());
+    }
+
+    [Fact]
+    public async Task SendManyAsync_WalletLockHttpExceptionAfterAcceptedTxIdStillReturnsAccepted()
+    {
+        var transport = new FakeTransport();
+        transport.Responses.Enqueue(WalletLockedResponse());
+        transport.Responses.Enqueue(Response("""{"result":null,"error":null,"id":"2"}"""));
+        transport.Responses.Enqueue(Response("""{"result":"txid-after-unlock","error":null,"id":"3"}"""));
+        transport.Responses.Enqueue(new HttpRequestException("walletlock failed"));
+        var client = new BitcoinJsonRpcPayoutClient(transport,
+            Options(walletPassphrase: "wallet-passphrase", walletUnlockSeconds: 30));
+
+        var result = await client.SendManyAsync(SendManyRequest(), CancellationToken.None);
+
+        Assert.Equal(BitcoinPayoutRpcStatus.Accepted, result.Status);
+        Assert.Equal("txid-after-unlock", result.TxId);
         Assert.Equal(new[] { "sendmany", "walletpassphrase", "sendmany", "walletlock" },
             transport.Requests.Select(x => x.Method).ToArray());
     }
